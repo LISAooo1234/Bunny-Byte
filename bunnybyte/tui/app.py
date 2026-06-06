@@ -169,7 +169,7 @@ class BunnyByteTuiApp(App):
             return
         if handled:
             self.query_one(ChatLog).add_message("assistant", output)
-            self.query_one(StatusBar).update_agent(self.agent)
+            self._refresh_runtime_identity()
             return
         self.query_one(ChatLog).add_message(
             "assistant", f"Unknown command. Use /help.\n\n{HELP_DETAILS}"
@@ -212,11 +212,15 @@ class BunnyByteTuiApp(App):
             self._turn_count += 1
             status = self.query_one(StatusBar)
             status.update_turns(self._turn_count)
-            status.update_agent(self.agent)
+            self._refresh_runtime_identity()
             usage = (getattr(self.agent, "last_prompt_metadata", {}) or {}).get(
                 "context_usage"
             ) or {}
             status.update_context_usage(usage)
+
+    def _refresh_runtime_identity(self) -> None:
+        self.query_one(WelcomeBanner).update_agent(self.agent)
+        self.query_one(StatusBar).update_agent(self.agent)
 
     def _drive_turn(self, text: str) -> None:
         for event in self.agent.engine.run_turn(text):

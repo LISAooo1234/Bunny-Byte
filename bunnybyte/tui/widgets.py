@@ -64,6 +64,12 @@ class WelcomeBanner(Static):
         self.cwd = cwd
         self.approval = approval
 
+    def update_agent(self, agent) -> None:
+        self.model_name = str(getattr(agent.model_client, "model", ""))
+        self.cwd = str(getattr(agent, "root", ""))
+        self.approval = str(getattr(agent, "approval_policy", ""))
+        self.refresh()
+
     def render(self) -> Text:
         cwd_name = Path(self.cwd).name + "/" if self.cwd else "-"
         muted = TUI_MUTED

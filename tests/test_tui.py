@@ -378,6 +378,59 @@ async def test_tui_enter_only_completes_argument_commands(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tui_provider_command_refreshes_welcome_banner(tmp_path):
+    from bunnybyte.cli import handle_repl_command
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar, StatusBar, WelcomeBanner
+
+    agent = build_agent(tmp_path, [])
+    agent.model_client.provider = "openai"
+    agent.model_client.protocol = "openai"
+    agent.model_client.model = "gpt-test"
+
+    class DeepSeekClient:
+        provider = "deepseek"
+        protocol = "anthropic"
+        model = "deepseek-test"
+        base_url = "https://api.deepseek.com/anthropic"
+        supports_prompt_cache = False
+
+        def complete(self, _prompt, _max_new_tokens, **_kwargs):
+            return "<final>ok</final>"
+
+    def switcher(provider):
+        assert provider == "deepseek"
+        config = type(
+            "Config",
+            (),
+            {
+                "name": "deepseek",
+                "protocol": "anthropic",
+                "model": "deepseek-test",
+                "base_url": "https://api.deepseek.com/anthropic",
+            },
+        )()
+        return DeepSeekClient(), config
+
+    agent.provider_switch_factory = switcher
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        assert "gpt-test" in rendered_text(app.query_one(WelcomeBanner))
+
+        bar = app.query_one(InputBar)
+        bar.input.value = "/provider deepseek"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.1)
+
+        assert "deepseek-test" in rendered_text(app.query_one(WelcomeBanner))
+        assert "model deepseek-test" in rendered_text(app.query_one(StatusBar))
+        handled, _, output = handle_repl_command(agent, "/provider")
+        assert handled is True
+        assert "model: deepseek-test" in output
+
+
+@pytest.mark.asyncio
 async def test_tui_runs_agent_turn_and_renders_final_answer(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
     from bunnybyte.tui.widgets import InputBar
