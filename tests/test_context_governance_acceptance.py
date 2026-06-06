@@ -65,10 +65,11 @@ def test_history_records_turn_ids_and_renders_without_orphan_tool_results(tmp_pa
 
 
 def test_manual_compact_creates_summary_event_and_shortens_future_history(tmp_path):
-    agent = build_agent(tmp_path, ["<final>done</final>"])
+    agent = build_agent(tmp_path, ["<summary>Detailed compact summary for old work.</summary>"])
     for index in range(16):
         agent.record({"role": "user", "content": f"old request {index} " + ("x" * 80), "created_at": f"2026-05-12T10:{index:02d}:00+00:00"})
         agent.record({"role": "assistant", "content": f"old answer {index} " + ("y" * 80), "created_at": f"2026-05-12T10:{index:02d}:30+00:00"})
+    original_history = list(agent.session["history"])
 
     before_prompt = agent.prompt("next")
     summary = agent.compact_history(trigger="manual")
@@ -76,7 +77,12 @@ def test_manual_compact_creates_summary_event_and_shortens_future_history(tmp_pa
 
     assert summary["trigger"] == "manual"
     assert summary["pre_tokens"] > summary["post_tokens"]
-    assert "Compacted session summary:" in after_prompt
+    assert summary["strategy"] == "model_summary_v1"
+    assert summary["summary"] == "Detailed compact summary for old work."
+    assert agent.session["history"] == original_history
+    assert agent.session["context_view"]["active_compaction_id"] == summary["id"]
+    assert "Compacted context summary:" in after_prompt
+    assert "Detailed compact summary for old work." in after_prompt
     assert "old request 0" not in after_prompt
     assert len(after_prompt) < len(before_prompt)
 
@@ -85,7 +91,7 @@ def test_manual_compact_creates_summary_event_and_shortens_future_history(tmp_pa
 
 
 def test_prompt_over_budget_triggers_auto_compaction_during_real_turn(tmp_path):
-    agent = build_agent(tmp_path, ["<final>done</final>"])
+    agent = build_agent(tmp_path, ["<summary>Auto compact summary.</summary>", "<final>done</final>"])
     agent.context_manager = ContextManager(
         agent,
         total_budget=100,
@@ -100,3 +106,42 @@ def test_prompt_over_budget_triggers_auto_compaction_during_real_turn(tmp_path):
 
     assert agent.last_prompt_metadata["auto_compacted"] is True
     assert any(item["trigger"] == "auto_prompt_over_budget" for item in agent.session["compactions"])
+    assert agent.session["context_view"]["active_compaction_id"]
+
+
+def test_resume_uses_context_view_without_destroying_full_history(tmp_path):
+    agent = build_agent(tmp_path, ["<summary>Resume compact summary.</summary>"])
+    for index in range(6):
+        agent.record({"role": "user", "content": f"resume old request {index}", "created_at": f"2026-05-12T10:{index:02d}:00+00:00"})
+        agent.record({"role": "assistant", "content": f"resume old answer {index}", "created_at": f"2026-05-12T10:{index:02d}:30+00:00"})
+    original_id = agent.session["id"]
+    original_history = list(agent.session["history"])
+    agent.compact_history(trigger="manual", keep_recent_turns=2)
+
+    resumed = BunnyByte.from_session(
+        model_client=ScriptedModelClient([]),
+        workspace=WorkspaceContext.build(tmp_path),
+        session_store=agent.session_store,
+        session_id=original_id,
+        approval_policy="auto",
+    )
+
+    assert resumed.session["history"] == original_history
+    prompt = resumed.prompt("continue")
+    assert "Resume compact summary." in prompt
+    assert "resume old request 0" not in prompt
+    assert "resume old request 5" in prompt
+
+
+def test_compact_summary_failure_keeps_history_and_uses_fallback(tmp_path):
+    agent = build_agent(tmp_path, [RuntimeError("summary unavailable")])
+    for index in range(5):
+        agent.record({"role": "user", "content": f"fallback request {index}", "created_at": f"2026-05-12T10:{index:02d}:00+00:00"})
+        agent.record({"role": "assistant", "content": f"fallback answer {index}", "created_at": f"2026-05-12T10:{index:02d}:30+00:00"})
+    original_history = list(agent.session["history"])
+
+    summary = agent.compact_history(trigger="manual", keep_recent_turns=2)
+
+    assert agent.session["history"] == original_history
+    assert summary["summary"].startswith("Compacted session summary:")
+    assert "fallback request 0" not in agent.prompt("continue")

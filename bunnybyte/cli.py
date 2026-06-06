@@ -458,9 +458,9 @@ def handle_repl_command(agent, user_input):
     if user_input.startswith("/remember"):
         _, _, note = user_input.partition(" ")
         if not note.strip():
-            return True, False, "Usage: /remember <text>"
+            return True, False, _format_usage_message("/remember <text>")
         agent.remember_durable_note(note)
-        return True, False, "Saved to daily log."
+        return True, False, "## Memory\n\nSaved to the daily log."
     if user_input == "/dream":
         return True, False, agent.run_dream()
     if user_input == "/skills":
@@ -477,11 +477,17 @@ def handle_repl_command(agent, user_input):
         try:
             plan_path = agent.enter_plan_mode(topic, path=path)
         except ValueError as exc:
-            return True, False, f"error: {exc}"
-        return True, False, f"mode: plan\nplan path: {plan_path}"
+            return True, False, _format_error(exc)
+        return True, False, _format_key_value_section(
+            "Plan Mode",
+            [("Runtime mode", "plan"), ("Plan path", plan_path)],
+        )
     if user_input == "/plan-exit":
         agent.exit_plan_mode()
-        return True, False, "mode: default"
+        return True, False, _format_key_value_section(
+            "Runtime Mode",
+            [("Runtime mode", "default")],
+        )
     if user_input == "/mode":
         return True, False, _format_mode_status(agent)
     if user_input == "/session":
@@ -490,26 +496,29 @@ def handle_repl_command(agent, user_input):
         _, _, raw_topic = user_input.partition(" ")
         topic = raw_topic.strip()
         if not topic:
-            return True, False, f"session topic: {agent.session_topic}"
+            return True, False, _format_key_value_section(
+                "Session Topic",
+                [("Session topic", agent.session_topic)],
+            )
         try:
             topic = agent.set_session_topic(topic)
         except ValueError as exc:
-            return True, False, f"error: {exc}"
-        return True, False, f"session topic: {topic}"
+            return True, False, _format_error(exc)
+        return True, False, _format_key_value_section(
+            "Session Topic",
+            [("Session topic", topic)],
+        )
     if command_name == "agents":
         return True, False, _format_subagent_status(agent)
     if command_name == "subagent":
         payload, error = parse_subagent_args(command_args)
         if error:
-            return True, False, error
+            return True, False, _format_usage_message(error)
         return True, False, agent.run_tool("agent", payload)
     if user_input == "/context":
-        return (
-            True,
-            False,
-            json.dumps(
-                agent.prompt_metadata("", "")["context_usage"], indent=2, sort_keys=True
-            ),
+        return True, False, _format_json_section(
+            "Context Usage",
+            agent.prompt_metadata("", "")["context_usage"],
         )
     if user_input == "/usage":
         return True, False, _format_usage(agent)
@@ -520,11 +529,11 @@ def handle_repl_command(agent, user_input):
         if provider in {"list", "ls"}:
             return True, False, _format_provider_list()
         if " " in provider:
-            return True, False, "Usage: /provider [name]"
+            return True, False, _format_usage_message("/provider [name]")
         try:
             output = _switch_provider(agent, provider)
         except ValueError as exc:
-            return True, False, f"error: {exc}"
+            return True, False, _format_error(exc)
         return True, False, output
     if user_input == "/model" or user_input.startswith("/model "):
         _, _, model = user_input.partition(" ")
@@ -534,42 +543,52 @@ def handle_repl_command(agent, user_input):
         setattr(agent.model_client, "model", model)
         agent.session_event_bus.emit("model_changed", {"model": model})
         agent.refresh_prefix(force=True)
-        return True, False, f"model: {model}"
+        return True, False, _format_model(agent)
     if user_input == "/history":
         return True, False, _format_history(agent)
     if user_input.startswith("/resume "):
         _, _, target = user_input.partition(" ")
         session_id = _resolve_session_id(agent, target.strip())
         if not session_id:
-            return True, False, "error: session not found"
+            return True, False, _format_error("session not found")
         agent.resume_session(session_id)
-        return True, False, f"resumed session {session_id}"
+        return True, False, _format_key_value_section(
+            "Session Resumed",
+            [("Session id", session_id)],
+        )
     if user_input == "/clear":
         session_id = agent.clear_session()
-        return True, False, f"new session {session_id}"
+        return True, False, _format_key_value_section(
+            "New Session",
+            [("Session id", session_id)],
+        )
     if user_input == "/compact":
-        return (
-            True,
-            False,
-            json.dumps(
-                agent.compact_history(trigger="manual"), indent=2, sort_keys=True
-            ),
+        return True, False, _format_json_section(
+            "Compaction Result",
+            agent.compact_history(trigger="manual"),
         )
     if user_input == "/reset":
         agent.reset()
-        return True, False, "session reset"
+        return True, False, "## Session Reset\n\nThe current session was reset."
     command, arguments = skillslib.parse_slash_command(user_input)
+    if command == "skill":
+        skill_name, _, skill_arguments = arguments.partition(" ")
+        if not skill_name.strip():
+            return True, False, _format_usage_message("/skill <name> [args]")
+        if skill_name.strip() not in agent.skills:
+            return True, False, _format_error(f"skill not found: {skill_name.strip()}")
+        return True, False, invoke_skill(agent, skill_name.strip(), skill_arguments.strip())
     if command and command in agent.skills:
         return True, False, invoke_skill(agent, command, arguments)
     return False, False, ""
 
 
 def _format_mode_status(agent):
-    lines = [f"runtime mode: {agent.runtime_mode}"]
+    rows = [("Runtime mode", agent.runtime_mode)]
     plan_path = getattr(agent.plan_mode, "plan_path", "")
     if plan_path:
-        lines.append(f"plan path: {plan_path}")
-    return "\n".join(lines)
+        rows.append(("Plan path", plan_path))
+    return _format_key_value_section("Runtime Mode", rows)
 
 
 def _format_session_status(agent):
@@ -593,28 +612,36 @@ def _format_session_status(agent):
         if agent.is_pending_session
         else str(agent.session_path)
     )
-    return "\n".join(
+    return _format_key_value_section(
+        "Session Status",
         [
-            f"session id: {agent.session.get('id', '')}",
-            f"session status: {status}",
-            f"session topic: {agent.session_topic}",
-            f"session path: {session_path}",
-            f"events path: {agent.session_event_bus.path}",
-            f"runtime mode: {agent.runtime_mode}",
-            f"plan path: {getattr(agent.plan_mode, 'plan_path', '') or '-'}",
-            f"last run id: {run_id or '-'}",
-            f"last run dir: {run_dir}",
-            f"resume status: {agent.resume_state.get('status', '-')}",
-            f"worker summary: {worker_summary}",
-        ]
+            ("Session id", agent.session.get("id", "")),
+            ("Session status", status),
+            ("Session topic", agent.session_topic),
+            ("Session path", session_path),
+            ("Events path", agent.session_event_bus.path),
+            ("Runtime mode", agent.runtime_mode),
+            ("Plan path", getattr(agent.plan_mode, "plan_path", "") or "-"),
+            ("Last run id", run_id or "-"),
+            ("Last run dir", run_dir),
+            ("Resume status", agent.resume_state.get("status", "-")),
+            ("Worker summary", worker_summary),
+        ],
     )
 
 
 def _format_subagent_status(agent):
     return "\n".join(
         [
-            "subagent tools: agent(description, prompt, subagent_type='Explore|worker', write_scope=[]), send_message(to, message), task_stop(task_id)",
-            f"worker summary: {_worker_summary(agent)}",
+            "## Subagents",
+            "",
+            f"**Worker summary:** {_worker_summary(agent)}",
+            "",
+            "| Tool | Purpose |",
+            "| --- | --- |",
+            "| `agent(description, prompt, subagent_type='Explore|worker', write_scope=[])` | Launch a bounded child run. |",
+            "| `send_message(to, message)` | Continue an existing worker. |",
+            "| `task_stop(task_id)` | Stop a running worker. |",
         ]
     )
 
@@ -634,45 +661,56 @@ def _format_usage(agent):
     )
     base_url = str(getattr(agent.model_client, "base_url", "") or "")
     host = urlparse(base_url).netloc or "-"
-    lines = [
-        f"provider profile: {getattr(agent.model_client, 'provider', '-') or '-'}",
-        f"provider protocol: {getattr(agent.model_client, 'protocol', '-') or '-'}",
-        f"model: {getattr(agent.model_client, 'model', '-') or '-'}",
-        f"base url host: {host}",
-        f"prompt cache supported: {bool(getattr(agent.model_client, 'supports_prompt_cache', False))}",
-        f"last input tokens: {metadata.get('input_tokens', 'unavailable')}",
-        f"last output tokens: {metadata.get('output_tokens', 'unavailable')}",
-        f"last cached tokens: {metadata.get('cached_tokens', 'unavailable')}",
-        f"last provider attempts: {metadata.get('provider_attempts', 'unavailable')}",
-        f"last provider retry count: {metadata.get('provider_retry_count', 'unavailable')}",
-        f"last provider error: {metadata.get('provider_error', 'unavailable')}",
-        f"context usage: {context_usage.get('total_estimated_tokens', '-')}/{context_usage.get('context_window', '-')}",
-    ]
-    return "\n".join(lines)
+    return _format_key_value_section(
+        "Usage",
+        [
+            ("Provider profile", getattr(agent.model_client, "provider", "-") or "-"),
+            ("Provider protocol", getattr(agent.model_client, "protocol", "-") or "-"),
+            ("Model", getattr(agent.model_client, "model", "-") or "-"),
+            ("Base URL host", host),
+            ("Prompt cache supported", bool(getattr(agent.model_client, "supports_prompt_cache", False))),
+            ("Last input tokens", metadata.get("input_tokens", "unavailable")),
+            ("Last output tokens", metadata.get("output_tokens", "unavailable")),
+            ("Last cached tokens", metadata.get("cached_tokens", "unavailable")),
+            ("Last provider attempts", metadata.get("provider_attempts", "unavailable")),
+            ("Last provider retry count", metadata.get("provider_retry_count", "unavailable")),
+            ("Last provider error", metadata.get("provider_error", "unavailable")),
+            (
+                "Context usage",
+                f"{context_usage.get('total_estimated_tokens', '-')}/{context_usage.get('context_window', '-')}",
+            ),
+        ],
+    )
 
 
 def _format_provider(agent):
     base_url = str(getattr(agent.model_client, "base_url", "") or "")
     host = urlparse(base_url).netloc or "-"
-    return "\n".join(
+    return _format_key_value_section(
+        "Provider",
         [
-            f"provider: {getattr(agent.model_client, 'provider', '-') or '-'}",
-            f"protocol: {getattr(agent.model_client, 'protocol', '-') or '-'}",
-            f"model: {getattr(agent.model_client, 'model', '-') or '-'}",
-            f"base url host: {host}",
-            f"max new tokens: {getattr(agent, 'max_new_tokens', '-')}",
-        ]
+            ("Provider", getattr(agent.model_client, "provider", "-") or "-"),
+            ("Protocol", getattr(agent.model_client, "protocol", "-") or "-"),
+            ("Model", getattr(agent.model_client, "model", "-") or "-"),
+            ("Base URL host", host),
+            ("Max new tokens", getattr(agent, "max_new_tokens", "-")),
+        ],
     )
 
 
 def _format_provider_list():
-    lines = ["provider profiles:"]
+    lines = [
+        "## Provider Profiles",
+        "",
+        "| Profile | Protocol | Default model |",
+        "| --- | --- | --- |",
+    ]
     for name in sorted(PROVIDER_DEFAULTS):
         defaults = PROVIDER_DEFAULTS[name]
         lines.append(
-            f"- {name}: protocol={defaults['protocol']} model={defaults['model']}"
+            f"| `{name}` | `{defaults['protocol']}` | `{defaults['model']}` |"
         )
-    lines.append("aliases: gpt -> openai, claude -> anthropic")
+    lines.extend(["", "Aliases: `gpt` → `openai`, `claude` → `anthropic`."])
     return "\n".join(lines)
 
 
@@ -702,7 +740,10 @@ def _switch_provider(agent, provider):
 
 
 def _format_model(agent):
-    return f"model: {getattr(agent.model_client, 'model', '-') or '-'}"
+    return _format_key_value_section(
+        "Model",
+        [("Model", getattr(agent.model_client, "model", "-") or "-")],
+    )
 
 
 def _format_history(agent):
@@ -741,6 +782,46 @@ def _compact_summary(value, limit=96):
 def _markdown_table_cell(value):
     text = str(value or "-").replace("\n", " ")
     return text.replace("|", "\\|")
+
+
+def _format_key_value_section(title, rows):
+    lines = [f"## {title}", "", "| Field | Value |", "| --- | --- |"]
+    for label, value in rows:
+        lines.append(f"| {label} | {_format_value_cell(value)} |")
+    return "\n".join(lines)
+
+
+def _format_json_section(title, payload):
+    return "\n".join(
+        [
+            f"## {title}",
+            "",
+            "```json",
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            "```",
+        ]
+    )
+
+
+def _format_usage_message(usage):
+    text = str(usage or "").strip()
+    if text.lower().startswith("usage:"):
+        text = text.split(":", 1)[1].strip()
+    return "\n".join(["## Usage", "", f"`{text}`"])
+
+
+def _format_error(error):
+    message = str(error or "").strip()
+    return "\n".join(["## Error", "", message])
+
+
+def _format_value_cell(value):
+    text = _compact_summary(value, limit=160)
+    text = text.replace("\n", " ")
+    escaped = text.replace("|", "\\|") or "-"
+    if text != "-" and re.fullmatch(r"[A-Za-z0-9_.:/@+=-]+", text):
+        return f"`{escaped}`"
+    return escaped
 
 
 def _resolve_session_id(agent, target):

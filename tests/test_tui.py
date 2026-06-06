@@ -160,7 +160,7 @@ def test_pending_cli_resume_latest_does_not_create_empty_session(tmp_path, monke
 
     session_files_after = {path.name for path in (tmp_path / ".bunnybyte" / "sessions").glob("*.json")}
     assert handled is True
-    assert output == f"resumed session {first_id}"
+    assert first_id in output
     assert pending_agent.session["id"] == first_id
     assert session_files_after == session_files_before
 
@@ -194,7 +194,7 @@ def test_resume_latest_and_history_ignore_internal_dream_sessions(tmp_path):
 
     handled, _, output = handle_repl_command(second, "/resume latest")
     assert handled is True
-    assert output == f"resumed session {first_id}"
+    assert first_id in output
     assert second.session["id"] == first_id
 
 
@@ -264,25 +264,29 @@ def test_cli_plan_mode_and_session_commands_expose_runtime_state(tmp_path):
 
     assert handled is True
     assert should_exit is False
-    assert "mode: plan" in output
+    assert "## Plan Mode" in output
+    assert "| Runtime mode | `plan` |" in output
     assert ".bunnybyte/plans/refactor-auth-plan.md" in output
     assert agent.runtime_mode == "plan"
 
     handled, _, output = handle_repl_command(agent, "/mode")
     assert handled is True
-    assert "runtime mode: plan" in output
-    assert "plan path: .bunnybyte/plans/refactor-auth-plan.md" in output
+    assert "## Runtime Mode" in output
+    assert "| Runtime mode | `plan` |" in output
+    assert "| Plan path | `.bunnybyte/plans/refactor-auth-plan.md` |" in output
 
     handled, _, output = handle_repl_command(agent, "/session")
     assert handled is True
-    assert "session id:" in output
-    assert "events path:" in output
-    assert "runtime mode: plan" in output
-    assert "worker summary:" in output
+    assert "## Session Status" in output
+    assert "| Session id |" in output
+    assert "| Events path |" in output
+    assert "| Runtime mode | `plan` |" in output
+    assert "| Worker summary |" in output
 
     handled, _, output = handle_repl_command(agent, "/plan-exit")
     assert handled is True
-    assert output == "mode: default"
+    assert "## Runtime Mode" in output
+    assert "| Runtime mode | `default` |" in output
     assert agent.runtime_mode == "default"
 
 
@@ -351,7 +355,36 @@ def test_agents_slash_command_shows_worker_status(tmp_path):
 
     assert handled is True
     assert should_exit is False
-    assert "worker summary:" in output
+    assert "## Subagents" in output
+    assert "**Worker summary:**" in output
+    assert "| Tool | Purpose |" in output
+
+
+def test_skills_command_renders_readable_markdown_table(tmp_path):
+    from bunnybyte.cli import handle_repl_command
+
+    skill_dir = tmp_path / ".bunnybyte" / "skills" / "deploy"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: deploy
+description: Deploy | checklist
+argument-hint: target
+---
+Deploy $ARGUMENTS.
+""",
+        encoding="utf-8",
+    )
+    agent = build_agent(tmp_path, [])
+
+    handled, should_exit, output = handle_repl_command(agent, "/skills")
+
+    assert handled is True
+    assert should_exit is False
+    assert "## Skills" in output
+    assert "| Skill | Arguments | Source | Description |" in output
+    assert "`/deploy`" in output
+    assert "Deploy \\| checklist" in output
 
 
 def test_history_command_renders_readable_markdown_table(tmp_path):
@@ -603,7 +636,8 @@ async def test_tui_provider_command_refreshes_welcome_banner(tmp_path):
         assert "model deepseek-test" in rendered_text(app.query_one(StatusBar))
         handled, _, output = handle_repl_command(agent, "/provider")
         assert handled is True
-        assert "model: deepseek-test" in output
+        assert "## Provider" in output
+        assert "| Model | `deepseek-test` |" in output
 
 
 @pytest.mark.asyncio

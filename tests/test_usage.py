@@ -35,11 +35,12 @@ def test_usage_command_reports_provider_model_and_last_usage(tmp_path):
     handled, _, output = handle_repl_command(agent, "/usage")
 
     assert handled is True
-    assert "model: gpt-test" in output
-    assert "base url host: example.com" in output
-    assert "last input tokens: 10" in output
-    assert "last output tokens: 5" in output
-    assert "last cached tokens: 3" in output
+    assert "## Usage" in output
+    assert "| Model | `gpt-test` |" in output
+    assert "| Base URL host | `example.com` |" in output
+    assert "| Last input tokens | `10` |" in output
+    assert "| Last output tokens | `5` |" in output
+    assert "| Last cached tokens | `3` |" in output
 
 
 def test_model_command_updates_current_runtime_only(tmp_path):
@@ -51,7 +52,7 @@ def test_model_command_updates_current_runtime_only(tmp_path):
     handled, _, output = handle_repl_command(agent, "/model new-model")
 
     assert handled is True
-    assert output == "model: new-model"
+    assert "| Model | `new-model` |" in output
     assert agent.model_client.model == "new-model"
     assert not (Path(tmp_path) / ".bunnybyte.toml").exists()
 
@@ -116,9 +117,10 @@ def test_provider_command_switches_cli_runtime_only(tmp_path, monkeypatch):
     handled, _, output = handle_repl_command(agent, "/provider deepseek")
 
     assert handled is True
-    assert "provider: deepseek" in output
-    assert "protocol: anthropic" in output
-    assert "model: deepseek-v4-pro" in output
+    assert "## Provider" in output
+    assert "| Provider | `deepseek` |" in output
+    assert "| Protocol | `anthropic` |" in output
+    assert "| Model | `deepseek-v4-pro` |" in output
     assert agent.model_client.provider == "deepseek"
     assert agent.model_client.protocol == "anthropic"
     assert agent.model_client.api_key == "sk-deepseek"
@@ -130,7 +132,7 @@ def test_provider_command_switches_cli_runtime_only(tmp_path, monkeypatch):
 
     handled, _, output = handle_repl_command(agent, "/usage")
     assert handled is True
-    assert "provider profile: deepseek" in output
+    assert "| Provider profile | `deepseek` |" in output
 
 
 def test_provider_command_applies_cli_overrides_when_switching(tmp_path, monkeypatch):
@@ -209,7 +211,7 @@ def test_provider_command_applies_cli_overrides_when_switching(tmp_path, monkeyp
     handled, _, output = handle_repl_command(agent, "/provider deepseek")
 
     assert handled is True
-    assert "provider: deepseek" in output
+    assert "| Provider | `deepseek` |" in output
     assert agent.model_client.provider == "deepseek"
     assert agent.model_client.protocol == "anthropic"
     assert agent.model_client.api_key == "sk-cli-override"
@@ -241,17 +243,19 @@ def test_session_history_resume_and_clear_commands(tmp_path):
 
     handled, _, output = handle_repl_command(second, "/session")
     assert handled is True
-    assert "session topic: first request" in output
+    assert "| Session topic | first request |" in output
 
     handled, _, output = handle_repl_command(second, f"/resume {first_id}")
     assert handled is True
-    assert output == f"resumed session {first_id}"
+    assert "## Session Resumed" in output
+    assert first_id in output
     assert second.session["id"] == first_id
 
     old_id = second.session["id"]
     handled, _, output = handle_repl_command(second, "/clear")
     assert handled is True
-    assert output.startswith("new session ")
+    assert "## New Session" in output
+    assert "| Session id |" in output
     assert second.session["id"] != old_id
     assert second.current_task_state is None
     assert second.current_run_id == ""
@@ -267,7 +271,7 @@ def test_session_topic_command_renames_and_resume_matches_topic(tmp_path):
 
     handled, _, output = handle_repl_command(agent, "/topic History Browser")
     assert handled is True
-    assert output == "session topic: History Browser"
+    assert "| Session topic | History Browser |" in output
 
     handled, _, output = handle_repl_command(agent, "/history")
     assert handled is True
@@ -275,7 +279,7 @@ def test_session_topic_command_renames_and_resume_matches_topic(tmp_path):
 
     handled, _, output = handle_repl_command(agent, "/resume Browser")
     assert handled is True
-    assert output == f"resumed session {agent.session['id']}"
+    assert agent.session["id"] in output
 
 
 def test_resume_rejects_path_traversal_session_id(tmp_path):
@@ -286,7 +290,8 @@ def test_resume_rejects_path_traversal_session_id(tmp_path):
     handled, _, output = handle_repl_command(agent, "/resume ../outside")
 
     assert handled is True
-    assert output == "error: session not found"
+    assert "## Error" in output
+    assert "session not found" in output
 
 
 def test_session_store_rejects_path_traversal_ids(tmp_path):

@@ -139,11 +139,20 @@ def render_prompt_section(skills):
 
 
 def render_skills_list(skills):
-    lines = []
+    lines = [
+        "## Skills",
+        "",
+        "Use `/skill <name> [args]` to run a skill.",
+        "",
+        "| Skill | Arguments | Source | Description |",
+        "| --- | --- | --- | --- |",
+    ]
     for skill in list_skills(skills):
         description = skill.description or skill.when_to_use or "No description"
-        hint = f" [{skill.argument_hint}]" if skill.argument_hint else ""
-        lines.append(f"/{skill.name}{hint:<10} {description} [{skill.source}]")
+        argument_hint = skill.argument_hint or "-"
+        lines.append(
+            f"| `/{_table_cell(skill.name)}` | {_table_cell(argument_hint)} | {_table_cell(skill.source)} | {_table_cell(description)} |"
+        )
     return "\n".join(lines)
 
 
@@ -160,6 +169,11 @@ def parse_slash_command(text):
         return "", ""
     command, _, arguments = text[1:].partition(" ")
     return command.strip(), arguments.strip()
+
+
+def _table_cell(value):
+    text = re.sub(r"\s+", " ", str(value or "-")).strip()
+    return text.replace("|", "\\|")
 
 
 def _parse_value(value):

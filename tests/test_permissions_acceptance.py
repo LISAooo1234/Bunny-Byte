@@ -215,5 +215,6 @@ def test_repl_plan_command_reports_bad_plan_path_without_crashing(tmp_path):
 
     assert handled is True
     assert should_exit is False
-    assert output == "error: plan path must stay under .bunnybyte/plans/"
+    assert "## Error" in output
+    assert "plan path must stay under .bunnybyte/plans/" in output
     assert agent.runtime_mode == "default"

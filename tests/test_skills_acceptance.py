@@ -97,7 +97,8 @@ def test_memory_slash_commands_use_kairos_assets(tmp_path):
 
     assert handled is True
     assert should_exit is False
-    assert "Saved to daily log" in output
+    assert "## Memory" in output
+    assert "Saved to the daily log" in output
     log_files = list((tmp_path / ".bunnybyte" / "memory" / "logs").rglob("*.md"))
     events = agent.session_store.event_path(agent.session["id"]).read_text(encoding="utf-8")
     assert len(log_files) == 1
@@ -339,7 +340,9 @@ def test_cli_lists_skills_without_calling_model(tmp_path):
         check=True,
     )
 
-    assert "/review" in result.stdout
-    assert "/test" in result.stdout
-    assert "/commit" in result.stdout
-    assert "/simplify" in result.stdout
+    assert "## Skills" in result.stdout
+    assert "| Skill | Arguments | Source | Description |" in result.stdout
+    assert "`/review`" in result.stdout
+    assert "`/test`" in result.stdout
+    assert "`/commit`" in result.stdout
+    assert "`/simplify`" in result.stdout

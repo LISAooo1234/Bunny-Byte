@@ -37,13 +37,19 @@ class TurnHistoryBuilder:
         item.setdefault("source", "runtime")
         return item
 
+    def prompt_history(self):
+        compact_manager = getattr(self.agent, "compact_manager", None)
+        if compact_manager is not None and hasattr(compact_manager, "prompt_history"):
+            return list(compact_manager.prompt_history())
+        return list(getattr(self.agent, "session", {}).get("history", []))
+
     def raw_text(self, history):
         if not history:
             return "Transcript:\n- empty"
         return "\n".join(["Transcript:", *self._render_turn_lines(history, line_limit=2000)])
 
     def render_section(self, budget):
-        history = list(getattr(self.agent, "session", {}).get("history", []))
+        history = self.prompt_history()
         raw = self.raw_text(history)
         if not history:
             return raw, {

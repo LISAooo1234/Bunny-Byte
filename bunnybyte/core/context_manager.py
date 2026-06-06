@@ -296,7 +296,7 @@ class ContextManager:
         return max(1, usable // note_count)
 
     def _render_history_section(self, budget):
-        history = list(getattr(self.agent, "session", {}).get("history", []))
+        history = self.history_builder.prompt_history()
         raw = self.history_builder.raw_text(history)
         if not history:
             rendered = "Transcript:\n- empty"
