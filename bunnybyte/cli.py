@@ -8,6 +8,7 @@
 import argparse
 import json
 import os
+import re
 import time
 import shutil
 import sys
@@ -708,13 +709,38 @@ def _format_history(agent):
     rows = agent.session_store.list_sessions()
     if not rows:
         return "(no sessions)"
-    lines = []
+    lines = [
+        "## Session History",
+        "",
+        "Use `/resume <index>` or `/resume latest` to continue a saved session.",
+        "",
+        "| # | Topic | ID | Mode | Turns | Updated | Last answer |",
+        "| ---: | --- | --- | --- | ---: | --- | --- |",
+    ]
     for row in rows:
         lines.append(
-            f"{row['index']}. {row['topic']} [{row['id']}] mode={row['runtime_mode']} turns={row['history_count']} "
-            f"updated={row['updated_at']} {row['last_final_answer']}"
+            "| "
+            f"{row['index']} | "
+            f"{_markdown_table_cell(row.get('topic', ''))} | "
+            f"`{_markdown_table_cell(row.get('id', ''))}` | "
+            f"{_markdown_table_cell(row.get('runtime_mode', ''))} | "
+            f"{row.get('history_count', 0)} | "
+            f"{_markdown_table_cell(row.get('updated_at', ''))} | "
+            f"{_markdown_table_cell(_compact_summary(row.get('last_final_answer', '')))} |"
         )
     return "\n".join(lines)
+
+
+def _compact_summary(value, limit=96):
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _markdown_table_cell(value):
+    text = str(value or "-").replace("\n", " ")
+    return text.replace("|", "\\|")
 
 
 def _resolve_session_id(agent, target):

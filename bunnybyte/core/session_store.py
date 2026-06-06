@@ -9,6 +9,8 @@ from pathlib import Path
 from .session_topics import DEFAULT_SESSION_TOPIC, topic_from_history
 from .workspace import clip
 
+INTERNAL_SESSION_KINDS = {"internal_dream"}
+
 
 class SessionStore:
     def __init__(self, root):
@@ -37,8 +39,9 @@ class SessionStore:
         with self._lock:
             return json.loads(self.path(session_id).read_text(encoding="utf-8"))
 
-    def latest(self, include_empty=True):
+    def latest(self, include_empty=True, include_internal=False):
         files = sorted(self.root.glob("*.json"), key=lambda path: path.stat().st_mtime)
+        files = [path for path in files if include_internal or not _is_internal(path)]
         if include_empty:
             return files[-1].stem if files else None
         for path in reversed(files):
@@ -46,27 +49,28 @@ class SessionStore:
                 return path.stem
         return None
 
-    def list_sessions(self):
+    def list_sessions(self, include_internal=False):
         rows = []
-        for index, path in enumerate(
-            sorted(
-                self.root.glob("*.json"),
-                key=lambda item: item.stat().st_mtime,
-                reverse=True,
-            ),
-            start=1,
+        visible_index = 0
+        for path in sorted(
+            self.root.glob("*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
         ):
             try:
                 session = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
+            if not include_internal and _session_is_internal(session):
+                continue
+            visible_index += 1
             history = list(session.get("history", []))
             topic = str(session.get("topic", "") or "").strip()
             if not topic:
                 topic = topic_from_history(history)
             rows.append(
                 {
-                    "index": index,
+                    "index": visible_index,
                     "id": str(session.get("id", path.stem)),
                     "topic": topic or DEFAULT_SESSION_TOPIC,
                     "created_at": str(session.get("created_at", "")),
@@ -98,6 +102,18 @@ def _has_history(path):
     except (OSError, json.JSONDecodeError):
         return False
     return bool(session.get("history"))
+
+
+def _is_internal(path):
+    try:
+        session = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return _session_is_internal(session)
+
+
+def _session_is_internal(session):
+    return str(session.get("kind", "") or "") in INTERNAL_SESSION_KINDS
 
 
 def _safe_session_id(session_id):

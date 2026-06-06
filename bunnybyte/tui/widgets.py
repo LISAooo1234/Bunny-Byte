@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from rich.text import Text
@@ -180,6 +181,10 @@ class ToolCard(Static):
         padding: 0 1;
         overflow-x: hidden;
     }
+    ToolCard .tool-output Markdown {
+        height: auto;
+        width: 100%;
+    }
     """
 
     def __init__(self, tool_name: str, args_summary: str = "") -> None:
@@ -189,10 +194,10 @@ class ToolCard(Static):
         self.status = "running"
         self.output = ""
         self._collapsible: Collapsible | None = None
-        self._output_widget: Static | None = None
+        self._output_widget: Markdown | None = None
 
     def compose(self):
-        self._output_widget = Static("", classes="tool-output")
+        self._output_widget = Markdown("", classes="tool-output")
         self._collapsible = Collapsible(
             self._output_widget, title=self._label(), collapsed=False
         )
@@ -215,7 +220,7 @@ class ToolCard(Static):
         self.output = output
         self._refresh_label()
         if self._output_widget is not None:
-            self._output_widget.update(_clip(output))
+            self._output_widget.update(_format_tool_output(output))
         if self._collapsible is not None:
             self._collapsible.collapsed = True
 
@@ -224,7 +229,7 @@ class ToolCard(Static):
         self.output = output
         self._refresh_label()
         if self._output_widget is not None:
-            self._output_widget.update(_clip(output))
+            self._output_widget.update(_format_tool_output(output))
         if self._collapsible is not None:
             self._collapsible.collapsed = False
 
@@ -618,3 +623,25 @@ class InputBar(Static):
 def _clip(text: str, limit: int = 1200) -> str:
     text = str(text or "")
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _format_tool_output(text: str, limit: int = 1200) -> str:
+    clipped = _clip(text, limit=limit).strip()
+    if not clipped:
+        return ""
+    if _looks_like_markdown(clipped):
+        return clipped
+    return "```text\n" + clipped.replace("```", "`​``") + "\n```"
+
+
+def _looks_like_markdown(text: str) -> bool:
+    markdown_patterns = (
+        r"^#{1,6}\s+",
+        r"^\s*[-*+]\s+",
+        r"^\s*\d+[.)]\s+",
+        r"^\s*>\s+",
+        r"^\s*\|.+\|\s*$",
+        r"```",
+        r"`[^`]+`",
+    )
+    return any(re.search(pattern, text, re.MULTILINE) for pattern in markdown_patterns)

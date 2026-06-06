@@ -152,6 +152,8 @@ def test_pending_cli_resume_latest_does_not_create_empty_session(tmp_path, monke
     handled, _, output = handle_repl_command(pending_agent, "/history")
     assert handled is True
     assert first_id in output
+    assert "## Session History" in output
+    assert "| # | Topic | ID | Mode | Turns | Updated | Last answer |" in output
     assert not pending_path.exists()
 
     handled, _, output = handle_repl_command(pending_agent, "/resume latest")
@@ -161,6 +163,39 @@ def test_pending_cli_resume_latest_does_not_create_empty_session(tmp_path, monke
     assert output == f"resumed session {first_id}"
     assert pending_agent.session["id"] == first_id
     assert session_files_after == session_files_before
+
+
+def test_resume_latest_and_history_ignore_internal_dream_sessions(tmp_path):
+    from bunnybyte.cli import handle_repl_command
+
+    first = build_agent(tmp_path, ["<final>User answer.</final>"])
+    assert first.ask("real user request") == "User answer."
+    first_id = first.session["id"]
+    first.session_store.save(
+        {
+            "id": "dream-internal",
+            "created_at": "2026-06-07T00:00:00+00:00",
+            "topic": "# Dream: Memory Consolidation",
+            "workspace_root": str(tmp_path),
+            "history": [
+                {"role": "user", "content": "# Dream: Memory Consolidation\ninternal"},
+                {"role": "assistant", "content": "Dream consolidation complete."},
+            ],
+            "kind": "internal_dream",
+        }
+    )
+
+    second = build_agent(tmp_path, [])
+
+    handled, _, output = handle_repl_command(second, "/history")
+    assert handled is True
+    assert first_id in output
+    assert "dream-internal" not in output
+
+    handled, _, output = handle_repl_command(second, "/resume latest")
+    assert handled is True
+    assert output == f"resumed session {first_id}"
+    assert second.session["id"] == first_id
 
 
 def test_cli_stream_print_emits_full_text(monkeypatch, capsys):
@@ -184,6 +219,24 @@ def test_status_bar_shows_runtime_identity(tmp_path):
     text = rendered_text(status)
     assert "mode default" in text
     assert "session" in text
+
+
+def test_tool_output_plain_text_is_wrapped_as_markdown_code_block():
+    from bunnybyte.tui.widgets import _format_tool_output
+
+    output = _format_tool_output("first line\nsecond line")
+
+    assert output.startswith("```text\n")
+    assert output.endswith("\n```")
+    assert "first line\nsecond line" in output
+
+
+def test_tool_output_keeps_markdown_tables_renderable():
+    from bunnybyte.tui.widgets import _format_tool_output
+
+    table = "| Name | Value |\n| --- | --- |\n| mode | default |"
+
+    assert _format_tool_output(table) == table
 
 
 def test_status_bar_reads_context_usage_governance_fields():
@@ -261,6 +314,7 @@ def test_slash_command_registry_suggests_and_parses_subagent():
     help_text = command_help_text()
     assert "## Commands" in help_text
     assert "### Session" in help_text
+    assert "| Command | Description |" in help_text
     assert "`/resume <id|index|latest>`" in help_text
     assert "`/provider [name]`" in help_text
 
@@ -298,6 +352,21 @@ def test_agents_slash_command_shows_worker_status(tmp_path):
     assert handled is True
     assert should_exit is False
     assert "worker summary:" in output
+
+
+def test_history_command_renders_readable_markdown_table(tmp_path):
+    from bunnybyte.cli import handle_repl_command
+
+    agent = build_agent(tmp_path, ["<final>Line one.\n\nLine two | with pipe and extra spacing.</final>"])
+    assert agent.ask("format history output") == "Line one.\n\nLine two | with pipe and extra spacing."
+
+    handled, should_exit, output = handle_repl_command(agent, "/history")
+
+    assert handled is True
+    assert should_exit is False
+    assert "## Session History" in output
+    assert "| # | Topic | ID | Mode | Turns | Updated | Last answer |" in output
+    assert "Line one. Line two \\| with pipe and extra spacing." in output
 
 
 def test_subagent_slash_command_launches_explore_worker(tmp_path):

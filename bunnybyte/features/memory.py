@@ -28,6 +28,7 @@ HOLDER_STALE_S = 3600
 DREAM_SESSION_CAP = 30
 # dream 任务需要更多输出 token（要写多个 topic 文件 + 更新索引）。
 DREAM_MIN_NEW_TOKENS = 4096
+DREAM_SESSION_KIND = "internal_dream"
 
 DURABLE_MEMORY_INTENT_PATTERN = re.compile(r"(?i)\b(capture|remember|save|store|persist|note)\b")
 DURABLE_MEMORY_INTENT_ZH_PATTERN = re.compile(r"(记住|保存|记录|沉淀|长期记忆|持久记忆)")
@@ -530,10 +531,21 @@ def run_dream(agent, quiet=False, session_ids=None):
         memory_scope = Path(agent.memory_dir).resolve().relative_to(agent.root)
     except ValueError:
         memory_scope = Path(".bunnybyte") / "memory"
+    dream_session = {
+        "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-dream-" + os.urandom(3).hex(),
+        "created_at": now(),
+        "topic": "# Dream: Memory Consolidation",
+        "workspace_root": str(agent.root),
+        "history": [],
+        "memory": default_memory_state(),
+        "kind": DREAM_SESSION_KIND,
+        "parent_session_id": str(agent.session.get("id", "")),
+    }
     dream_agent = BunnyByte(
         model_client=agent.model_client,
         workspace=WorkspaceContext.build(agent.root),
         session_store=agent.session_store,
+        session=dream_session,
         approval_policy="auto",
         max_steps=max(agent.max_steps, 20),
         max_new_tokens=max(agent.max_new_tokens, DREAM_MIN_NEW_TOKENS),

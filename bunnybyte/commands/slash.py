@@ -69,18 +69,19 @@ def command_help_text() -> str:
         commands = [command for command in SLASH_COMMANDS if command.category == category]
         if not commands:
             continue
-        lines.extend(["", f"### {category}"])
+        lines.extend(["", f"### {category}", "", "| Command | Description |", "| --- | --- |"])
         for command in commands:
             alias_text = (
                 f" Aliases: {', '.join(f'`/{alias}`' for alias in command.aliases)}."
                 if command.aliases
                 else ""
             )
-            lines.append(f"- `{command.usage}`: {command.description}{alias_text}")
+            lines.append(f"| `{command.usage}` | {command.description}{alias_text} |")
     lines.extend(
         [
             "",
             "### Quick Tips",
+            "",
             "- Use `/resume latest` to continue the most recent saved session.",
             "- Use `/history` to list sessions, then `/resume 1` to switch to one of them.",
         ]
