@@ -306,7 +306,7 @@ def _attach_provider_switching(agent, args):
 
     def provider_switch_factory(provider):
         client, config = _build_model_client_with_config(
-            args, provider=provider, include_cli_overrides=False
+            args, provider=provider, include_cli_overrides=True
         )
         if getattr(args, "_bunnybyte_max_new_tokens_defaulted", False):
             agent.max_new_tokens = default_max_tokens_for_provider(config.name)

@@ -133,6 +133,90 @@ def test_provider_command_switches_cli_runtime_only(tmp_path, monkeypatch):
     assert "provider profile: deepseek" in output
 
 
+def test_provider_command_applies_cli_overrides_when_switching(tmp_path, monkeypatch):
+    from bunnybyte.cli import (
+        build_agent as build_cli_agent,
+        build_arg_parser,
+        handle_repl_command,
+    )
+
+    class DummyOpenAIClient:
+        supports_prompt_cache = False
+
+        def __init__(self, model="", base_url="", api_key="", temperature=None, timeout=0):
+            self.model = model
+            self.base_url = base_url
+            self.api_key = api_key
+            self.temperature = temperature
+            self.timeout = timeout
+            self.last_completion_metadata = {}
+
+    class DummyAnthropicClient(DummyOpenAIClient):
+        pass
+
+    for name in (
+        "BUNNYBYTE_PROVIDER",
+        "BUNNYBYTE_API_KEY",
+        "BUNNYBYTE_MODEL",
+        "BUNNYBYTE_BASE_URL",
+        "BUNNYBYTE_PROTOCOL",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_MODEL",
+        "DEEPSEEK_API_BASE",
+        "DEEPSEEK_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    (tmp_path / ".bunnybyte.toml").write_text(
+        "\n".join(
+            [
+                'provider = "openai"',
+                "",
+                "[providers.deepseek]",
+                'protocol = "anthropic"',
+                'api_key = "sk-project-deepseek"',
+                'base_url = "https://project.deepseek.example/anthropic"',
+                'model = "project-deepseek-model"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-deepseek")
+    monkeypatch.setattr("bunnybyte.cli.OpenAICompatibleModelClient", DummyOpenAIClient)
+    monkeypatch.setattr(
+        "bunnybyte.cli.AnthropicCompatibleModelClient", DummyAnthropicClient
+    )
+    args = build_arg_parser().parse_args(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-cli-override",
+            "--base-url",
+            "https://cli.example.test/anthropic",
+            "--model",
+            "cli-model-override",
+            "--approval",
+            "auto",
+        ]
+    )
+    agent = build_cli_agent(args)
+
+    handled, _, output = handle_repl_command(agent, "/provider deepseek")
+
+    assert handled is True
+    assert "provider: deepseek" in output
+    assert agent.model_client.provider == "deepseek"
+    assert agent.model_client.protocol == "anthropic"
+    assert agent.model_client.api_key == "sk-cli-override"
+    assert agent.model_client.base_url == "https://cli.example.test/anthropic"
+    assert agent.model_client.model == "cli-model-override"
+
+
 def test_session_history_resume_and_clear_commands(tmp_path):
     from bunnybyte.cli import handle_repl_command
 
