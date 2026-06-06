@@ -10,6 +10,7 @@ from textual.events import Key
 
 from ..commands.slash import resolve_command
 from ..cli import HELP_DETAILS, handle_repl_command
+from ..core.workspace import clip
 from .widgets import (
     AskUserPrompt,
     ChatLog,
@@ -163,17 +164,52 @@ class BunnyByteTuiApp(App):
             event.prevent_default()
 
     def _handle_command(self, text: str) -> None:
+        previous_session_id = str(self.agent.session.get("id", ""))
         handled, should_exit, output = handle_repl_command(self.agent, text)
         if should_exit:
             self.exit()
             return
         if handled:
-            self.query_one(ChatLog).add_message("assistant", output)
+            current_session_id = str(self.agent.session.get("id", ""))
+            if self._command_switched_session(text, previous_session_id, current_session_id):
+                self._render_session_history()
+            else:
+                self.query_one(ChatLog).add_message("assistant", output)
             self._refresh_runtime_identity()
             return
         self.query_one(ChatLog).add_message(
             "assistant", f"Unknown command. Use /help.\n\n{HELP_DETAILS}"
         )
+
+    def _command_switched_session(
+        self, text: str, previous_session_id: str, current_session_id: str
+    ) -> bool:
+        if not text.strip().startswith("/resume"):
+            return False
+        return bool(current_session_id and current_session_id != previous_session_id)
+
+    def _render_session_history(self) -> None:
+        chat = self.query_one(ChatLog)
+        chat.clear_messages()
+        for item in self.agent.session.get("history", []):
+            role = str(item.get("role", ""))
+            content = str(item.get("content", ""))
+            if role in {"user", "assistant"}:
+                chat.add_message(role, content)
+            elif role == "tool":
+                name = str(item.get("name", "tool") or "tool")
+                summary = self._history_tool_summary(item)
+                chat.add_message("tool", summary, tool_name=name)
+        session_id = str(self.agent.session.get("id", ""))
+        chat.add_message("assistant", f"resumed session {session_id}")
+
+    def _history_tool_summary(self, item: dict) -> str:
+        name = str(item.get("name", "tool") or "tool")
+        args = item.get("args") if isinstance(item.get("args"), dict) else {}
+        content = clip(str(item.get("content", "")), 120)
+        if content:
+            return f"{format_tool_args(name, args)} -> {content}"
+        return format_tool_args(name, args)
 
     def _run_agent(self, text: str) -> None:
         self.query_one(InputBar).set_busy(True)

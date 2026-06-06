@@ -378,6 +378,64 @@ async def test_tui_enter_only_completes_argument_commands(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tui_resume_command_renders_loaded_session_history(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar, UserMessage
+
+    first = build_agent(tmp_path, ["<final>Previous answer.</final>"])
+    assert first.ask("previous question") == "Previous answer."
+    first_id = first.session["id"]
+
+    second = build_agent(tmp_path, [])
+    app = BunnyByteTuiApp(second)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = f"/resume {first_id}"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.1)
+
+        text = "\n".join(assistant_contents(app))
+        assert "Previous answer." in text
+        assert f"resumed session {first_id}" in text
+        assert any("previous question" in child.content for child in app.query(UserMessage))
+        assert second.session["id"] == first_id
+
+
+@pytest.mark.asyncio
+async def test_tui_resume_command_renders_tool_history(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar, ToolCard
+
+    first = build_agent(tmp_path, [])
+    first.record({"role": "user", "content": "inspect files"})
+    first.record(
+        {
+            "role": "tool",
+            "name": "list_files",
+            "args": {"path": "."},
+            "content": "README.md\n",
+        }
+    )
+    first.record({"role": "assistant", "content": "Found README."})
+    first_id = first.session["id"]
+
+    second = build_agent(tmp_path, [])
+    app = BunnyByteTuiApp(second)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = f"/resume {first_id}"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.1)
+
+        cards = list(app.query(ToolCard))
+        assert cards
+        assert cards[-1].tool_name == "list_files"
+        assert "README.md" in cards[-1].args_summary
+
+
+@pytest.mark.asyncio
 async def test_tui_provider_command_refreshes_welcome_banner(tmp_path):
     from bunnybyte.cli import handle_repl_command
     from bunnybyte.tui.app import BunnyByteTuiApp
