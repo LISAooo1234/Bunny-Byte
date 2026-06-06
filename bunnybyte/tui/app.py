@@ -77,6 +77,7 @@ class BunnyByteTuiApp(App):
 
     def on_mount(self) -> None:
         self.query_one(StatusBar).update_agent(self.agent)
+        self.query_one(WelcomeBanner).update_agent(self.agent)
         self.query_one(InputBar).focus_input()
         self.set_interval(0.5, self._drain_idle_worker_notifications)
 
@@ -171,11 +172,10 @@ class BunnyByteTuiApp(App):
 
     def _run_command_in_executor(self, text: str) -> None:
         self.query_one(InputBar).set_busy(True)
+        self.query_one(WelcomeBanner).set_activity(True, f"running {text.strip()}")
         self.query_one(ThinkingIndicator).show()
         self.query_one(ThinkingIndicator).set_detail(f"running {text.strip()}")
-        self._thinking_timer = self.set_interval(
-            0.15, self.query_one(ThinkingIndicator).advance
-        )
+        self._thinking_timer = self.set_interval(0.3, self._advance_activity)
         asyncio.create_task(self._command_task(text))
 
     async def _command_task(self, text: str) -> None:
@@ -253,10 +253,9 @@ class BunnyByteTuiApp(App):
 
     def _run_agent(self, text: str) -> None:
         self.query_one(InputBar).set_busy(True)
+        self.query_one(WelcomeBanner).set_activity(True, "thinking")
         self.query_one(ThinkingIndicator).show()
-        self._thinking_timer = self.set_interval(
-            0.15, self.query_one(ThinkingIndicator).advance
-        )
+        self._thinking_timer = self.set_interval(0.3, self._advance_activity)
         asyncio.create_task(self._agent_task(text))
 
     def _drain_idle_worker_notifications(self) -> None:
@@ -288,15 +287,21 @@ class BunnyByteTuiApp(App):
             self._turn_count += 1
             status = self.query_one(StatusBar)
             status.update_turns(self._turn_count)
+            self.query_one(WelcomeBanner).update_turns(self._turn_count)
             self._refresh_runtime_identity()
             usage = (getattr(self.agent, "last_prompt_metadata", {}) or {}).get(
                 "context_usage"
             ) or {}
             status.update_context_usage(usage)
+            self.query_one(WelcomeBanner).update_context_usage(usage)
 
     def _refresh_runtime_identity(self) -> None:
         self.query_one(WelcomeBanner).update_agent(self.agent)
         self.query_one(StatusBar).update_agent(self.agent)
+
+    def _advance_activity(self) -> None:
+        self.query_one(ThinkingIndicator).advance()
+        self.query_one(WelcomeBanner).advance_activity()
 
     def _drive_turn(self, text: str) -> None:
         for event in self.agent.engine.run_turn(text):
@@ -311,32 +316,37 @@ class BunnyByteTuiApp(App):
             self._reset_model_stream()
             attempts = event.get("attempts", 0)
             tool_steps = event.get("tool_steps", 0)
-            self.query_one(ThinkingIndicator).set_detail(
-                f"model request {attempts}, tools {tool_steps}"
-            )
+            detail = f"model request {attempts}, tools {tool_steps}"
+            self.query_one(ThinkingIndicator).set_detail(detail)
+            self.query_one(WelcomeBanner).advance_activity(detail)
             return
         if event_type == "model_delta":
             self._append_model_stream_delta(str(event.get("content", "")))
-            self.query_one(ThinkingIndicator).set_detail(
-                f"receiving model output {event.get('total_chars', 0)} chars"
-            )
+            detail = f"receiving model output {event.get('total_chars', 0)} chars"
+            self.query_one(ThinkingIndicator).set_detail(detail)
+            self.query_one(WelcomeBanner).advance_activity(detail)
             return
         if event_type == "model_parsed":
             kind = event.get("kind", "")
             if kind in {"tool", "tools"}:
                 self._discard_model_stream()
-            self.query_one(ThinkingIndicator).set_detail(f"model returned {kind}")
+            detail = f"model returned {kind}"
+            self.query_one(ThinkingIndicator).set_detail(detail)
+            self.query_one(WelcomeBanner).advance_activity(detail)
             return
         if event_type == "tool_call":
             name = str(event.get("name", ""))
             args = event.get("args") if isinstance(event.get("args"), dict) else {}
-            self.query_one(ThinkingIndicator).set_detail(f"running {name}")
+            detail = f"running {name}"
+            self.query_one(ThinkingIndicator).set_detail(detail)
+            self.query_one(WelcomeBanner).advance_activity(detail)
             card = self.query_one(ChatLog).add_tool_call(name, args)
             self._running_tool_cards.append(card)
             return
         if event_type == "tool_result":
             self._finish_tool_card(event)
             self.query_one(ThinkingIndicator).set_detail("thinking after tool")
+            self.query_one(WelcomeBanner).advance_activity("thinking after tool")
             return
         if event_type == "worker_notification":
             self.query_one(ChatLog).add_message(
@@ -372,6 +382,7 @@ class BunnyByteTuiApp(App):
             timer.stop()
             self._thinking_timer = None
         self.query_one(ThinkingIndicator).hide()
+        self.query_one(WelcomeBanner).set_activity(False, "ready")
 
     def _queue_assistant_stream(self, content: str) -> None:
         if self._model_stream_widget is not None:

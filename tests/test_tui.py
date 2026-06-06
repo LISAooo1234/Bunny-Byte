@@ -221,6 +221,29 @@ def test_status_bar_shows_runtime_identity(tmp_path):
     assert "session" in text
 
 
+def test_welcome_banner_shows_runtime_hints_and_activity(tmp_path):
+    from bunnybyte.tui.widgets import WelcomeBanner
+
+    agent = build_agent(tmp_path, [])
+    agent.model_client.provider = "openai"
+    agent.model_client.model = "gpt-test"
+    banner = WelcomeBanner()
+
+    banner.update_agent(agent)
+    ready_text = rendered_text(banner)
+    assert "status ready" in ready_text
+    assert "provider openai" in ready_text
+    assert "model gpt-test" in ready_text
+    assert "context -" in ready_text
+
+    banner.set_activity(True, "running tests")
+    busy_text = rendered_text(banner)
+    assert "status running tests" in busy_text
+
+    banner.advance_activity()
+    assert banner.activity_frame == 1
+
+
 def test_tool_output_plain_text_is_wrapped_as_markdown_code_block():
     from bunnybyte.tui.widgets import _format_tool_output
 

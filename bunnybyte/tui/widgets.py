@@ -23,6 +23,7 @@ from ..branding import (
     LOWER_HALF_BLOCK,
     UPPER_HALF_BLOCK,
     mascot_stacked_rows,
+    mascot_visible_width,
 )
 from ..commands.slash import SlashCommand, suggest_commands
 
@@ -62,27 +63,100 @@ class WelcomeBanner(Static):
     def __init__(self, model_name: str = "", cwd: str = "", approval: str = "") -> None:
         super().__init__()
         self.model_name = model_name
+        self.provider = ""
+        self.mode = "default"
+        self.session = "pending"
         self.cwd = cwd
+        self.branch = ""
         self.approval = approval
+        self.turns = 0
+        self.context_text = "context -"
+        self.activity_detail = "ready"
+        self.activity_frame = 0
+        self.busy = False
 
     def update_agent(self, agent) -> None:
         self.model_name = str(getattr(agent.model_client, "model", ""))
+        self.provider = str(getattr(agent.model_client, "provider", ""))
         self.cwd = str(getattr(agent, "root", ""))
+        self.branch = str(getattr(getattr(agent, "workspace", None), "branch", ""))
         self.approval = str(getattr(agent, "approval_policy", ""))
+        self.mode = str(getattr(agent, "runtime_mode", "default"))
+        topic = str(getattr(agent, "session_topic", "") or "").strip()
+        self.session = topic or (
+            "pending"
+            if getattr(agent, "is_pending_session", False)
+            else str(agent.session.get("id", ""))[-10:]
+        )
+        self.refresh()
+
+    def update_turns(self, count: int) -> None:
+        self.turns = int(count)
+        self.refresh()
+
+    def update_context_usage(self, usage: dict | None) -> None:
+        usage = usage or {}
+        used = usage.get("total_estimated_tokens") or usage.get("used_tokens") or usage.get("estimated_tokens") or usage.get("total_tokens")
+        budget = usage.get("budget") or usage.get("max_tokens") or usage.get("context_window")
+        if used and budget:
+            self.context_text = f"context {used}/{budget}"
+        elif used:
+            self.context_text = f"context {used}"
+        else:
+            self.context_text = "context -"
+        self.refresh()
+
+    def set_activity(self, busy: bool, detail: str = "") -> None:
+        self.busy = bool(busy)
+        self.activity_detail = detail or ("working" if busy else "ready")
+        self.refresh()
+
+    def advance_activity(self, detail: str | None = None) -> None:
+        if detail is not None:
+            self.activity_detail = detail or self.activity_detail
+        if self.busy:
+            self.activity_frame += 1
         self.refresh()
 
     def render(self) -> Text:
         cwd_name = Path(self.cwd).name + "/" if self.cwd else "-"
         muted = TUI_MUTED
         accent = TUI_ACCENT
-        rows = [
-            Text.assemble(
-                Text(DISPLAY_NAME, style=f"bold {accent}"),
-                Text(f"  {SUBTITLE}", style=muted),
-            )
+        status_style = "#ffd43b" if self.busy else "#8ce99a"
+        mascot_rows = self._mascot_rows()
+        info_rows = [
+            Text.assemble(Text(DISPLAY_NAME, style=f"bold {accent}"), Text(f"  {SUBTITLE}", style=muted)),
+            self._info_line(("status", self.activity_detail), ("mode", self.mode), ("turns", str(self.turns)), value_style=status_style),
+            self._info_line(("provider", self.provider or "-"), ("model", self.model_name or "-"), ("approval", self.approval or "-")),
+            self._info_line(("session", self.session or "-"), ("cwd", cwd_name), ("branch", self.branch or "-")),
+            Text.assemble(Text(self.context_text, style=accent), Text("   "), Text(HELP_HINT, style=muted)),
         ]
-        for pixel_row in mascot_stacked_rows():
+        rows = []
+        height = max(len(mascot_rows), len(info_rows))
+        for index in range(height):
+            left = mascot_rows[index] if index < len(mascot_rows) else Text(" " * mascot_visible_width())
+            right = info_rows[index] if index < len(info_rows) else Text("")
+            rows.append(Text.assemble(left, Text("   "), right))
+        return Text("\n").join(rows)
+
+    def _info_line(self, *pairs: tuple[str, str], value_style: str | None = None) -> Text:
+        line = Text()
+        for index, (label, value) in enumerate(pairs):
+            if index:
+                line.append("   ")
+            line.append(f"{label} ", style=TUI_MUTED)
+            line.append(str(value), style=value_style or TUI_ACCENT)
+        return line
+
+    def _mascot_rows(self) -> list[Text]:
+        rows = []
+        sway = 0
+        if self.busy:
+            sway = (-1, 0, 1, 0)[(self.activity_frame // 2) % 4]
+        for row_index, pixel_row in enumerate(mascot_stacked_rows()):
             line = Text()
+            if row_index < 3 and sway > 0:
+                line.append(" " * sway)
             for top_color, bottom_color in pixel_row:
                 if top_color is None and bottom_color is None:
                     line.append(" ")
@@ -91,28 +165,11 @@ class WelcomeBanner(Static):
                 elif bottom_color is None:
                     line.append(UPPER_HALF_BLOCK, style=top_color)
                 else:
-                    line.append(
-                        UPPER_HALF_BLOCK,
-                        style=f"{top_color} on {bottom_color}",
-                    )
+                    line.append(UPPER_HALF_BLOCK, style=f"{top_color} on {bottom_color}")
+            if row_index < 3 and sway < 0:
+                line = line[abs(sway) :]
             rows.append(line)
-        rows.extend(
-            [
-                Text.assemble(
-                    Text("model ", style=muted),
-                    Text(self.model_name or "-", style=accent),
-                    Text("   approval ", style=muted),
-                    Text(self.approval or "-", style=accent),
-                    Text("   cwd ", style=muted),
-                    Text(cwd_name, style=accent),
-                ),
-                Text(
-                    HELP_HINT,
-                    style=muted,
-                ),
-            ]
-        )
-        return Text("\n").join(rows)
+        return rows
 
 
 class UserMessage(Static):
