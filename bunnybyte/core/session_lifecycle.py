@@ -6,6 +6,7 @@ from datetime import datetime
 from ..features import memory as memorylib
 from .plan_mode import PlanModeController
 from .session_events import SessionEventBus
+from .session_topics import DEFAULT_SESSION_TOPIC
 from .todo_ledger import TodoLedger
 from .worker_manager import WorkerManager
 from .workspace import now
@@ -14,6 +15,7 @@ from .workspace import now
 def resume_runtime_session(runtime, session_id):
     _shutdown_workers(runtime)
     runtime.session = runtime.session_store.load(session_id)
+    runtime._lazy_session_requested = False
     _rebind(runtime, emit_started=False)
     return runtime.session["id"]
 
@@ -23,11 +25,13 @@ def clear_runtime_session(runtime):
     runtime.session = {
         "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
         "created_at": now(),
+        "topic": DEFAULT_SESSION_TOPIC,
         "workspace_root": runtime.workspace.repo_root,
         "history": [],
         "memory": memorylib.default_memory_state(),
     }
-    _rebind(runtime, emit_started=True)
+    runtime._lazy_session_requested = True
+    _rebind(runtime, emit_started=False)
     return runtime.session["id"]
 
 
@@ -37,11 +41,17 @@ def _rebind(runtime, emit_started):
         runtime.session["id"],
         runtime.session_store.event_path(runtime.session["id"]),
         redact=runtime.redact_artifact,
+        defer=runtime.is_pending_session,
+    )
+    runtime._session_started_emitted = (
+        runtime.session_event_bus.path.exists()
+        and runtime.session_event_bus.path.stat().st_size > 0
     )
     if emit_started:
         runtime.session_event_bus.emit(
             "session_started", {"workspace_root": runtime.workspace.repo_root}
         )
+        runtime._session_started_emitted = True
     runtime.plan_mode = PlanModeController(runtime)
     runtime.memory = memorylib.LayeredMemory(
         runtime.session.setdefault("memory", memorylib.default_memory_state()),
@@ -58,7 +68,9 @@ def _rebind(runtime, emit_started):
         else "default"
     )
     runtime.resume_state = runtime.evaluate_resume_state()
-    runtime.session_path = runtime.session_store.save(runtime.session)
+    runtime.session_path = runtime.session_store.path(runtime.session["id"])
+    if not runtime.is_pending_session:
+        runtime.session_path = runtime.session_store.save(runtime.session)
     runtime.current_turn_id = ""
     runtime.current_run_id = ""
     runtime.current_run_dir = None

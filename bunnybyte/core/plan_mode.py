@@ -2,6 +2,8 @@
 
 import re
 
+from .session_topics import DEFAULT_SESSION_TOPIC, derive_session_topic
+
 
 def _slug(value):
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", str(value).strip().lower()).strip("-")
@@ -25,7 +27,10 @@ class PlanModeManager:
         return str(self.state.get("plan_path", "") or "")
 
     def enter(self, topic, path=None):
+        self.runtime.ensure_session_started()
         plan_path = _plan_path(topic, path)
+        if self.runtime.session_topic == DEFAULT_SESSION_TOPIC:
+            self.runtime.session["topic"] = derive_session_topic(topic)
         self.runtime.session["runtime_mode"] = {
             "mode": "plan",
             "topic": str(topic or ""),
@@ -43,6 +48,9 @@ class PlanModeManager:
         return plan_path
 
     def exit(self):
+        if self.runtime.is_pending_session and self.mode == "default":
+            return
+        self.runtime.ensure_session_started()
         previous = dict(self.state)
         self.runtime.session["runtime_mode"] = {"mode": "default"}
         self.runtime.set_tool_profile("default")

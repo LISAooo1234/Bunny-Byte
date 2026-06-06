@@ -74,6 +74,95 @@ def test_cli_accepts_explicit_tui_flag():
     assert args.cwd == "/tmp/workspace"
 
 
+def test_cli_build_agent_defers_new_session_until_first_request(tmp_path, monkeypatch):
+    import json
+
+    from bunnybyte.cli import build_agent, build_arg_parser
+
+    class DummyModelClient:
+        provider = "openai"
+        protocol = "openai"
+        supports_prompt_cache = False
+
+        def __init__(self, model="", base_url="", **_kwargs):
+            self.model = model
+            self.base_url = base_url
+
+        def complete(self, _prompt, _max_new_tokens, **_kwargs):
+            return "<final>Done.</final>"
+
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr("bunnybyte.cli.OpenAICompatibleModelClient", DummyModelClient)
+    args = build_arg_parser().parse_args(["--cwd", str(tmp_path), "--approval", "auto"])
+
+    agent = build_agent(args)
+
+    sessions_dir = tmp_path / ".bunnybyte" / "sessions"
+    assert agent.is_pending_session is True
+    assert not list(sessions_dir.glob("*.json"))
+    assert not list(sessions_dir.glob("*.events.jsonl"))
+
+    assert agent.ask("hello") == "Done."
+
+    events = [
+        json.loads(line)
+        for line in agent.session_event_bus.path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert agent.is_pending_session is False
+    assert agent.session_path.exists()
+    assert [event["event"] for event in events[:2]] == ["session_started", "turn_started"]
+
+
+def test_pending_cli_resume_latest_does_not_create_empty_session(tmp_path, monkeypatch):
+    from bunnybyte.cli import build_agent as build_cli_agent
+    from bunnybyte.cli import build_arg_parser, handle_repl_command
+
+    class DummyModelClient:
+        provider = "openai"
+        protocol = "openai"
+        supports_prompt_cache = False
+
+        def __init__(self, model="", base_url="", **_kwargs):
+            self.model = model
+            self.base_url = base_url
+
+        def complete(self, _prompt, _max_new_tokens, **_kwargs):
+            return "<final>Resumed.</final>"
+
+    first = build_agent(tmp_path, ["<final>First.</final>"])
+    assert first.ask("first request") == "First."
+    first_id = first.session["id"]
+    first.session_store.save(
+        {
+            "id": "empty-latest",
+            "created_at": "2026-06-06T00:00:00+00:00",
+            "workspace_root": str(tmp_path),
+            "history": [],
+        }
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr("bunnybyte.cli.OpenAICompatibleModelClient", DummyModelClient)
+    args = build_arg_parser().parse_args(["--cwd", str(tmp_path), "--approval", "auto"])
+    pending_agent = build_cli_agent(args)
+    pending_path = pending_agent.session_path
+    session_files_before = {path.name for path in (tmp_path / ".bunnybyte" / "sessions").glob("*.json")}
+
+    handled, _, output = handle_repl_command(pending_agent, "/history")
+    assert handled is True
+    assert first_id in output
+    assert not pending_path.exists()
+
+    handled, _, output = handle_repl_command(pending_agent, "/resume latest")
+
+    session_files_after = {path.name for path in (tmp_path / ".bunnybyte" / "sessions").glob("*.json")}
+    assert handled is True
+    assert output == f"resumed session {first_id}"
+    assert pending_agent.session["id"] == first_id
+    assert session_files_after == session_files_before
+
+
 def test_cli_stream_print_emits_full_text(monkeypatch, capsys):
     from bunnybyte.cli import _stream_print
 
@@ -156,6 +245,7 @@ def test_slash_command_registry_suggests_and_parses_subagent():
 
     assert suggestions[0].name == "subagent"
     assert resolve_command("sub").name == "subagent"
+    assert resolve_command("provider").name == "provider"
 
     payload, error = parse_subagent_args("worker --scope README.md,src update docs")
 
@@ -172,6 +262,7 @@ def test_slash_command_registry_suggests_and_parses_subagent():
     assert "## Commands" in help_text
     assert "### Session" in help_text
     assert "`/resume <id|index|latest>`" in help_text
+    assert "`/provider [name]`" in help_text
 
 
 @pytest.mark.asyncio

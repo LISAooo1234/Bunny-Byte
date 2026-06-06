@@ -56,6 +56,8 @@ class BunnyByteTuiApp(App):
         self._ask_user_prompt: AskUserPrompt | None = None
         self._ask_user_decision: tuple[threading.Event, dict] | None = None
         self._assistant_stream_task: asyncio.Task | None = None
+        self._model_stream_widget = None
+        self._model_stream_content = ""
         self._previous_approve = getattr(agent, "approve", None)
         self._previous_ask_user = getattr(agent, "ask_user_callback", None)
         self.agent.approve = self._approval_callback
@@ -226,14 +228,23 @@ class BunnyByteTuiApp(App):
     def _handle_runtime_event(self, event: dict) -> None:
         event_type = str(event.get("type", ""))
         if event_type == "model_requested":
+            self._reset_model_stream()
             attempts = event.get("attempts", 0)
             tool_steps = event.get("tool_steps", 0)
             self.query_one(ThinkingIndicator).set_detail(
                 f"model request {attempts}, tools {tool_steps}"
             )
             return
+        if event_type == "model_delta":
+            self._append_model_stream_delta(str(event.get("content", "")))
+            self.query_one(ThinkingIndicator).set_detail(
+                f"receiving model output {event.get('total_chars', 0)} chars"
+            )
+            return
         if event_type == "model_parsed":
             kind = event.get("kind", "")
+            if kind in {"tool", "tools"}:
+                self._discard_model_stream()
             self.query_one(ThinkingIndicator).set_detail(f"model returned {kind}")
             return
         if event_type == "tool_call":
@@ -283,6 +294,12 @@ class BunnyByteTuiApp(App):
         self.query_one(ThinkingIndicator).hide()
 
     def _queue_assistant_stream(self, content: str) -> None:
+        if self._model_stream_widget is not None:
+            widget = self._model_stream_widget
+            self._reset_model_stream()
+            widget.update_content(content)
+            self.query_one(ChatLog).scroll_end(animate=False)
+            return
         previous = self._assistant_stream_task
 
         async def runner():
@@ -291,6 +308,30 @@ class BunnyByteTuiApp(App):
             await self._stream_assistant_message(content)
 
         self._assistant_stream_task = asyncio.create_task(runner())
+
+    def _append_model_stream_delta(self, delta: str) -> None:
+        if not delta:
+            return
+        self._model_stream_content += delta
+        preview = _model_stream_preview(self._model_stream_content)
+        if not preview:
+            return
+        if self._model_stream_widget is None:
+            self._model_stream_widget = self.query_one(ChatLog).add_message(
+                "assistant", preview
+            )
+        else:
+            self._model_stream_widget.update_content(preview)
+            self.query_one(ChatLog).scroll_end(animate=False)
+
+    def _reset_model_stream(self) -> None:
+        self._model_stream_widget = None
+        self._model_stream_content = ""
+
+    def _discard_model_stream(self) -> None:
+        if self._model_stream_widget is not None:
+            self._model_stream_widget.remove()
+        self._reset_model_stream()
 
     async def _stream_assistant_message(self, content: str) -> None:
         content = str(content or "")
@@ -369,3 +410,14 @@ class BunnyByteTuiApp(App):
             self._ask_user_prompt.remove()
         self._ask_user_prompt = None
         self._ask_user_decision = None
+
+
+def _model_stream_preview(content: str) -> str:
+    text = str(content or "")
+    marker = "<final>"
+    if marker in text:
+        body = text.split(marker, 1)[1]
+        if "</final>" in body:
+            body = body.split("</final>", 1)[0]
+        return body
+    return text

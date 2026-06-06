@@ -34,7 +34,7 @@ from .features import skills as skillslib
 from .features.skills_runtime import invoke_skill
 from .providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
 from .core.runtime import BunnyByte, SessionStore
-from .core.workspace import WorkspaceContext, middle
+from .core.workspace import WorkspaceContext, clip, middle
 
 DEFAULT_SECRET_ENV_NAMES = (
     "BUNNYBYTE_API_KEY",
@@ -80,35 +80,73 @@ def _configured_secret_names(args):
     return sorted(configured_secret_names)
 
 
-def _build_model_client(args):
-    config = resolve_provider_config(
-        getattr(args, "provider", None),
+def _resolve_cli_provider_config(args, provider=None, include_cli_overrides=True):
+    config_model = getattr(args, "model", None) if include_cli_overrides else None
+    config_base_url = getattr(args, "base_url", None) if include_cli_overrides else None
+    config_api_key = getattr(args, "api_key", None) if include_cli_overrides else None
+    return resolve_provider_config(
+        provider if provider is not None else getattr(args, "provider", None),
         start=getattr(args, "cwd", "."),
         config_path=getattr(args, "config", None),
-        model=getattr(args, "model", None),
-        base_url=getattr(args, "base_url", None),
-        api_key=getattr(args, "api_key", None),
+        model=config_model,
+        base_url=config_base_url,
+        api_key=config_api_key,
     )
+
+
+def _build_model_client(args, provider=None, include_cli_overrides=True):
+    client, _ = _build_model_client_with_config(
+        args, provider=provider, include_cli_overrides=include_cli_overrides
+    )
+    return client
+
+
+def _build_model_client_with_config(args, provider=None, include_cli_overrides=True):
+    config = _resolve_cli_provider_config(
+        args, provider=provider, include_cli_overrides=include_cli_overrides
+    )
+    return _model_client_from_config(args, config), config
+
+
+def _model_client_from_config(args, config):
     # CLI 只负责把 provider profile 翻译成具体协议 client。
     # 例如 deepseek 是 profile，protocol=anthropic 才决定走 Messages API。
     if config.protocol == "openai":
-        return OpenAICompatibleModelClient(
+        client = OpenAICompatibleModelClient(
             model=config.model,
             base_url=config.base_url,
             api_key=config.api_key,
-            temperature=args.temperature,
+            temperature=getattr(args, "temperature", 0.2),
             timeout=getattr(args, "openai_timeout", 300),
         )
+        return _annotate_model_client(client, config)
     if config.protocol == "anthropic":
-        return AnthropicCompatibleModelClient(
+        client = AnthropicCompatibleModelClient(
             model=config.model,
             base_url=config.base_url,
             api_key=config.api_key,
-            temperature=args.temperature,
+            temperature=getattr(args, "temperature", 0.2),
             timeout=getattr(args, "openai_timeout", 300),
         )
+        return _annotate_model_client(client, config)
 
     raise ValueError(f"unknown provider protocol: {config.protocol}")
+
+
+def _annotate_model_client(client, config):
+    setattr(client, "provider", config.name)
+    setattr(client, "protocol", config.protocol)
+    if not isinstance(getattr(client, "model", None), str) or not getattr(
+        client, "model", ""
+    ):
+        setattr(client, "model", config.model)
+    if not isinstance(getattr(client, "base_url", None), str) or not getattr(
+        client, "base_url", ""
+    ):
+        setattr(client, "base_url", config.base_url)
+    if not isinstance(getattr(client, "api_key", None), str):
+        setattr(client, "api_key", config.api_key)
+    return client
 
 
 def build_welcome(agent, model, host):
@@ -146,6 +184,7 @@ def build_welcome(agent, model, host):
 
     line = divider("=")
     rows = [center_ansi(text, mascot_visible_width()) for text in render_mascot_ansi_rows()]
+    session_label = "pending" if agent.is_pending_session else agent.session["id"]
     rows.extend(
         [
             center(WELCOME_NAME),
@@ -155,7 +194,8 @@ def build_welcome(agent, model, host):
             row(""),
             row("WORKSPACE  " + middle(agent.workspace.cwd, inner - 11)),
             pair("MODEL", model, "BRANCH", agent.workspace.branch),
-            pair("APPROVAL", agent.approval_policy, "SESSION", agent.session["id"]),
+            pair("APPROVAL", agent.approval_policy, "SESSION", session_label),
+            row("TOPIC      " + middle(agent.session_topic, inner - 11)),
             row(""),
         ]
     )
@@ -182,19 +222,13 @@ def build_agent(args):
     # 先采集工作区快照，再整理 secret 名单、模型后端和 session。
     workspace = WorkspaceContext.build(args.cwd)
     store = SessionStore(workspace.repo_root + "/.bunnybyte/sessions")
-    provider_config = resolve_provider_config(
-        getattr(args, "provider", None),
-        start=getattr(args, "cwd", "."),
-        config_path=getattr(args, "config", None),
-        model=getattr(args, "model", None),
-        base_url=getattr(args, "base_url", None),
-        api_key=getattr(args, "api_key", None),
-    )
-    model = _build_model_client(args)
+    model, provider_config = _build_model_client_with_config(args)
 
     def model_client_factory():
         return _build_model_client(args)
 
+    max_new_tokens_defaulted = args.max_new_tokens is None
+    setattr(args, "_bunnybyte_max_new_tokens_defaulted", max_new_tokens_defaulted)
     if args.max_new_tokens is None:
         args.max_new_tokens = default_max_tokens_for_provider(provider_config.name)
 
@@ -208,14 +242,14 @@ def build_agent(args):
     configured_secret_names = _configured_secret_names(args)
     session_id = args.resume
     if session_id == "latest":
-        session_id = store.latest()
+        session_id = store.latest(include_empty=False)
     memory_dir = getattr(args, "memory_dir", None)
     auto_dream = not getattr(args, "no_auto_dream", False)
     dream_interval = getattr(args, "dream_interval", 24.0)
     dream_min_sessions = getattr(args, "dream_min_sessions", 5)
     ask_user_callback = None if getattr(args, "prompt", None) else _cli_ask_user
     if session_id:
-        return BunnyByte.from_session(
+        agent = BunnyByte.from_session(
             model_client=model,
             workspace=workspace,
             session_store=store,
@@ -232,7 +266,10 @@ def build_agent(args):
             sandbox_config=sandbox_config,
             ask_user_callback=ask_user_callback,
         )
-    return BunnyByte(
+        _attach_provider_switching(agent, args)
+        return agent
+    lazy_session = True
+    agent = BunnyByte(
         model_client=model,
         workspace=workspace,
         session_store=store,
@@ -247,7 +284,41 @@ def build_agent(args):
         model_client_factory=model_client_factory,
         sandbox_config=sandbox_config,
         ask_user_callback=ask_user_callback,
+        lazy_session=lazy_session,
     )
+    _attach_provider_switching(agent, args)
+    return agent
+
+
+def _attach_provider_switching(agent, args):
+    def current_model_client_factory():
+        current = getattr(agent, "model_client", None)
+        config = resolve_provider_config(
+            _client_string_attr(current, "provider")
+            or getattr(args, "provider", None),
+            start=getattr(args, "cwd", "."),
+            config_path=getattr(args, "config", None),
+            model=_client_string_attr(current, "model"),
+            base_url=_client_string_attr(current, "base_url"),
+            api_key=_client_string_attr(current, "api_key"),
+        )
+        return _model_client_from_config(args, config)
+
+    def provider_switch_factory(provider):
+        client, config = _build_model_client_with_config(
+            args, provider=provider, include_cli_overrides=False
+        )
+        if getattr(args, "_bunnybyte_max_new_tokens_defaulted", False):
+            agent.max_new_tokens = default_max_tokens_for_provider(config.name)
+        return client, config
+
+    agent.model_client_factory = current_model_client_factory
+    agent.provider_switch_factory = provider_switch_factory
+
+
+def _client_string_attr(client, name):
+    value = getattr(client, name, "")
+    return value if isinstance(value, str) and value else None
 
 
 def build_arg_parser():
@@ -414,6 +485,16 @@ def handle_repl_command(agent, user_input):
         return True, False, _format_mode_status(agent)
     if user_input == "/session":
         return True, False, _format_session_status(agent)
+    if user_input == "/topic" or user_input.startswith("/topic "):
+        _, _, raw_topic = user_input.partition(" ")
+        topic = raw_topic.strip()
+        if not topic:
+            return True, False, f"session topic: {agent.session_topic}"
+        try:
+            topic = agent.set_session_topic(topic)
+        except ValueError as exc:
+            return True, False, f"error: {exc}"
+        return True, False, f"session topic: {topic}"
     if command_name == "agents":
         return True, False, _format_subagent_status(agent)
     if command_name == "subagent":
@@ -431,6 +512,19 @@ def handle_repl_command(agent, user_input):
         )
     if user_input == "/usage":
         return True, False, _format_usage(agent)
+    if command_name == "provider":
+        if not command_args:
+            return True, False, _format_provider(agent)
+        provider = command_args.strip()
+        if provider in {"list", "ls"}:
+            return True, False, _format_provider_list()
+        if " " in provider:
+            return True, False, "Usage: /provider [name]"
+        try:
+            output = _switch_provider(agent, provider)
+        except ValueError as exc:
+            return True, False, f"error: {exc}"
+        return True, False, output
     if user_input == "/model" or user_input.startswith("/model "):
         _, _, model = user_input.partition(" ")
         model = model.strip()
@@ -492,10 +586,18 @@ def _format_session_status(agent):
         worker_summary = ", ".join(
             f"{status}={count}" for status, count in sorted(counts.items())
         )
+    status = "pending" if agent.is_pending_session else "active"
+    session_path = (
+        f"{agent.session_path} (not saved yet)"
+        if agent.is_pending_session
+        else str(agent.session_path)
+    )
     return "\n".join(
         [
             f"session id: {agent.session.get('id', '')}",
-            f"session path: {agent.session_path}",
+            f"session status: {status}",
+            f"session topic: {agent.session_topic}",
+            f"session path: {session_path}",
             f"events path: {agent.session_event_bus.path}",
             f"runtime mode: {agent.runtime_mode}",
             f"plan path: {getattr(agent.plan_mode, 'plan_path', '') or '-'}",
@@ -548,6 +650,56 @@ def _format_usage(agent):
     return "\n".join(lines)
 
 
+def _format_provider(agent):
+    base_url = str(getattr(agent.model_client, "base_url", "") or "")
+    host = urlparse(base_url).netloc or "-"
+    return "\n".join(
+        [
+            f"provider: {getattr(agent.model_client, 'provider', '-') or '-'}",
+            f"protocol: {getattr(agent.model_client, 'protocol', '-') or '-'}",
+            f"model: {getattr(agent.model_client, 'model', '-') or '-'}",
+            f"base url host: {host}",
+            f"max new tokens: {getattr(agent, 'max_new_tokens', '-')}",
+        ]
+    )
+
+
+def _format_provider_list():
+    lines = ["provider profiles:"]
+    for name in sorted(PROVIDER_DEFAULTS):
+        defaults = PROVIDER_DEFAULTS[name]
+        lines.append(
+            f"- {name}: protocol={defaults['protocol']} model={defaults['model']}"
+        )
+    lines.append("aliases: gpt -> openai, claude -> anthropic")
+    return "\n".join(lines)
+
+
+def _switch_provider(agent, provider):
+    switcher = getattr(agent, "provider_switch_factory", None)
+    if not callable(switcher):
+        raise ValueError("provider switching is unavailable for this runtime")
+    client, config = switcher(provider)
+    previous_provider = getattr(agent.model_client, "provider", "") or ""
+    previous_model = getattr(agent.model_client, "model", "") or ""
+    agent.model_client = client
+    agent.last_completion_metadata = {}
+    agent.refresh_prefix(force=True)
+    agent.resume_state = agent.evaluate_resume_state()
+    agent.session_event_bus.emit(
+        "provider_changed",
+        {
+            "previous_provider": previous_provider,
+            "previous_model": previous_model,
+            "provider": config.name,
+            "protocol": config.protocol,
+            "model": config.model,
+            "base_url": config.base_url,
+        },
+    )
+    return _format_provider(agent)
+
+
 def _format_model(agent):
     return f"model: {getattr(agent.model_client, 'model', '-') or '-'}"
 
@@ -559,7 +711,7 @@ def _format_history(agent):
     lines = []
     for row in rows:
         lines.append(
-            f"{row['index']}. {row['id']} mode={row['runtime_mode']} turns={row['history_count']} "
+            f"{row['index']}. {row['topic']} [{row['id']}] mode={row['runtime_mode']} turns={row['history_count']} "
             f"updated={row['updated_at']} {row['last_final_answer']}"
         )
     return "\n".join(lines)
@@ -567,7 +719,7 @@ def _format_history(agent):
 
 def _resolve_session_id(agent, target):
     if target == "latest":
-        return agent.session_store.latest()
+        return agent.session_store.latest(include_empty=False)
     rows = agent.session_store.list_sessions()
     if target.isdigit():
         index = int(target)
@@ -577,6 +729,19 @@ def _resolve_session_id(agent, target):
     for row in rows:
         if row["id"] == target:
             return row["id"]
+    lowered = target.lower()
+    exact_topic_matches = [
+        row["id"] for row in rows if str(row.get("topic", "")).lower() == lowered
+    ]
+    if len(exact_topic_matches) == 1:
+        return exact_topic_matches[0]
+    contains_topic_matches = [
+        row["id"]
+        for row in rows
+        if lowered and lowered in str(row.get("topic", "")).lower()
+    ]
+    if len(contains_topic_matches) == 1:
+        return contains_topic_matches[0]
     return ""
 
 
@@ -603,6 +768,81 @@ def _stream_print(text, *, chunk_size=12, delay=0.012):
         time.sleep(delay)
     sys.stdout.write("\n")
     sys.stdout.flush()
+
+
+def _print_turn_stream(agent, user_message):
+    final_answer = ""
+    stream_open = False
+    stream_buffer = ""
+    stream_preview = ""
+    for event in agent.engine.run_turn(user_message):
+        event_type = str(event.get("type", ""))
+        if event_type == "model_requested":
+            stream_buffer = ""
+            stream_preview = ""
+            stream_open = False
+            continue
+        if event_type == "model_delta":
+            stream_buffer += str(event.get("content", ""))
+            next_preview = _model_stream_preview(stream_buffer)
+            if not next_preview:
+                continue
+            if not stream_open:
+                sys.stdout.write("[model]\n")
+                stream_open = True
+            if next_preview.startswith(stream_preview):
+                sys.stdout.write(next_preview[len(stream_preview) :])
+            else:
+                sys.stdout.write(next_preview)
+            stream_preview = next_preview
+            sys.stdout.flush()
+            continue
+        if event_type == "model_parsed":
+            if stream_open:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                stream_open = False
+            if event.get("kind") not in {"final"}:
+                stream_buffer = ""
+                stream_preview = ""
+            continue
+        if event_type == "tool_call":
+            sys.stdout.write(
+                f"\n[tool] {event.get('name', '')} "
+                f"{json.dumps(event.get('args', {}), ensure_ascii=False, sort_keys=True)}\n"
+            )
+            sys.stdout.flush()
+            continue
+        if event_type == "tool_result":
+            sys.stdout.write(
+                f"[tool result] {event.get('name', '')}: "
+                f"{clip(event.get('content', ''), 240)}\n"
+            )
+            sys.stdout.flush()
+            continue
+        if event_type in {"retry", "runtime_notice", "final", "stop"}:
+            content = str(event.get("content", ""))
+            if event_type in {"final", "stop"}:
+                final_answer = content
+            if stream_preview.strip() and content.strip() == stream_preview.strip():
+                stream_buffer = ""
+                stream_preview = ""
+                continue
+            _stream_print(content)
+            stream_buffer = ""
+            stream_preview = ""
+    return final_answer
+
+
+def _model_stream_preview(content):
+    text = str(content or "")
+    marker = "<final>"
+    if marker in text:
+        body = text.split(marker, 1)[1]
+        if "</final>" in body:
+            body = body.split("</final>", 1)[0]
+        return body
+    return text
 
 
 def _drain_idle_worker_notifications(agent):
@@ -657,7 +897,7 @@ def main(argv=None):
                 if handled:
                     print(output)
                 else:
-                    _stream_print(agent.ask(prompt))
+                    _print_turn_stream(agent, prompt)
             except RuntimeError as exc:
                 print(str(exc), file=sys.stderr)
                 return 1
@@ -684,6 +924,6 @@ def main(argv=None):
 
         print()
         try:
-            _stream_print(agent.ask(user_input))
+            _print_turn_stream(agent, user_input)
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)

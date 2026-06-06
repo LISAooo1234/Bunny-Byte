@@ -6,6 +6,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from .session_topics import DEFAULT_SESSION_TOPIC, topic_from_history
 from .workspace import clip
 
 
@@ -36,9 +37,14 @@ class SessionStore:
         with self._lock:
             return json.loads(self.path(session_id).read_text(encoding="utf-8"))
 
-    def latest(self):
+    def latest(self, include_empty=True):
         files = sorted(self.root.glob("*.json"), key=lambda path: path.stat().st_mtime)
-        return files[-1].stem if files else None
+        if include_empty:
+            return files[-1].stem if files else None
+        for path in reversed(files):
+            if _has_history(path):
+                return path.stem
+        return None
 
     def list_sessions(self):
         rows = []
@@ -55,10 +61,14 @@ class SessionStore:
             except (OSError, json.JSONDecodeError):
                 continue
             history = list(session.get("history", []))
+            topic = str(session.get("topic", "") or "").strip()
+            if not topic:
+                topic = topic_from_history(history)
             rows.append(
                 {
                     "index": index,
                     "id": str(session.get("id", path.stem)),
+                    "topic": topic or DEFAULT_SESSION_TOPIC,
                     "created_at": str(session.get("created_at", "")),
                     "updated_at": datetime.fromtimestamp(
                         path.stat().st_mtime
@@ -80,6 +90,14 @@ def _last_final_preview(history):
         if item.get("role") == "assistant":
             return clip(item.get("content", ""), 80)
     return ""
+
+
+def _has_history(path):
+    try:
+        session = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(session.get("history"))
 
 
 def _safe_session_id(session_id):

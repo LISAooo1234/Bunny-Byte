@@ -412,10 +412,19 @@ class StatusBar(Static):
         self.agent_text = ""
 
     def update_agent(self, agent) -> None:
+        provider = getattr(agent.model_client, "provider", "")
         model = getattr(agent.model_client, "model", "")
         mode = getattr(agent, "runtime_mode", "default")
-        session = str(agent.session.get("id", ""))[-10:]
-        self.agent_text = f"model {model or '-'} | mode {mode} | session {session}"
+        topic = str(getattr(agent, "session_topic", "") or "").strip()
+        session = topic or (
+            "pending"
+            if getattr(agent, "is_pending_session", False)
+            else str(agent.session.get("id", ""))[-10:]
+        )
+        self.agent_text = (
+            f"provider {provider or '-'} | model {model or '-'} | "
+            f"mode {mode} | session {session}"
+        )
         self._render_status()
 
     def update_turns(self, count: int) -> None:

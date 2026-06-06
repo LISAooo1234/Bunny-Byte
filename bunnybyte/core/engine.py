@@ -6,7 +6,7 @@ one user request into model calls, tool executions, and user-visible events.
 
 import time
 
-from ..providers.base import complete_model
+from .model_stream import complete_model_with_deltas
 from .model_errors import finish_model_error
 from .engine_helpers import (
     execute_tool_payload,
@@ -59,6 +59,7 @@ class Engine:
 
     def run_turn(self, user_message):
         agent = self.runtime
+        agent.ensure_session_started()
         run_started_at = time.monotonic()
         task_state = TaskState.create(
             run_id=agent.new_run_id(),
@@ -215,10 +216,10 @@ class Engine:
 
             model_started_at = time.monotonic()
             try:
-                result = complete_model(
-                    agent.model_client,
+                result = yield from complete_model_with_deltas(
+                    self,
+                    task_state,
                     prompt,
-                    agent.max_new_tokens,
                     prompt_cache_key=prompt_cache_key,
                     prompt_cache_retention=prompt_cache_retention,
                 )

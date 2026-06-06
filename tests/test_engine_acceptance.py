@@ -67,6 +67,40 @@ def test_engine_streams_a_real_session_with_tool_artifacts(tmp_path):
     assert report["final_answer"] == "Wrote it."
 
 
+def test_engine_emits_model_deltas_before_final_parse(tmp_path):
+    class StreamingModelClient:
+        model = "stream-test"
+        supports_prompt_cache = False
+        last_completion_metadata = {}
+
+        def complete(self, _prompt, _max_new_tokens, on_delta=None, **_kwargs):
+            for chunk in ("<final>", "Streamed answer.", "</final>"):
+                if on_delta:
+                    on_delta(chunk)
+            self.last_completion_metadata = {"output_tokens": 3}
+            return "<final>Streamed answer.</final>"
+
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    workspace = WorkspaceContext.build(tmp_path)
+    agent = BunnyByte(
+        model_client=StreamingModelClient(),
+        workspace=workspace,
+        session_store=SessionStore(tmp_path / ".bunnybyte" / "sessions"),
+        approval_policy="auto",
+    )
+
+    events = list(agent.engine.run_turn("stream a final answer"))
+
+    assert [event["content"] for event in events if event["type"] == "model_delta"] == [
+        "<final>",
+        "Streamed answer.",
+        "</final>",
+    ]
+    assert events[-2]["type"] == "final"
+    assert events[-2]["content"] == "Streamed answer."
+    assert agent.last_completion_metadata["output_tokens"] == 3
+
+
 def test_engine_records_provider_error_as_failed_run(tmp_path):
     agent = build_agent(
         tmp_path,

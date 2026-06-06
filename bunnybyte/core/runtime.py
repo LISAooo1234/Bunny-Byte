@@ -32,6 +32,8 @@ from .runtime_secrets import REDACTED_VALUE, RuntimeSecretsMixin
 from .session_events import SessionEventBus
 from .session_lifecycle import clear_runtime_session, resume_runtime_session
 from .session_store import SessionStore as SessionStore  # noqa: F401
+from .session_state import SessionStateMixin
+from .session_topics import DEFAULT_SESSION_TOPIC
 from .tool_repetition import is_repeated_tool_call
 from .tool_profiles import build_tool_profiles
 from .todo_ledger import TodoLedger
@@ -100,7 +102,7 @@ class PromptPrefix:
     built_at: str
 
 
-class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
+class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin):
     def __init__(
         self,
         model_client,
@@ -125,6 +127,7 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         model_client_factory=None,
         sandbox_config=None,
         ask_user_callback=None,
+        lazy_session=False,
     ):
         self.model_client = model_client
         self.model_client_factory = model_client_factory
@@ -133,9 +136,7 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         self.sandbox_config = sandbox_config or SandboxConfig()
         self.sandbox_runner = SandboxRunner(
             self.sandbox_config,
-            emit_event=lambda event, payload: self.session_event_bus.emit(
-                event, payload
-            ),
+            emit_event=lambda event, payload: self.session_event_bus.emit(event, payload),
         )
         self.workspace = workspace
         self.root = Path(workspace.repo_root)
@@ -168,26 +169,28 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         self.run_store = run_store or RunStore(
             Path(workspace.repo_root) / ".bunnybyte" / "runs"
         )
+        self._lazy_session_requested = bool(lazy_session and session is None)
+        self._session_started_emitted = False
         self.session = session or {
             "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
             "created_at": now(),
+            "topic": DEFAULT_SESSION_TOPIC,
             "workspace_root": workspace.repo_root,
             "history": [],
             "memory": memorylib.default_memory_state(),
         }
         self._ensure_session_shape()
         self.session_event_bus = SessionEventBus(
-            self.session["id"],
-            self.session_store.event_path(self.session["id"]),
-            redact=self.redact_artifact,
+            self.session["id"], self.session_store.event_path(self.session["id"]),
+            redact=self.redact_artifact, defer=self._lazy_session_requested,
         )
-        if (
-            not self.session_event_bus.path.exists()
-            or self.session_event_bus.path.stat().st_size == 0
-        ):
+        if self.session_event_bus.path.exists() and self.session_event_bus.path.stat().st_size > 0:
+            self._session_started_emitted = True
+        elif not self._lazy_session_requested:
             self.session_event_bus.emit(
                 "session_started", {"workspace_root": workspace.repo_root}
             )
+            self._session_started_emitted = True
         self.plan_mode = PlanModeController(self)
         self.engine = Engine(self)
         self.memory = memorylib.LayeredMemory(
@@ -220,7 +223,9 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         self.runtime_consumers = default_runtime_consumers()
         self.context_manager = ContextManager(self)
         self.resume_state = self.evaluate_resume_state()
-        self.session_path = self.session_store.save(self.session)
+        self.session_path = self.session_store.path(self.session["id"])
+        if not self._lazy_session_requested:
+            self.session_path = self.session_store.save(self.session)
         self.current_task_state = None
         self.current_run_dir = None
         self.last_prompt_metadata = {}
@@ -241,6 +246,7 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
 
     @classmethod
     def from_session(cls, model_client, workspace, session_store, session_id, **kwargs):
+        kwargs.pop("lazy_session", None)
         return cls(
             model_client=model_client,
             workspace=workspace,
@@ -259,25 +265,6 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         if os.path.commonpath([str(self.root), str(resolved)]) != str(self.root):
             raise ValueError(f"memory_dir must stay inside workspace: {memory_dir}")
         return resolved
-
-    def _ensure_session_shape(self):
-        self.session.setdefault("history", [])
-        self.session.setdefault("memory", memorylib.default_memory_state())
-        checkpoints = self.session.setdefault("checkpoints", {})
-        if not isinstance(checkpoints, dict):
-            checkpoints = {}
-            self.session["checkpoints"] = checkpoints
-        checkpoints.setdefault("current_id", "")
-        checkpoints.setdefault("items", {})
-        runtime_identity = self.session.setdefault("runtime_identity", {})
-        if not isinstance(runtime_identity, dict):
-            self.session["runtime_identity"] = {}
-        resume_state = self.session.setdefault("resume_state", {})
-        if not isinstance(resume_state, dict):
-            self.session["resume_state"] = {}
-        runtime_mode = self.session.setdefault("runtime_mode", {"mode": "default"})
-        if not isinstance(runtime_mode, dict):
-            self.session["runtime_mode"] = {"mode": "default"}
 
     def current_runtime_identity(self):
         return {
@@ -651,6 +638,9 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         return ""
 
     def record(self, item):
+        self.ensure_session_started()
+        if item.get("role") == "user":
+            self._maybe_update_session_topic(item.get("content", ""))
         self.session["history"].append(self.turn_history.enrich(item))
         self.session_path = self.session_store.save(self.session)
 
@@ -707,7 +697,8 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
             "run_id": getattr(getattr(self, "current_task_state", None), "run_id", ""),
             "context_usage": metadata.get("context_usage", {}),
         }
-        self.session_event_bus.emit("context_usage_recorded", usage_payload)
+        if getattr(self, "current_task_state", None) is not None:
+            self.session_event_bus.emit("context_usage_recorded", usage_payload)
         return prompt, metadata
 
     def compact_history(self, trigger="manual", keep_recent_turns=2):
@@ -719,6 +710,7 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         return memorylib.load_memory_index_text(self.memory_dir)
 
     def remember_durable_note(self, text):
+        self.ensure_session_started()
         path = memorylib.append_to_daily_log(self.memory_dir, text)
         if path:
             self.session_event_bus.emit(
@@ -738,6 +730,7 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         return "No durable memories yet. Use /remember <text> and /dream to consolidate daily logs."
 
     def run_dream(self, quiet=False, session_ids=None):
+        self.ensure_session_started()
         return memorylib.run_dream(self, quiet=quiet, session_ids=session_ids)
 
     def maintain_memory_after_turn(self, final_answer):
@@ -875,6 +868,7 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         return clear_runtime_session(self)
 
     def run_tool(self, name, args):
+        self.ensure_session_started()
         return tool_executor.run_tool(self, name, args)
 
     def repeated_tool_call(self, name, args):
@@ -959,14 +953,19 @@ class BunnyByte(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
     extract_raw = staticmethod(model_output.extract_raw)
 
     def reset(self):
+        was_pending = self.is_pending_session
+        if not was_pending:
+            self.ensure_session_started()
         self.session["history"] = []
+        self.session["topic"] = DEFAULT_SESSION_TOPIC
         self.session["memory"].clear()
         self.session["memory"].update(memorylib.default_memory_state())
         self.memory = memorylib.LayeredMemory(
             self.session["memory"], workspace_root=self.root
         )
         self.self_authored_file_freshness.clear()
-        self.session_store.save(self.session)
+        if not was_pending:
+            self.session_path = self.session_store.save(self.session)
 
     def path(self, raw_path):
         path = Path(raw_path)

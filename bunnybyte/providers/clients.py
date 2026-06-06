@@ -210,6 +210,187 @@ def _request_with_retries(provider, model, base_url, request, timeout, retry_bud
     raise AssertionError("unreachable provider retry loop")
 
 
+def _stream_request_with_retries(
+    provider, model, base_url, request_factory, timeout, stream_parser, retry_budget=2
+):
+    retry_count = 0
+    attempts = int(retry_budget) + 1
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request_factory(), timeout=timeout) as response:
+                headers = getattr(response, "headers", {}) or {}
+                content_type = headers.get("Content-Type", "")
+                if content_type.startswith("text/event-stream"):
+                    text, response_data = stream_parser(response)
+                else:
+                    text = response.read().decode("utf-8")
+                    response_data = {}
+            return (
+                text,
+                response_data,
+                content_type,
+                _provider_metadata(
+                    provider, model, base_url, attempt + 1, retry_count
+                ),
+            )
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            retryable = exc.code in RETRYABLE_HTTP_STATUS or exc.code >= 500
+            if retryable and attempt < attempts - 1:
+                retry_count += 1
+                time.sleep(_retry_delay(attempt, exc.headers))
+                continue
+            raise ProviderError(
+                f"{provider} provider streaming request failed with HTTP {exc.code}",
+                provider=provider,
+                model=model,
+                base_url=base_url,
+                code=_http_error_code(exc.code),
+                http_status=exc.code,
+                retryable=retryable,
+                attempts=attempt + 1,
+                retry_count=retry_count,
+                body_excerpt=body,
+                cause_type=type(exc).__name__,
+            ) from exc
+        except (urllib.error.URLError, RemoteDisconnected, TimeoutError, socket.timeout) as exc:
+            retryable = True
+            if attempt < attempts - 1:
+                retry_count += 1
+                time.sleep(_retry_delay(attempt, None))
+                continue
+            raise ProviderError(
+                f"{provider} provider streaming request failed before a valid response",
+                provider=provider,
+                model=model,
+                base_url=base_url,
+                code=_transport_error_code(exc),
+                retryable=retryable,
+                attempts=attempt + 1,
+                retry_count=retry_count,
+                cause_type=type(exc).__name__,
+            ) from exc
+    raise AssertionError("unreachable provider streaming retry loop")
+
+
+def _iter_sse_payloads(response):
+    data_lines = []
+    for raw_line in response:
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        if not line:
+            if data_lines:
+                yield "\n".join(data_lines)
+                data_lines = []
+            continue
+        if line.startswith("data:"):
+            payload = line[len("data:") :].strip()
+            if not data_lines:
+                if payload == "[DONE]":
+                    yield payload
+                    continue
+                try:
+                    json.loads(payload)
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    yield payload
+                    continue
+            data_lines.append(payload)
+    if data_lines:
+        yield "\n".join(data_lines)
+
+
+def _emit_delta(on_delta, delta):
+    if not on_delta or not delta:
+        return
+    on_delta(str(delta))
+
+
+def _extract_sse_delta_text(event):
+    event_type = event.get("type", "")
+    if event_type == "response.output_text.delta":
+        delta = event.get("delta")
+        if isinstance(delta, str):
+            return delta
+
+    choices = event.get("choices", [])
+    if choices:
+        delta = choices[0].get("delta", {})
+        content = delta.get("content") if isinstance(delta, dict) else None
+        if isinstance(content, str):
+            return content
+
+    delta = event.get("delta")
+    if isinstance(delta, dict):
+        text = delta.get("text")
+        if isinstance(text, str):
+            return text
+    return ""
+
+
+def _stream_openai_response(response, on_delta):
+    last_response = None
+    last_event = None
+    deltas = []
+    done_text = ""
+    for payload in _iter_sse_payloads(response):
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        last_event = event
+        response_data = event.get("response")
+        if isinstance(response_data, dict):
+            last_response = response_data
+        delta = _extract_sse_delta_text(event)
+        if delta:
+            deltas.append(delta)
+            _emit_delta(on_delta, delta)
+            continue
+        event_type = event.get("type", "")
+        if event_type == "response.output_text.done":
+            text = event.get("text")
+            if isinstance(text, str) and text:
+                done_text = text
+        elif event_type == "response.completed" and isinstance(last_response, dict):
+            text = _extract_openai_text(last_response)
+            if text and not deltas:
+                done_text = text
+    text = done_text or "".join(deltas)
+    if not text and isinstance(last_response, dict):
+        text = _extract_openai_text(last_response)
+    if not text and isinstance(last_event, dict):
+        text = _extract_openai_text(last_event)
+    return text, last_response or last_event or {}
+
+
+def _stream_anthropic_response(response, on_delta):
+    deltas = []
+    last_event = {}
+    usage = {}
+    for payload in _iter_sse_payloads(response):
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        last_event = event
+        delta = _extract_sse_delta_text(event)
+        if delta:
+            deltas.append(delta)
+            _emit_delta(on_delta, delta)
+        event_usage = event.get("usage")
+        if isinstance(event_usage, dict):
+            usage.update(event_usage)
+    response_data = dict(last_event or {})
+    if usage:
+        response_data["usage"] = usage
+    return "".join(deltas), response_data
+
+
 def _provider_metadata(provider, model, base_url, attempts, retry_count):
     return {
         "provider_protocol": provider,
@@ -291,7 +472,14 @@ class OpenAICompatibleModelClient:
         self.supports_prompt_cache = "openai.com" in self.base_url
         self.last_completion_metadata = {}
 
-    def complete(self, prompt, max_new_tokens, prompt_cache_key=None, prompt_cache_retention=None):
+    def complete(
+        self,
+        prompt,
+        max_new_tokens,
+        prompt_cache_key=None,
+        prompt_cache_retention=None,
+        on_delta=None,
+    ):
         """向 OpenAI-compatible `/responses` 接口发起一次模型调用。
 
         为什么存在：
@@ -323,7 +511,7 @@ class OpenAICompatibleModelClient:
                 }
             ],
             "max_output_tokens": max_new_tokens,
-            "stream": False,
+            "stream": bool(on_delta),
         }
         if self.temperature is not None:
             payload["temperature"] = self.temperature
@@ -336,26 +524,64 @@ class OpenAICompatibleModelClient:
 
         headers = {
             "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": "text/event-stream" if on_delta else "application/json",
             "User-Agent": OPENAI_COMPATIBLE_USER_AGENT,
         }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        request = urllib.request.Request(
-            self.base_url + "/responses",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            body_text, content_type, request_metadata = _request_with_retries(
-                "openai",
-                self.model,
-                self.base_url,
-                request,
-                self.timeout,
+        def request_factory():
+            return urllib.request.Request(
+                self.base_url + "/responses",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
             )
+
+        try:
+            if on_delta:
+                (
+                    body_text,
+                    response_data,
+                    content_type,
+                    request_metadata,
+                ) = _stream_request_with_retries(
+                    "openai",
+                    self.model,
+                    self.base_url,
+                    request_factory,
+                    self.timeout,
+                    lambda response: _stream_openai_response(response, on_delta),
+                )
+                if content_type.startswith("text/event-stream"):
+                    self.last_completion_metadata = {
+                        "prompt_cache_supported": self.supports_prompt_cache,
+                        "prompt_cache_key": prompt_cache_key,
+                        "prompt_cache_retention": prompt_cache_retention,
+                        **request_metadata,
+                        **_extract_usage_cache_details(response_data or {}),
+                    }
+                    if body_text:
+                        return body_text
+                    error = _provider_failure(
+                        "openai",
+                        self.model,
+                        self.base_url,
+                        "empty_response",
+                        "OpenAI-compatible error: could not extract text from streamed response",
+                        request_metadata,
+                    )
+                    self.last_completion_metadata = error.to_metadata()
+                    raise error
+            else:
+                request = request_factory()
+                body_text, content_type, request_metadata = _request_with_retries(
+                    "openai",
+                    self.model,
+                    self.base_url,
+                    request,
+                    self.timeout,
+                )
         except ProviderError as exc:
             self.last_completion_metadata = exc.to_metadata()
             raise
@@ -453,7 +679,14 @@ class AnthropicCompatibleModelClient:
         self.supports_prompt_cache = False
         self.last_completion_metadata = {}
 
-    def complete(self, prompt, max_new_tokens, prompt_cache_key=None, prompt_cache_retention=None):
+    def complete(
+        self,
+        prompt,
+        max_new_tokens,
+        prompt_cache_key=None,
+        prompt_cache_retention=None,
+        on_delta=None,
+    ):
         # 为了保持统一接口，runtime 仍然会传缓存参数进来；
         # 这里只是显式丢弃，因为当前 Anthropic-compatible 路径没有接缓存复用。
         del prompt_cache_key, prompt_cache_retention
@@ -472,31 +705,72 @@ class AnthropicCompatibleModelClient:
                 }
             ],
             "max_tokens": max_new_tokens,
-            "stream": False,
+            "stream": bool(on_delta),
         }
         if self.temperature is not None:
             payload["temperature"] = self.temperature
 
         headers = {
             "Content-Type": "application/json",
+            "Accept": "text/event-stream" if on_delta else "application/json",
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
         }
 
-        request = urllib.request.Request(
-            self.base_url + "/messages",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            body_text, _content_type, request_metadata = _request_with_retries(
-                "anthropic",
-                self.model,
-                self.base_url,
-                request,
-                self.timeout,
+        def request_factory():
+            return urllib.request.Request(
+                self.base_url + "/messages",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
             )
+
+        try:
+            if on_delta:
+                (
+                    body_text,
+                    response_data,
+                    content_type,
+                    request_metadata,
+                ) = _stream_request_with_retries(
+                    "anthropic",
+                    self.model,
+                    self.base_url,
+                    request_factory,
+                    self.timeout,
+                    lambda response: _stream_anthropic_response(response, on_delta),
+                )
+                if content_type.startswith("text/event-stream"):
+                    self.last_completion_metadata = dict(request_metadata)
+                    usage = (response_data or {}).get("usage")
+                    if isinstance(usage, dict):
+                        self.last_completion_metadata.update(
+                            {
+                                "input_tokens": usage.get("input_tokens"),
+                                "output_tokens": usage.get("output_tokens"),
+                            }
+                        )
+                    if body_text:
+                        return body_text
+                    error = _provider_failure(
+                        "anthropic",
+                        self.model,
+                        self.base_url,
+                        "empty_response",
+                        "Anthropic-compatible error: could not extract text from streamed response",
+                        request_metadata,
+                    )
+                    self.last_completion_metadata = error.to_metadata()
+                    raise error
+            else:
+                request = request_factory()
+                body_text, _content_type, request_metadata = _request_with_retries(
+                    "anthropic",
+                    self.model,
+                    self.base_url,
+                    request,
+                    self.timeout,
+                )
         except ProviderError as exc:
             self.last_completion_metadata = exc.to_metadata()
             raise

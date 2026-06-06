@@ -591,6 +591,55 @@ def test_openai_compatible_client_extracts_text_from_event_stream_deltas():
     assert result == "<final>OK</final>"
 
 
+def test_openai_compatible_client_streams_sse_deltas_when_callback_is_provided():
+    captured = {}
+
+    class FakeResponse:
+        headers = {"Content-Type": "text/event-stream"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            return iter(
+                [
+                    b'data: {"type":"response.output_text.delta","delta":"<final>"}\n\n',
+                    b'data: {"type":"response.output_text.delta","delta":"OK"}\n\n',
+                    b'data: {"type":"response.output_text.delta","delta":"</final>"}\n\n',
+                    b'data: {"type":"response.completed","response":{"output":[{"content":[{"text":"<final>OK</final>"}]}],"usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}}\n\n',
+                    b"data: [DONE]\n\n",
+                ]
+            )
+
+    def fake_urlopen(request, timeout):
+        captured["timeout"] = timeout
+        captured["headers"] = dict(request.headers)
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    client = OpenAICompatibleModelClient(
+        model="gpt-test",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+    deltas = []
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        result = client.complete("hello", 42, on_delta=deltas.append)
+
+    assert result == "<final>OK</final>"
+    assert deltas == ["<final>", "OK", "</final>"]
+    assert captured["body"]["stream"] is True
+    assert captured["headers"]["Accept"] == "text/event-stream"
+    assert client.last_completion_metadata["input_tokens"] == 10
+    assert client.last_completion_metadata["output_tokens"] == 3
+
+
 def test_anthropic_compatible_client_posts_expected_messages_payload():
     captured = {}
 
@@ -690,6 +739,55 @@ def test_anthropic_compatible_client_extracts_first_text_block():
         result = client.complete("hello", 42)
 
     assert result == "<final>ok</final>"
+
+
+def test_anthropic_compatible_client_streams_sse_deltas_when_callback_is_provided():
+    captured = {}
+
+    class FakeResponse:
+        headers = {"Content-Type": "text/event-stream"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            return iter(
+                [
+                    b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"<final>"}}\n\n',
+                    b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"OK"}}\n\n',
+                    b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"</final>"}}\n\n',
+                    b'data: {"type":"message_delta","usage":{"input_tokens":11,"output_tokens":3}}\n\n',
+                    b'data: {"type":"message_stop"}\n\n',
+                ]
+            )
+
+    def fake_urlopen(request, timeout):
+        captured["timeout"] = timeout
+        captured["headers"] = dict(request.headers)
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    client = AnthropicCompatibleModelClient(
+        model="claude-test",
+        base_url="https://api.anthropic.com",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+    deltas = []
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        result = client.complete("hello", 42, on_delta=deltas.append)
+
+    assert result == "<final>OK</final>"
+    assert deltas == ["<final>", "OK", "</final>"]
+    assert captured["body"]["stream"] is True
+    assert captured["headers"]["Accept"] == "text/event-stream"
+    assert client.last_completion_metadata["input_tokens"] == 11
+    assert client.last_completion_metadata["output_tokens"] == 3
 
 
 def test_build_agent_uses_openai_provider_and_model_override(tmp_path):
