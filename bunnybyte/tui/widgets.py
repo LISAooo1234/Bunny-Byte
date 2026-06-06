@@ -150,13 +150,12 @@ class WelcomeBanner(Static):
 
     def _mascot_rows(self) -> list[Text]:
         rows = []
+        width = mascot_visible_width()
         sway = 0
         if self.busy:
             sway = (-1, 0, 1, 0)[(self.activity_frame // 2) % 4]
         for row_index, pixel_row in enumerate(mascot_stacked_rows()):
             line = Text()
-            if row_index < 3 and sway > 0:
-                line.append(" " * sway)
             for top_color, bottom_color in pixel_row:
                 if top_color is None and bottom_color is None:
                     line.append(" ")
@@ -166,8 +165,12 @@ class WelcomeBanner(Static):
                     line.append(UPPER_HALF_BLOCK, style=top_color)
                 else:
                     line.append(UPPER_HALF_BLOCK, style=f"{top_color} on {bottom_color}")
-            if row_index < 3 and sway < 0:
+            if row_index < 3 and sway > 0:
+                line = Text(" " * sway) + line
+                line = line[:width]
+            elif row_index < 3 and sway < 0:
                 line = line[abs(sway) :]
+                line.append(" " * abs(sway))
             rows.append(line)
         return rows
 

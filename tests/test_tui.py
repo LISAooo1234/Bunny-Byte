@@ -242,6 +242,7 @@ def test_welcome_banner_shows_runtime_hints_and_activity(tmp_path):
 
     banner.advance_activity()
     assert banner.activity_frame == 1
+    assert len(banner._mascot_rows()[0].plain) == len(banner._mascot_rows()[3].plain)
 
 
 def test_tool_output_plain_text_is_wrapped_as_markdown_code_block():
@@ -344,6 +345,14 @@ def test_slash_command_registry_suggests_and_parses_subagent():
     assert "| Command | Description |" in help_text
     assert "`/resume <id|index|latest>`" in help_text
     assert "`/provider [name]`" in help_text
+
+
+@pytest.mark.asyncio
+async def test_tui_hides_tool_protocol_from_model_stream_preview():
+    from bunnybyte.tui.app import _model_stream_preview
+
+    assert _model_stream_preview("我先查阅一下\n<tool") == ""
+    assert _model_stream_preview("<final>Done</final>") == "Done"
 
 
 @pytest.mark.asyncio

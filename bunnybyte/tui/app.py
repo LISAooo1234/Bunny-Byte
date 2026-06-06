@@ -511,4 +511,6 @@ def _model_stream_preview(content: str) -> str:
         if "</final>" in body:
             body = body.split("</final>", 1)[0]
         return body
+    if "<tool" in text:
+        return ""
     return text
