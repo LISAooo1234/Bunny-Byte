@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bunnybyte-agent"
+version = "0.3.0"
+description = "BunnyByte, a local coding agent for OpenAI-compatible, Anthropic-compatible, and DeepSeek models"
+requires-python = ">=3.10"
+dependencies = [
+  "textual>=0.86.0",
+  "tomli>=2.0.0; python_version < '3.11'",
+]
+
+[project.scripts]
+bunnybyte = "bunnybyte.cli:main"
+bunnybyte-tui = "bunnybyte.tui.main:main"
+bb = "bunnybyte.cli:main"
+bbtui = "bunnybyte.tui.main:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.5",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.4.4",
+]
+
+[tool.setuptools.packages.find]
+include = ["bunnybyte*"]
+
+[tool.pytest.ini_options]
+norecursedirs = [
+  ".git",
+  ".venv",
+  "artifacts",
+  "build",
+  "dist",
+]
