@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${BUNNYBYTE_REPO:-https://github.com/your-org/bunnybyte.git}"
+REPO="${BUNNYBYTE_REPO:-https://github.com/LISAooo1234/Bunny-Byte.git}"
 INSTALL_DIR="${BUNNYBYTE_INSTALL_DIR:-$HOME/.bunnybyte-agent}"
 BRANCH="${BUNNYBYTE_BRANCH:-main}"
 
