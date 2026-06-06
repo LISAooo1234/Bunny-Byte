@@ -335,6 +335,55 @@ async def test_tui_help_command_uses_existing_repl_commands(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tui_dream_command_runs_without_blocking_event_loop(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_command(_agent, text):
+        assert text == "/dream"
+        started.set()
+        assert release.wait(timeout=2)
+        return True, False, "Dream consolidation complete."
+
+    monkeypatch.setattr("bunnybyte.tui.app.handle_repl_command", slow_command)
+    agent = build_agent(tmp_path, [])
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = "/dream"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.1)
+
+        assert started.wait(timeout=1)
+        assert bar.input.disabled is True
+
+        ticked = False
+
+        def mark_tick():
+            nonlocal ticked
+            ticked = True
+
+        app.call_later(mark_tick)
+        await pilot.pause(delay=0.1)
+        assert ticked is True
+
+        release.set()
+        deadline = time.time() + 2
+        while bar.input.disabled and time.time() < deadline:
+            await pilot.pause(delay=0.05)
+
+        assert bar.input.disabled is False
+        assert "Dream consolidation complete." in "\n".join(assistant_contents(app))
+
+
+@pytest.mark.asyncio
 async def test_tui_enter_executes_selected_slash_suggestion(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
     from bunnybyte.tui.widgets import InputBar

@@ -164,22 +164,62 @@ class BunnyByteTuiApp(App):
             event.prevent_default()
 
     def _handle_command(self, text: str) -> None:
+        if text.strip() == "/dream":
+            self._run_command_in_executor(text)
+            return
+        self._handle_command_result(text, from_thread=False)
+
+    def _run_command_in_executor(self, text: str) -> None:
+        self.query_one(InputBar).set_busy(True)
+        self.query_one(ThinkingIndicator).show()
+        self.query_one(ThinkingIndicator).set_detail(f"running {text.strip()}")
+        self._thinking_timer = self.set_interval(
+            0.15, self.query_one(ThinkingIndicator).advance
+        )
+        asyncio.create_task(self._command_task(text))
+
+    async def _command_task(self, text: str) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None, partial(self._handle_command_result, text, from_thread=True)
+            )
+        except Exception as exc:
+            self.query_one(ChatLog).add_message("assistant", f"[Error] {exc}")
+        finally:
+            self._stop_thinking()
+            self.query_one(InputBar).set_busy(False)
+            self.query_one(InputBar).focus_input()
+            self._refresh_runtime_identity()
+
+    def _handle_command_result(self, text: str, from_thread: bool = False) -> None:
         previous_session_id = str(self.agent.session.get("id", ""))
         handled, should_exit, output = handle_repl_command(self.agent, text)
+
+        def run_ui(callback, *args):
+            if from_thread:
+                self.call_from_thread(callback, *args)
+            else:
+                callback(*args)
+
         if should_exit:
-            self.exit()
+            run_ui(self.exit)
             return
         if handled:
             current_session_id = str(self.agent.session.get("id", ""))
             if self._command_switched_session(text, previous_session_id, current_session_id):
-                self._render_session_history()
+                run_ui(self._render_session_history)
             else:
-                self.query_one(ChatLog).add_message("assistant", output)
-            self._refresh_runtime_identity()
+                run_ui(self._add_assistant_message, output)
+            run_ui(self._refresh_runtime_identity)
             return
-        self.query_one(ChatLog).add_message(
-            "assistant", f"Unknown command. Use /help.\n\n{HELP_DETAILS}"
+        run_ui(
+            self._add_assistant_message,
+            f"Unknown command. Use /help.\n\n{HELP_DETAILS}",
         )
+
+    def _add_assistant_message(self, content: str) -> None:
+        self.query_one(ChatLog).add_message("assistant", content)
 
     def _command_switched_session(
         self, text: str, previous_session_id: str, current_session_id: str
