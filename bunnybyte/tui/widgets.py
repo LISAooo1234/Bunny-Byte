@@ -34,6 +34,10 @@ def format_tool_args(name: str, args: dict | None) -> str:
         return str(args.get("command", ""))
     if name in {"read_file", "write_file", "patch_file", "list_files"}:
         path = str(args.get("path", "."))
+        if name == "read_file":
+            start = args.get("start", 1)
+            end = args.get("end", 200)
+            return f"{path}:{start}-{end}"
         if name == "write_file":
             return f"{path} ({len(str(args.get('content', '')))} chars)"
         return path

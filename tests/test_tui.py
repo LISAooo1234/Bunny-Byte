@@ -618,6 +618,14 @@ async def test_tui_resume_command_renders_tool_history(tmp_path):
         assert "README.md" in cards[-1].args_summary
 
 
+def test_read_file_tool_card_summary_includes_line_range():
+    from bunnybyte.tui.widgets import format_tool_args
+
+    summary = format_tool_args("read_file", {"path": "bunnybyte/core/compact.py", "start": 20, "end": 80})
+
+    assert summary == "bunnybyte/core/compact.py:20-80"
+
+
 @pytest.mark.asyncio
 async def test_tui_provider_command_refreshes_welcome_banner(tmp_path):
     from bunnybyte.cli import handle_repl_command

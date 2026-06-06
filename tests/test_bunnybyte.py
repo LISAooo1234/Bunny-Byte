@@ -265,6 +265,30 @@ def test_repeated_identical_tool_call_is_rejected(tmp_path):
     assert result == "error: repeated identical tool call for list_files; choose a different tool or return a final answer"
 
 
+def test_repeated_identical_read_file_is_rejected_immediately(tmp_path):
+    agent = build_agent(tmp_path, [])
+    (tmp_path / "hello.txt").write_text("hi\n", encoding="utf-8")
+    args = {"path": "hello.txt", "start": 1, "end": 20}
+    agent.record({"role": "tool", "name": "read_file", "args": args, "content": "# hello.txt\n   1: hi", "created_at": "1"})
+
+    result = agent.run_tool("read_file", args)
+
+    assert result == "error: repeated identical tool call for read_file; choose a different tool or return a final answer"
+
+
+def test_read_file_can_repeat_after_file_mutation(tmp_path):
+    agent = build_agent(tmp_path, [])
+    (tmp_path / "hello.txt").write_text("hi\n", encoding="utf-8")
+    read_args = {"path": "hello.txt", "start": 1, "end": 20}
+    agent.record({"role": "tool", "name": "read_file", "args": read_args, "content": "# hello.txt\n   1: hi", "created_at": "1"})
+    agent.record({"role": "tool", "name": "write_file", "args": {"path": "hello.txt", "content": "bye\n"}, "content": "wrote hello.txt (4 chars)", "created_at": "2"})
+    (tmp_path / "hello.txt").write_text("bye\n", encoding="utf-8")
+
+    reread = agent.run_tool("read_file", read_args)
+
+    assert "bye" in reread
+
+
 def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
     deep = tmp_path / "very" / "long" / "path" / "for" / "the" / "mini" / "agent" / "welcome" / "screen"
     deep.mkdir(parents=True)

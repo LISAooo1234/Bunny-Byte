@@ -49,7 +49,7 @@ BASE_TOOL_SPECS = {
         "description": "List files in the workspace.",
     },
     "read_file": {
-        "schema": {"path": "str", "start": "int=1", "end": "int=200"},
+        "schema": {"path": "str", "start": "int=1", "end": "int=2000"},
         "risky": False,
         "description": "Read a UTF-8 file by line range.",
     },
@@ -81,7 +81,7 @@ BASE_TOOL_SPECS = {
 
 TOOL_EXAMPLES = {
     "list_files": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-    "read_file": '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":80}}</tool>',
+    "read_file": '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":2000}}</tool>',
     "search": '<tool>{"name":"search","args":{"pattern":"binary_search","path":"."}}</tool>',
     "run_shell": '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
     "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
@@ -127,7 +127,7 @@ def validate_tool(agent, name, args):
         if not path.is_file():
             raise ValueError("path is not a file")
         start = int(args.get("start", 1))
-        end = int(args.get("end", 200))
+        end = int(args.get("end", 2000))
         if start < 1 or end < start:
             raise ValueError("invalid line range")
         return
@@ -210,7 +210,7 @@ def tool_read_file(agent, args):
     if not path.is_file():
         raise ValueError("path is not a file")
     start = int(args.get("start", 1))
-    end = int(args.get("end", 200))
+    end = int(args.get("end", 2000))
     if start < 1 or end < start:
         raise ValueError("invalid line range")
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()

@@ -1,6 +1,7 @@
 """Repeated tool-call guardrails."""
 
 FILE_MUTATION_TOOLS = {"write_file", "patch_file"}
+FILE_READ_TOOLS = {"read_file"}
 
 
 def is_repeated_tool_call(history, name, args):
@@ -22,6 +23,11 @@ def is_repeated_tool_call(history, name, args):
         return not _failed_file_write_retry_is_now_informed(
             current_turn, last_index, last_match
         )
+    if name in FILE_READ_TOOLS:
+        if not matches:
+            return False
+        last_index, _ = matches[-1]
+        return not _file_was_mutated_after(current_turn, name, args, last_index)
     return len(matches) >= 2
 
 
@@ -53,6 +59,19 @@ def _failed_file_write_retry_is_now_informed(current_turn, last_index, last_matc
             str(args.get("path", "")) == path
             and not str(item.get("content", "")).startswith("error:")
         ):
+            return True
+    return False
+
+
+def _file_was_mutated_after(current_turn, name, args, last_index):
+    path = str((args or {}).get("path", "")).strip()
+    if not path:
+        return False
+    for item in current_turn[last_index + 1 :]:
+        if item.get("role") != "tool" or item.get("name") not in FILE_MUTATION_TOOLS:
+            continue
+        item_args = item.get("args") or {}
+        if str(item_args.get("path", "")).strip() == path:
             return True
     return False
 
