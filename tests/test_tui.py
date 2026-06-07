@@ -101,6 +101,23 @@ def test_status_bar_shows_agent_counts(tmp_path):
     assert "agents 1/2" in str(bar.render())
 
 
+def test_status_and_welcome_clip_long_session_topic(tmp_path):
+    from bunnybyte.tui.widgets import StatusBar, WelcomeBanner
+
+    agent = build_agent(tmp_path, [])
+    long_topic = "你是 BunnyByte 的 worker 子代理。你的任务是对 /Users/zly/Desktop/脚本/nn_gold_box_auto.mjs 做代码审查。"
+    agent.session["topic"] = long_topic
+    banner = WelcomeBanner()
+    banner.update_agent(agent)
+    bar = StatusBar()
+    bar.update_agent(agent)
+
+    assert banner.session.endswith("...")
+    assert len(banner.session) <= 34
+    assert long_topic not in rendered_text(bar)
+    assert "..." in rendered_text(bar)
+
+
 def test_cli_defaults_interactive_tty_mode_to_tui(monkeypatch):
     from bunnybyte.cli import build_arg_parser, interaction_mode
 

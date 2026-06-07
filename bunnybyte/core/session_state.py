@@ -32,7 +32,7 @@ class SessionStateMixin:
         if not isinstance(read_ledger, dict):
             self.session["read_ledger"] = {}
         topic = str(self.session.get("topic", "") or "").strip()
-        if not topic:
+        if not topic or derive_session_topic(topic) != topic:
             self.session["topic"] = topic_from_history(self.session.get("history", []))
 
     @property

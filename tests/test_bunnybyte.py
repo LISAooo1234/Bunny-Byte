@@ -171,6 +171,27 @@ def test_agent_accepts_fenced_protocol_response(tmp_path):
     assert agent.ask("Use fenced output") == "Recovered from fenced protocol."
 
 
+def test_synthetic_worker_prompt_does_not_become_session_topic(tmp_path):
+    agent = build_agent(tmp_path, ["<final>Worker done.</final>"])
+    prompt = (
+        "你是 BunnyByte 的 worker 子代理。"
+        "你的任务是对 /Users/zly/Desktop/脚本/nn_gold_box_auto.mjs 做代码审查。"
+    )
+
+    assert agent.ask(prompt) == "Worker done."
+
+    assert agent.session_topic == "Untitled session"
+
+    resumed = BunnyByte.from_session(
+        model_client=ScriptedModelClient(["<final>Resumed.</final>"]),
+        workspace=agent.workspace,
+        session_store=agent.session_store,
+        session_id=agent.session["id"],
+        approval_policy="auto",
+    )
+    assert resumed.session_topic == "Untitled session"
+
+
 def test_protocol_tags_inside_body_text_are_not_parsed_as_actions(tmp_path):
     agent = build_agent(
         tmp_path,

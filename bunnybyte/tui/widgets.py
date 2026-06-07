@@ -86,12 +86,7 @@ class WelcomeBanner(Static):
         self.branch = str(getattr(getattr(agent, "workspace", None), "branch", ""))
         self.approval = str(getattr(agent, "approval_policy", ""))
         self.mode = str(getattr(agent, "runtime_mode", "default"))
-        topic = str(getattr(agent, "session_topic", "") or "").strip()
-        self.session = topic or (
-            "pending"
-            if getattr(agent, "is_pending_session", False)
-            else str(agent.session.get("id", ""))[-10:]
-        )
+        self.session = _session_display_label(agent, limit=34)
         self.refresh()
 
     def update_turns(self, count: int) -> None:
@@ -638,12 +633,7 @@ class StatusBar(Static):
         provider = getattr(agent.model_client, "provider", "")
         model = getattr(agent.model_client, "model", "")
         mode = getattr(agent, "runtime_mode", "default")
-        topic = str(getattr(agent, "session_topic", "") or "").strip()
-        session = topic or (
-            "pending"
-            if getattr(agent, "is_pending_session", False)
-            else str(agent.session.get("id", ""))[-10:]
-        )
+        session = _session_display_label(agent, limit=28)
         workers = list((agent.session.get("workers", {}) or {}).get("items", []) or [])
         running = sum(1 for item in workers if item.get("status") in {"running", "stopping"})
         worker_text = f" | agents {running}/{len(workers)}" if workers else ""
@@ -833,6 +823,17 @@ class InputBar(Static):
 
     def apply_slash_completion(self) -> bool:
         return self.complete_slash_suggestion()
+
+
+def _session_display_label(agent, limit: int = 32) -> str:
+    topic = str(getattr(agent, "session_topic", "") or "").strip()
+    if topic and topic != "Untitled session":
+        return _clip(topic, limit)
+    return (
+        "pending"
+        if getattr(agent, "is_pending_session", False)
+        else str((getattr(agent, "session", {}) or {}).get("id", ""))[-10:]
+    )
 
 
 def _clip(text: str, limit: int = 1200) -> str:
