@@ -356,6 +356,30 @@ async def test_tui_hides_tool_protocol_from_model_stream_preview():
 
 
 @pytest.mark.asyncio
+async def test_tui_ctrl_c_copies_selected_text_before_input_handles_key(tmp_path):
+    from textual.geometry import Offset
+    from textual.selection import Selection
+
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import ChatLog, InputBar
+
+    app = BunnyByteTuiApp(build_agent(tmp_path, []))
+
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatLog)
+        message = chat.add_message("user", "copy me")
+        await pilot.pause(delay=0.1)
+
+        app.screen.selections[message] = Selection(Offset(2, 0), Offset(9, 0))
+        app.query_one(InputBar).focus_input()
+
+        await pilot.press("ctrl+c")
+        await pilot.pause(delay=0.1)
+
+        assert app._clipboard == "copy me"
+
+
+@pytest.mark.asyncio
 async def test_tui_slash_suggestions_complete_partial_command(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
     from bunnybyte.tui.widgets import InputBar, SlashSuggestions

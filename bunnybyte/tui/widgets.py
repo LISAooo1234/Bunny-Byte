@@ -394,6 +394,52 @@ class AskUserPrompt(Static):
             self.refresh()
 
 
+class ProgressPanel(Static):
+    DEFAULT_CSS = """
+    ProgressPanel {
+        height: auto;
+        max-height: 8;
+        margin: 1 1 0 1;
+        padding: 0 2;
+        background: #15161c;
+        color: #d8dcff;
+        border: round #343a40;
+    }
+    ProgressPanel.hidden {
+        display: none;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self.add_class("hidden")
+
+    def update_agent(self, agent) -> None:
+        todos = getattr(agent, "session", {}).get("todos", {}) or {}
+        items = list(todos.get("items", []) or [])
+        if not items:
+            self.add_class("hidden")
+            self.update("")
+            return
+        self.remove_class("hidden")
+        lines = ["Progress"]
+        for item in items[:6]:
+            status = str(item.get("status", "pending"))
+            icon = {
+                "done": "✓",
+                "in_progress": "→",
+                "blocked": "!",
+                "pending": "•",
+            }.get(status, "•")
+            content = str(item.get("content", "")).strip()
+            note = f" — {item.get('note')}" if item.get("note") else ""
+            lines.append(f"{icon} {content}{note}")
+        remaining = len(items) - 6
+        if remaining > 0:
+            lines.append(f"... {remaining} more")
+        self.update("\n".join(lines))
+
+
 class ChatLog(VerticalScroll):
     DEFAULT_CSS = """
     ChatLog {

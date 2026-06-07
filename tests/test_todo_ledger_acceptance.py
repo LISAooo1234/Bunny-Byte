@@ -51,7 +51,8 @@ def test_todo_tools_are_available_in_plan_mode_and_prompt_context(tmp_path):
 
     assert "Task ledger:" in prompt
     assert "todo_1 [in_progress]" in prompt
-    assert "Use todo tools to keep the task ledger current." in prompt
+    assert "Use todo_add/todo_update/todo_list as the progress ledger." in prompt
+    assert "use ask_user before committing to a plan" in prompt
 
 
 def test_todo_changes_are_written_to_task_state_and_report(tmp_path):

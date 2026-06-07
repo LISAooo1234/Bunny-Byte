@@ -82,10 +82,14 @@ class PlanModeManager:
         return (
             "Runtime mode: plan\n"
             f"- Active plan artifact: {self.plan_path}\n"
-            "- You may inspect files, but writes must target only the active plan artifact.\n"
+            "- Goal: collaboratively create an execution plan, then guide execution with visible progress.\n"
+            "- First inspect enough context to understand the task. If requirements, risk tolerance, scope, or implementation preference materially affect the plan, use ask_user before committing to a plan.\n"
+            "- Use todo_add/todo_update/todo_list as the progress ledger. Create concrete tasks before or while drafting the plan, keep exactly one task in_progress while executing, and mark tasks done as they complete.\n"
+            "- Write the active plan artifact with: objective, assumptions, user choices, steps, validation, risks/rollback, and open questions.\n"
+            "- You may inspect files, but writes must target only the active plan artifact until the user approves execution or exits plan mode.\n"
             "- You may launch Explore subagents, but not write-capable worker subagents.\n"
-            "- Use todo tools to keep the task ledger current.\n"
-            "- Return a final answer only after the active plan artifact has been written."
+            "- If execution begins, keep progress updated and ask_user again when a non-obvious choice or blocker appears.\n"
+            "- Return a final answer only after the active plan artifact has been written and the progress ledger reflects the current state."
         )
 
 

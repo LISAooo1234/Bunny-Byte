@@ -16,6 +16,7 @@ from .widgets import (
     ChatLog,
     ConfirmPrompt,
     InputBar,
+    ProgressPanel,
     StatusBar,
     ThinkingIndicator,
     ToolCard,
@@ -42,6 +43,13 @@ class BunnyByteTuiApp(App):
 
     CSS = BUNNYBYTE_TUI_CSS
     BINDINGS = [
+        Binding(
+            "ctrl+c,super+c",
+            "screen.copy_text",
+            "Copy selected text",
+            priority=True,
+            show=False,
+        ),
         Binding("enter", "submit_input", "Send", priority=True, show=False),
         Binding("ctrl+l", "clear_screen", "Clear"),
         Binding("ctrl+q", "quit", "Quit"),
@@ -70,6 +78,7 @@ class BunnyByteTuiApp(App):
             cwd=str(getattr(self.agent, "root", "")),
             approval=str(getattr(self.agent, "approval_policy", "")),
         )
+        yield ProgressPanel()
         yield ChatLog()
         yield ThinkingIndicator()
         yield StatusBar()
@@ -78,6 +87,7 @@ class BunnyByteTuiApp(App):
     def on_mount(self) -> None:
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(WelcomeBanner).update_agent(self.agent)
+        self.query_one(ProgressPanel).update_agent(self.agent)
         self.query_one(InputBar).focus_input()
         self.set_interval(0.5, self._drain_idle_worker_notifications)
 
@@ -298,6 +308,7 @@ class BunnyByteTuiApp(App):
     def _refresh_runtime_identity(self) -> None:
         self.query_one(WelcomeBanner).update_agent(self.agent)
         self.query_one(StatusBar).update_agent(self.agent)
+        self.query_one(ProgressPanel).update_agent(self.agent)
 
     def _advance_activity(self) -> None:
         self.query_one(ThinkingIndicator).advance()
@@ -345,6 +356,7 @@ class BunnyByteTuiApp(App):
             return
         if event_type == "tool_result":
             self._finish_tool_card(event)
+            self.query_one(ProgressPanel).update_agent(self.agent)
             self.query_one(ThinkingIndicator).set_detail("thinking after tool")
             self.query_one(WelcomeBanner).advance_activity("thinking after tool")
             return
