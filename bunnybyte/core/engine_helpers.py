@@ -60,15 +60,23 @@ def execute_tool_payload(engine, task_state, user_message, payload):
             **tool_metadata,
         },
     )
-    checkpoint = agent.create_checkpoint(
-        task_state, user_message, trigger="tool_executed"
-    )
-    agent.run_store.write_task_state(task_state)
-    agent.emit_trace(
-        task_state,
-        "checkpoint_created",
-        {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "tool_executed"},
-    )
+    if tool_metadata.get("workspace_changed") or not tool_metadata.get("read_only", True):
+        checkpoint = agent.create_checkpoint(
+            task_state, user_message, trigger="tool_executed"
+        )
+        agent.run_store.write_task_state(task_state)
+        agent.emit_trace(
+            task_state,
+            "checkpoint_created",
+            {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "tool_executed"},
+        )
+    else:
+        agent.run_store.write_task_state(task_state)
+        agent.emit_trace(
+            task_state,
+            "checkpoint_skipped",
+            {"trigger": "read_only_tool", "tool_name": name},
+        )
     yield {
         "type": "tool_result",
         "run_id": task_state.run_id,

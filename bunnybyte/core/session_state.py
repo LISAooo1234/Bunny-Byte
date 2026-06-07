@@ -28,6 +28,9 @@ class SessionStateMixin:
         runtime_mode = self.session.setdefault("runtime_mode", {"mode": "default"})
         if not isinstance(runtime_mode, dict):
             self.session["runtime_mode"] = {"mode": "default"}
+        read_ledger = self.session.setdefault("read_ledger", {})
+        if not isinstance(read_ledger, dict):
+            self.session["read_ledger"] = {}
         topic = str(self.session.get("topic", "") or "").strip()
         if not topic:
             self.session["topic"] = topic_from_history(self.session.get("history", []))
@@ -55,7 +58,8 @@ class SessionStateMixin:
             return current or DEFAULT_SESSION_TOPIC
         self.session["topic"] = topic
         event_bus = getattr(self, "session_event_bus", None)
-        if event_bus is not None:
+        if event_bus is not None and getattr(self, "_emit_derived_topic_event", False):
+            self._emit_derived_topic_event = False
             event_bus.emit(
                 "session_topic_changed",
                 {"topic": topic, "source": "first_user_message"},

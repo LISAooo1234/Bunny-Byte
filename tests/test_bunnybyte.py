@@ -165,6 +165,12 @@ def test_agent_retries_after_malformed_tool_payload(tmp_path):
     assert any("valid <tool> call" in item for item in notices)
 
 
+def test_agent_accepts_fenced_protocol_response(tmp_path):
+    agent = build_agent(tmp_path, ["```xml\n<final>Recovered from fenced protocol.</final>\n```"])
+
+    assert agent.ask("Use fenced output") == "Recovered from fenced protocol."
+
+
 def test_protocol_tags_inside_body_text_are_not_parsed_as_actions(tmp_path):
     agent = build_agent(
         tmp_path,
@@ -282,28 +288,89 @@ def test_repeated_identical_tool_call_is_rejected(tmp_path):
     assert result == "error: repeated identical tool call for list_files; choose a different tool or return a final answer"
 
 
-def test_repeated_identical_read_file_is_rejected_immediately(tmp_path):
+def test_repeated_identical_read_file_returns_unchanged_stub_after_successful_read(tmp_path):
     agent = build_agent(tmp_path, [])
     (tmp_path / "hello.txt").write_text("hi\n", encoding="utf-8")
     args = {"path": "hello.txt", "start": 1, "end": 20}
-    agent.record({"role": "tool", "name": "read_file", "args": args, "content": "# hello.txt\n   1: hi", "created_at": "1"})
+    agent.run_tool("read_file", args)
 
     result = agent.run_tool("read_file", args)
 
-    assert result == "error: repeated identical tool call for read_file; choose a different tool or return a final answer"
+    assert result.startswith("File range already read and unchanged: hello.txt lines 1-1")
 
 
 def test_read_file_can_repeat_after_file_mutation(tmp_path):
     agent = build_agent(tmp_path, [])
     (tmp_path / "hello.txt").write_text("hi\n", encoding="utf-8")
     read_args = {"path": "hello.txt", "start": 1, "end": 20}
-    agent.record({"role": "tool", "name": "read_file", "args": read_args, "content": "# hello.txt\n   1: hi", "created_at": "1"})
-    agent.record({"role": "tool", "name": "write_file", "args": {"path": "hello.txt", "content": "bye\n"}, "content": "wrote hello.txt (4 chars)", "created_at": "2"})
-    (tmp_path / "hello.txt").write_text("bye\n", encoding="utf-8")
+    agent.run_tool("read_file", read_args)
+    agent.run_tool("write_file", {"path": "hello.txt", "content": "bye\n"})
 
     reread = agent.run_tool("read_file", read_args)
 
     assert "bye" in reread
+
+
+def test_read_file_result_includes_metadata_and_updates_read_state(tmp_path):
+    agent = build_agent(tmp_path, [])
+    (tmp_path / "notes.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    result = agent.run_tool("read_file", {"path": "notes.txt", "start": 1, "end": 2})
+
+    assert "<read_file_meta path=\"notes.txt\" start=\"1\" end=\"2\"" in result
+    assert "returned_lines=\"2\" total_lines=\"3\" eof=\"false\"" in result
+    assert "notes.txt: read lines 1-2 (of 3)" in agent.read_ledger.render_prompt()
+    assert "Read state:\n- notes.txt: read lines 1-2 (of 3)" in agent.prompt("continue")
+
+
+def test_covered_read_file_range_returns_unchanged_stub(tmp_path):
+    agent = build_agent(tmp_path, [])
+    (tmp_path / "notes.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    first = agent.run_tool("read_file", {"path": "notes.txt", "start": 1, "end": 3})
+    second = agent.run_tool("read_file", {"path": "notes.txt", "start": 2, "end": 2})
+
+    assert "two" in first
+    assert second == (
+        "File range already read and unchanged: notes.txt lines 2-2. "
+        "The earlier read_file result in this session is still current; use it instead "
+        "of re-reading."
+    )
+    assert agent._last_tool_result_metadata["tool_status"] == "ok"
+    assert agent._last_tool_result_metadata["tool_error_code"] == "file_range_already_read"
+
+
+def test_read_file_range_is_not_stubbed_after_mutation(tmp_path):
+    agent = build_agent(tmp_path, [])
+    (tmp_path / "notes.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    agent.run_tool("read_file", {"path": "notes.txt", "start": 1, "end": 2})
+    agent.run_tool("write_file", {"path": "notes.txt", "content": "changed\ntwo\n"})
+    reread = agent.run_tool("read_file", {"path": "notes.txt", "start": 1, "end": 1})
+
+    assert "changed" in reread
+    assert "File range already read" not in reread
+
+
+def test_read_only_tool_skips_per_tool_checkpoint(tmp_path):
+    (tmp_path / "hello.txt").write_text("hi\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"hello.txt","start":1,"end":1}}</tool>',
+            "<final>done</final>",
+        ],
+    )
+
+    assert agent.ask("inspect hello") == "done"
+
+    trace_events = [
+        json.loads(line)
+        for line in agent.run_store.trace_path(agent.current_task_state).read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(event["event"] == "checkpoint_skipped" and event["tool_name"] == "read_file" for event in trace_events)
+    assert not any(event["event"] == "checkpoint_created" and event.get("trigger") == "tool_executed" for event in trace_events)
+    assert any(event["event"] == "checkpoint_created" and event.get("trigger") == "run_finished" for event in trace_events)
 
 
 def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):

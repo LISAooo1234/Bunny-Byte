@@ -6,7 +6,7 @@ import re
 
 def parse(raw):
     raw = str(raw)
-    stripped = raw.lstrip()
+    stripped = _strip_protocol_fence(raw).lstrip()
     if stripped.startswith("<tool"):
         parsed = parse_tool_blocks(stripped)
         if isinstance(parsed, str):
@@ -21,6 +21,12 @@ def parse(raw):
     if not raw.strip():
         return "retry", retry_notice("empty response")
     return "retry", retry_notice("missing leading <tool> or <final> protocol tag")
+
+
+def _strip_protocol_fence(raw):
+    text = str(raw or "").strip()
+    match = re.fullmatch(r"```(?:xml|html|text)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    return match.group(1).strip() if match else str(raw)
 
 
 def retry_notice(problem=None):

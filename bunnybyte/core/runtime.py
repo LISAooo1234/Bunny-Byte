@@ -24,6 +24,7 @@ from .engine import Engine
 from . import model_output, tool_executor
 from .plan_mode import PlanModeController
 from .permissions import PermissionChecker
+from .read_ledger import ReadLedger
 from .run_store import RunStore
 from .runtime_consumers import default_runtime_consumers
 from .runtime_checkpoints import RuntimeCheckpointsMixin
@@ -170,6 +171,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             Path(workspace.repo_root) / ".bunnybyte" / "runs"
         )
         self._lazy_session_requested = bool(lazy_session and session is None)
+        self._emit_derived_topic_event = self._lazy_session_requested
         self._session_started_emitted = False
         self.session = session or {
             "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
@@ -199,6 +201,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         )
         self.session["memory"] = self.memory.to_dict()
         self.self_authored_file_freshness = {}
+        self.read_ledger = ReadLedger(self)
         self.todo_ledger = TodoLedger(self)
         self.worker_manager = WorkerManager(self)
         self.skills = skillslib.discover_skills(self.root)
@@ -792,6 +795,8 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             freshness = memorylib.file_freshness(canonical_path, self.root)
             if freshness:
                 self.self_authored_file_freshness[canonical_path] = freshness
+            if hasattr(self, "read_ledger"):
+                self.read_ledger.invalidate(canonical_path)
         # file_summaries 既是 prompt 上下文，也是 tool policy 的 prior-read 凭证。
         # 即使 memory feature flag 关掉（如 dream agent），也必须维护 freshness，
         # 否则 patch_file/write_file 会被 prior_read_required 误拒。
@@ -860,19 +865,15 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             return "error: ask_user requires interactive mode"
         choices = [str(choice) for choice in (choices or [])]
         return str(self.ask_user_callback(str(question), choices))
-
     def resume_session(self, session_id):
         return resume_runtime_session(self, session_id)
-
     def clear_session(self):
         return clear_runtime_session(self)
-
     def run_tool(self, name, args):
         self.ensure_session_started()
         return tool_executor.run_tool(self, name, args)
-
     def repeated_tool_call(self, name, args):
-        return is_repeated_tool_call(self.session["history"], name, args)
+        return is_repeated_tool_call(self.session["history"], name, args, self.read_ledger)
 
     @staticmethod
     def new_task_id():
@@ -964,6 +965,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             self.session["memory"], workspace_root=self.root
         )
         self.self_authored_file_freshness.clear()
+        self.session["read_ledger"] = {}; self.read_ledger = ReadLedger(self)
         if not was_pending:
             self.session_path = self.session_store.save(self.session)
 

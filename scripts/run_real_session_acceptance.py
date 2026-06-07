@@ -347,6 +347,7 @@ def _scenario_context_pressure(output_dir, workspace):
     agent = _build_agent(
         workspace,
         [
+            "<summary>Acceptance context pressure history summary.</summary>",
             '<tool>{"name":"read_file","args":{"path":"src/target.py","start":1,"end":5}}</tool>',
             '<tool name="patch_file" path="src/target.py"><old_text>VALUE = \'old\'</old_text><new_text>VALUE = \'new\'</new_text></tool>',
             "<final>Context pressure handled.</final>",

@@ -3,6 +3,8 @@ import json
 import locale as locale_module
 import shutil
 import subprocess
+import stat
+import uuid
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -94,6 +96,7 @@ SCRIPTED_MODEL_OUTPUTS = {
         "<final>Done.</final>",
     ],
     "context_reduction_checkpoint": [
+        "<summary>Benchmark context was compacted before the final answer.</summary>",
         "<final>Done.</final>",
     ],
     "freshness_reanchor_resume": [
@@ -146,6 +149,21 @@ def _artifact_path_for_task(task):
 
 def _workspace_relative(path, workspace_root):
     return str(Path(path).resolve().relative_to(Path(workspace_root).resolve()))
+
+
+def _safe_rmtree(path):
+    def onerror(func, failed_path, _exc_info):
+        try:
+            Path(failed_path).chmod(stat.S_IWUSR | stat.S_IRUSR | stat.S_IXUSR)
+            func(failed_path)
+        except PermissionError:
+            backup = Path(failed_path).with_name(Path(failed_path).name + ".stale")
+            try:
+                Path(failed_path).rename(backup)
+            except Exception:
+                raise
+
+    shutil.rmtree(path, onerror=onerror)
 
 
 def _scripted_outputs_for_task(task):
@@ -449,7 +467,10 @@ class BenchmarkEvaluator:
         fixture_source = self.repo_root / task["fixture_repo"]
         fixture_copy_root = self.workspace_root / task["id"] / fixture_source.name
         if fixture_copy_root.exists():
-            shutil.rmtree(fixture_copy_root)
+            try:
+                _safe_rmtree(fixture_copy_root)
+            except OSError:
+                fixture_copy_root = fixture_copy_root.with_name(f"{fixture_copy_root.name}-{uuid.uuid4().hex[:6]}")
         fixture_copy_root.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(fixture_source, fixture_copy_root)
 

@@ -67,6 +67,28 @@ def test_engine_streams_a_real_session_with_tool_artifacts(tmp_path):
     assert report["final_answer"] == "Wrote it."
 
 
+def test_engine_retries_final_that_only_announces_future_work(tmp_path):
+    (tmp_path / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            "<final>我先记录一个检查任务，接下来会查看仓库结构和主脚本后给你总结。</final>",
+            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+            "<final>看到了 README.md 和 main.py。</final>",
+        ],
+    )
+
+    events = list(agent.engine.run_turn("大概看一下这个仓库"))
+
+    assert any(event["type"] == "retry" for event in events)
+    assert any(
+        event["type"] == "tool_call" and event["name"] == "list_files"
+        for event in events
+    )
+    assert events[-2]["type"] == "final"
+    assert events[-2]["content"] == "看到了 README.md 和 main.py。"
+
+
 def test_engine_emits_model_deltas_before_final_parse(tmp_path):
     class StreamingModelClient:
         model = "stream-test"

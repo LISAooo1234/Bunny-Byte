@@ -26,6 +26,81 @@ def rendered_text(widget) -> str:
     return getattr(rendered, "plain", str(rendered))
 
 
+def test_read_only_tool_cards_are_compact_by_default():
+    from bunnybyte.tui.widgets import ToolCard
+
+    read_card = ToolCard("read_file", "bunnybyte/core/runtime.py:1-80")
+    shell_card = ToolCard("run_shell", "pytest -q")
+
+    assert read_card.compact is True
+    assert read_card.has_class("compact")
+    assert shell_card.compact is False
+    assert not shell_card.has_class("compact")
+
+
+def test_compact_tool_card_success_label_is_one_line():
+    from bunnybyte.tui.widgets import ToolCard
+
+    card = ToolCard("search", "Engine in bunnybyte/core")
+    card.set_success("bunnybyte/core/engine.py:27:class Engine:")
+
+    assert card._label() == "· search: Engine in bunnybyte/core — 1 match"
+
+
+def test_compact_tool_card_summarizes_read_metadata():
+    from bunnybyte.tui.widgets import ToolCard
+
+    card = ToolCard("read_file", "bunnybyte/core/runtime.py:1-80")
+    card.set_success('# bunnybyte/core/runtime.py\n   1: hello\n<read_file_meta path="bunnybyte/core/runtime.py" start="1" end="80" returned_lines="80" total_lines="980" eof="false" />')
+
+    assert card._label() == "· read_file: bunnybyte/core/runtime.py:1-80 — 80 lines read, 980 total"
+
+
+def test_read_only_tool_card_error_expands():
+    from bunnybyte.tui.widgets import ToolCard
+
+    card = ToolCard("read_file", "missing.txt:1-1")
+    card.set_error("error: path is not a file")
+
+    assert card.compact is False
+    assert not card.has_class("compact")
+    assert card._label().startswith("[ERR] read_file")
+
+
+def test_progress_panel_shows_tasks_and_workers(tmp_path):
+    from bunnybyte.tui.widgets import ProgressPanel
+
+    agent = build_agent(tmp_path, [])
+    agent.session["todos"] = {
+        "items": [
+            {"content": "检查脚本", "status": "done", "priority": "high"},
+            {"content": "实施优化", "status": "in_progress", "note": "按优先级"},
+        ]
+    }
+    agent.session["workers"] = {
+        "items": [
+            {"id": "agent_1", "subagent_type": "Explore", "status": "running", "description": "扫描文件", "tool_steps": 2}
+        ]
+    }
+    panel = ProgressPanel()
+    panel.update_agent(agent)
+
+    text = str(panel.render())
+    assert "tasks 1/2 done, 1 active" in text
+    assert "agent_1 (Explore) running, tools 2" in text
+
+
+def test_status_bar_shows_agent_counts(tmp_path):
+    from bunnybyte.tui.widgets import StatusBar
+
+    agent = build_agent(tmp_path, [])
+    agent.session["workers"] = {"items": [{"status": "running"}, {"status": "completed"}]}
+    bar = StatusBar()
+    bar.update_agent(agent)
+
+    assert "agents 1/2" in str(bar.render())
+
+
 def test_cli_defaults_interactive_tty_mode_to_tui(monkeypatch):
     from bunnybyte.cli import build_arg_parser, interaction_mode
 
@@ -640,6 +715,63 @@ async def test_tui_resume_command_renders_loaded_session_history(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_final_assistant_message_renders_immediately(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import AssistantMessage
+
+    agent = build_agent(tmp_path, [])
+    app = BunnyByteTuiApp(agent)
+    long_text = "hello " * 300
+
+    async with app.run_test() as pilot:
+        app._queue_assistant_stream(long_text)
+        await pilot.pause(delay=0.05)
+
+        messages = list(app.query(AssistantMessage))
+        assert messages[-1].content == long_text
+        assert app._assistant_stream_task is None
+
+
+@pytest.mark.asyncio
+async def test_model_delta_preview_is_throttled(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import AssistantMessage
+
+    agent = build_agent(tmp_path, [])
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test():
+        app._append_model_stream_delta("a")
+        first = list(app.query(AssistantMessage))[-1].content
+        app._append_model_stream_delta("b")
+        second = list(app.query(AssistantMessage))[-1].content
+        app._append_model_stream_delta("\n")
+        third = list(app.query(AssistantMessage))[-1].content
+
+        assert first == "a"
+        assert second == "a"
+        assert third == "ab\n"
+
+
+@pytest.mark.asyncio
+async def test_retry_notices_are_coalesced(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import AssistantMessage
+
+    agent = build_agent(tmp_path, [])
+    app = BunnyByteTuiApp(agent)
+    notice = "Your previous response could not be executed. Problem: missing leading tag."
+
+    async with app.run_test():
+        app._handle_runtime_event({"type": "retry", "content": notice})
+        app._handle_runtime_event({"type": "retry", "content": notice})
+
+        messages = list(app.query(AssistantMessage))
+        assert len(messages) == 1
+        assert "repeated 2 times" in messages[0].content
+
+
+@pytest.mark.asyncio
 async def test_tui_resume_command_renders_tool_history(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
     from bunnybyte.tui.widgets import InputBar, ToolCard
@@ -669,7 +801,8 @@ async def test_tui_resume_command_renders_tool_history(tmp_path):
         cards = list(app.query(ToolCard))
         assert cards
         assert cards[-1].tool_name == "list_files"
-        assert "README.md" in cards[-1].args_summary
+        assert cards[-1].args_summary == "."
+        assert cards[-1].result_summary == "README.md"
 
 
 def test_read_file_tool_card_summary_includes_line_range():

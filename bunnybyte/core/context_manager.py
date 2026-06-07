@@ -109,6 +109,10 @@ class ContextManager:
         }
         if hasattr(self.agent, "todo_ledger"):
             section_texts["memory"] += "\n\n" + self.agent.todo_ledger.render_prompt()
+        if hasattr(self.agent, "read_ledger"):
+            read_state_text = str(self.agent.read_ledger.render_prompt() or "").strip()
+            if read_state_text:
+                section_texts["memory"] += "\n\n" + read_state_text
         checkpoint_text = ""
         if hasattr(self.agent, "render_checkpoint_text"):
             checkpoint_text = str(self.agent.render_checkpoint_text() or "").strip()

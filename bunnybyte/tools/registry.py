@@ -4,6 +4,7 @@
 如何做参数校验，以及最终如何执行，都是在这里定义的。
 """
 
+import html
 import shutil
 import subprocess
 import textwrap
@@ -214,11 +215,26 @@ def tool_read_file(agent, args):
     if start < 1 or end < start:
         raise ValueError("invalid line range")
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    selected = lines[start - 1 : end]
+    actual_end = start + len(selected) - 1 if selected else start - 1
     body = "\n".join(
         f"{number:>4}: {line}"
-        for number, line in enumerate(lines[start - 1 : end], start=start)
+        for number, line in enumerate(selected, start=start)
     )
-    return f"# {path.relative_to(agent.root)}\n{body}"
+    relative = path.relative_to(agent.root).as_posix()
+    eof = len(lines) == 0 or actual_end >= len(lines)
+    escaped_relative = html.escape(relative, quote=True)
+    meta = (
+        f'<read_file_meta path="{escaped_relative}" start="{start}" end="{actual_end}" '
+        f'returned_lines="{len(selected)}" total_lines="{len(lines)}" '
+        f'eof="{str(eof).lower()}" />'
+    )
+    if not body:
+        if len(lines) == 0:
+            body = "(empty file)"
+        else:
+            body = f"(no lines returned; file has {len(lines)} lines)"
+    return f"# {relative}\n{body}\n{meta}"
 
 
 def tool_search(agent, args):

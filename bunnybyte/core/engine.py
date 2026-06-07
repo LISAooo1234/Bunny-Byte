@@ -4,6 +4,7 @@ The runtime owns state and persistence. Engine owns the control loop that turns
 one user request into model calls, tool executions, and user-visible events.
 """
 
+import re
 import time
 
 from .model_stream import complete_model_with_deltas
@@ -22,6 +23,10 @@ from .workspace import clip, now
 CHECKPOINT_NONE_STATUS = "no-checkpoint"
 CHECKPOINT_PARTIAL_STALE_STATUS = "partial-stale"
 CHECKPOINT_WORKSPACE_MISMATCH_STATUS = "workspace-mismatch"
+NON_TERMINAL_FINAL_CUE_PATTERN = re.compile(
+    r"(我先|先.*?(接下来|随后|之后|然后|再)|接下来.*?(会|将|准备|打算)|下一步|继续.*?(做|执行|读取|查看|检查)|马上.*?(做|执行|读取|查看|检查)|now I will|next I|I will|I'll)",
+    re.IGNORECASE,
+)
 
 
 class Engine:
@@ -351,6 +356,22 @@ class Engine:
 
             final = (payload or raw).strip()
             yield from self._drain_worker_notification_events()
+            if self._looks_like_premature_final(final, task_state):
+                notice = self._premature_final_notice(final)
+                agent.record(
+                    {"role": "assistant", "content": notice, "created_at": now()}
+                )
+                agent.session_event_bus.emit(
+                    "assistant_message",
+                    {
+                        "run_id": task_state.run_id,
+                        "kind": "retry",
+                        "content": clip(notice, 500),
+                    },
+                )
+                agent.run_store.write_task_state(task_state)
+                yield {"type": "retry", "run_id": task_state.run_id, "content": notice}
+                continue
             if agent.runtime_mode == "plan" and not agent.plan_mode.can_finish():
                 notice = agent.plan_mode.final_notice()
                 agent.record(
@@ -451,4 +472,20 @@ class Engine:
             task_state.stop_step_limit(final)
         yield from finish_limited_run(
             self, task_state, user_message, final, run_started_at
+        )
+
+    @staticmethod
+    def _looks_like_premature_final(final, task_state):
+        text = str(final or "").strip()
+        if not text or task_state.tool_steps > 0:
+            return False
+        return bool(NON_TERMINAL_FINAL_CUE_PATTERN.search(text))
+
+    @staticmethod
+    def _premature_final_notice(final):
+        return (
+            "Your previous <final> answer said you were about to do more work, "
+            "but <final> ends the turn. If work remains, call the appropriate tool now "
+            "instead of narrating the plan. Previous answer: "
+            f"{clip(final, 500)}"
         )

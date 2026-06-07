@@ -71,6 +71,10 @@ class BunnyByteTuiApp(App):
         self._assistant_stream_task: asyncio.Task | None = None
         self._model_stream_widget = None
         self._model_stream_content = ""
+        self._model_stream_rendered = ""
+        self._last_retry_widget = None
+        self._last_retry_content = ""
+        self._last_retry_count = 0
         self._previous_approve = getattr(agent, "approve", None)
         self._previous_ask_user = getattr(agent, "ask_user_callback", None)
         self.agent.approve = self._approval_callback
@@ -259,8 +263,8 @@ class BunnyByteTuiApp(App):
                 chat.add_message(role, content)
             elif role == "tool":
                 name = str(item.get("name", "tool") or "tool")
-                summary = self._history_tool_summary(item)
-                chat.add_message("tool", summary, tool_name=name)
+                args = item.get("args") if isinstance(item.get("args"), dict) else {}
+                chat.add_tool_history(name, args, content)
         session_id = str(self.agent.session.get("id", ""))
         chat.add_message("assistant", f"resumed session {session_id}")
 
@@ -288,7 +292,9 @@ class BunnyByteTuiApp(App):
         chat = self.query_one(ChatLog)
         for notification in notifications:
             chat.add_message("assistant", f"[worker notification]\n{notification}")
+        self.query_one(ProgressPanel).update_agent(self.agent)
         self.query_one(StatusBar).update_agent(self.agent)
+        self.query_one(WelcomeBanner).update_agent(self.agent)
 
     async def _agent_task(self, text: str) -> None:
         loop = asyncio.get_running_loop()
@@ -324,6 +330,7 @@ class BunnyByteTuiApp(App):
     def _advance_activity(self) -> None:
         self.query_one(ThinkingIndicator).advance()
         self.query_one(WelcomeBanner).advance_activity()
+        self.query_one(ProgressPanel).update_agent(self.agent)
 
     def _drive_turn(self, text: str) -> None:
         for event in self.agent.engine.run_turn(text):
@@ -377,7 +384,11 @@ class BunnyByteTuiApp(App):
             )
             return
         if event_type in {"retry", "runtime_notice", "final", "stop"}:
-            self._queue_assistant_stream(str(event.get("content", "")))
+            content = str(event.get("content", ""))
+            if event_type == "retry" and content.startswith("Your previous response could not be executed."):
+                self._queue_retry_notice(content)
+            else:
+                self._queue_assistant_stream(content)
             return
 
     def _finish_tool_card(self, event: dict) -> None:
@@ -407,21 +418,30 @@ class BunnyByteTuiApp(App):
         self.query_one(ThinkingIndicator).hide()
         self.query_one(WelcomeBanner).set_activity(False, "ready")
 
+    def _queue_retry_notice(self, content: str) -> None:
+        if content == self._last_retry_content and self._last_retry_widget is not None:
+            self._last_retry_count += 1
+            self._last_retry_widget.update_content(f"{content}\n\n(repeated {self._last_retry_count} times)")
+            return
+        self._last_retry_content = content
+        self._last_retry_count = 1
+        self._last_retry_widget = self.query_one(ChatLog).add_message("assistant", content)
+
     def _queue_assistant_stream(self, content: str) -> None:
+        content = str(content or "")
+        self._last_retry_widget = None
+        self._last_retry_content = ""
+        self._last_retry_count = 0
+        if self._assistant_stream_task is not None and not self._assistant_stream_task.done():
+            self._assistant_stream_task.cancel()
+        self._assistant_stream_task = None
         if self._model_stream_widget is not None:
             widget = self._model_stream_widget
             self._reset_model_stream()
             widget.update_content(content)
             self.query_one(ChatLog).scroll_end(animate=False)
             return
-        previous = self._assistant_stream_task
-
-        async def runner():
-            if previous is not None:
-                await previous
-            await self._stream_assistant_message(content)
-
-        self._assistant_stream_task = asyncio.create_task(runner())
+        self.query_one(ChatLog).add_message("assistant", content)
 
     def _append_model_stream_delta(self, delta: str) -> None:
         if not delta:
@@ -430,6 +450,9 @@ class BunnyByteTuiApp(App):
         preview = _model_stream_preview(self._model_stream_content)
         if not preview:
             return
+        if self._model_stream_widget is not None and len(preview) - len(self._model_stream_rendered) < 80 and "\n" not in preview[len(self._model_stream_rendered):]:
+            return
+        self._model_stream_rendered = preview
         if self._model_stream_widget is None:
             self._model_stream_widget = self.query_one(ChatLog).add_message(
                 "assistant", preview
@@ -441,6 +464,7 @@ class BunnyByteTuiApp(App):
     def _reset_model_stream(self) -> None:
         self._model_stream_widget = None
         self._model_stream_content = ""
+        self._model_stream_rendered = ""
 
     def _discard_model_stream(self) -> None:
         if self._model_stream_widget is not None:

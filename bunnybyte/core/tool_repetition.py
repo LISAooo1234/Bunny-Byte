@@ -4,7 +4,7 @@ FILE_MUTATION_TOOLS = {"write_file", "patch_file"}
 FILE_READ_TOOLS = {"read_file"}
 
 
-def is_repeated_tool_call(history, name, args):
+def is_repeated_tool_call(history, name, args, read_ledger=None):
     current_turn = _current_turn_history(history)
     tool_events = [
         (index, item)
@@ -24,6 +24,8 @@ def is_repeated_tool_call(history, name, args):
             current_turn, last_index, last_match
         )
     if name in FILE_READ_TOOLS:
+        if read_ledger is not None and read_ledger.covered(args):
+            return True
         if not matches:
             return False
         last_index, _ = matches[-1]

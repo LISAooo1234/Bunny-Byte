@@ -2,6 +2,7 @@
 
 import re
 
+from .read_ledger import read_stub_metadata, render_read_file_result
 from .tool_policy import ToolPolicyChecker
 from .tool_repetition import repeated_tool_call_metadata
 from .workspace import clip
@@ -43,6 +44,10 @@ def run_tool(agent, name, args):
         }
         return message
     if agent.repeated_tool_call(name, args):
+        ledger = getattr(agent, "read_ledger", None)
+        if name == "read_file" and ledger is not None and ledger.covered(args):
+            agent._last_tool_result_metadata = read_stub_metadata()
+            return ledger.stub(args)
         agent._last_tool_result_metadata = repeated_tool_call_metadata(tool)
         return f"error: repeated identical tool call for {name}; choose a different tool or return a final answer"
     decision = agent.permission_checker.check(tool, args)
@@ -93,6 +98,8 @@ def run_tool(agent, name, args):
             elif exit_code != 0:
                 tool_status = "error"
                 tool_error_code = "tool_failed"
+        if name == "read_file" and getattr(agent, "read_ledger", None) is not None:
+            agent.read_ledger.record_read(args, result)
         agent.update_memory_after_tool(name, args, result)
         agent._last_tool_result_metadata = {
             "tool_status": tool_status,
@@ -130,6 +137,8 @@ def run_tool(agent, name, args):
 
 def _render_tool_result(agent, name, full_result):
     full_result = str(full_result)
+    if name == "read_file":
+        return render_read_file_result(full_result), ""
     if name != "run_shell" or len(full_result) <= INLINE_TOOL_OUTPUT_LIMIT:
         return clip(full_result), ""
     if not getattr(agent, "current_task_state", None):

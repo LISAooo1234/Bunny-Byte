@@ -20,7 +20,9 @@ class SessionEventBus:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def emit(self, event, payload=None):
-        record = dict(payload or {})
+        payload = dict(payload or {})
+        record = dict(payload)
+        record["payload"] = dict(payload)
         record["event"] = str(event)
         record["session_id"] = self.session_id
         record["created_at"] = now()

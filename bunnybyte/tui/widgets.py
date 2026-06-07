@@ -152,6 +152,8 @@ class WelcomeBanner(Static):
         size = getattr(self, "size", None)
         width = int(getattr(size, "width", 0) or 0)
         if not width:
+            width = int(getattr(getattr(self, "_size", None), "width", 0) or 0)
+        if not width:
             return 0
         return max(0, width - 6)
 
@@ -251,6 +253,37 @@ class AssistantMessage(Static):
             pass
 
 
+READ_ONLY_DISPLAY_TOOLS = {"read_file", "search", "list_files"}
+
+
+def summarize_tool_output(name: str, output: str) -> str:
+    text = str(output or "").strip()
+    if not text:
+        return ""
+    if name == "read_file":
+        meta = re.search(r'<read_file_meta [^>]*returned_lines="(\d+)"[^>]*total_lines="(\d+)"[^>]*eof="(true|false)"', text)
+        if meta:
+            lines, total, eof = meta.groups()
+            return f"{lines} lines read, {total} total" + (", complete" if eof == "true" else "")
+        if text.startswith("File range already read"):
+            return "already read; reused cached range"
+        line_count = sum(1 for line in text.splitlines() if re.match(r"\s*\d+:", line))
+        return f"{line_count} lines read"
+    if name == "search":
+        count = len([line for line in text.splitlines() if line.strip()])
+        return "no matches" if text == "(no matches)" else f"{count} match" + ("" if count == 1 else "es")
+    if name == "list_files":
+        entries = [line.strip() for line in text.splitlines() if line.strip()]
+        if text == "(empty)" or not entries:
+            return "empty"
+        if len(entries) <= 3:
+            return ", ".join(entries)
+        return f"{len(entries)} items"
+    if text.startswith("error:"):
+        return text.splitlines()[0]
+    return "done"
+
+
 class ToolCard(Static):
     DEFAULT_CSS = """
     ToolCard {
@@ -270,6 +303,15 @@ class ToolCard(Static):
         height: auto;
         width: 100%;
     }
+    ToolCard.compact {
+        margin: 0 0 0 0;
+        padding: 0 1;
+        background: #0f1117;
+        border: none;
+    }
+    ToolCard.compact .tool-output {
+        display: none;
+    }
     """
 
     def __init__(self, tool_name: str, args_summary: str = "") -> None:
@@ -278,13 +320,17 @@ class ToolCard(Static):
         self.args_summary = args_summary[:120]
         self.status = "running"
         self.output = ""
+        self.result_summary = ""
+        self.compact = tool_name in READ_ONLY_DISPLAY_TOOLS
+        if self.compact:
+            self.add_class("compact")
         self._collapsible: Collapsible | None = None
         self._output_widget: Markdown | None = None
 
     def compose(self):
         self._output_widget = Markdown("", classes="tool-output")
         self._collapsible = Collapsible(
-            self._output_widget, title=self._label(), collapsed=False
+            self._output_widget, title=self._label(), collapsed=self.compact
         )
         yield self._collapsible
 
@@ -292,9 +338,13 @@ class ToolCard(Static):
         icon = {"running": "...", "success": "OK", "error": "ERR"}.get(
             self.status, ".."
         )
+        prefix = "·" if self.compact and self.status == "success" else f"[{icon}]"
+        label = f"{prefix} {self.tool_name}"
         if self.args_summary:
-            return f"[{icon}] {self.tool_name}: {self.args_summary}"
-        return f"[{icon}] {self.tool_name}"
+            label += f": {self.args_summary}"
+        if self.result_summary:
+            label += f" — {self.result_summary}"
+        return label
 
     def _refresh_label(self) -> None:
         if self._collapsible is not None:
@@ -303,6 +353,7 @@ class ToolCard(Static):
     def set_success(self, output: str = "") -> None:
         self.status = "success"
         self.output = output
+        self.result_summary = summarize_tool_output(self.tool_name, output) if self.compact else ""
         self._refresh_label()
         if self._output_widget is not None:
             self._output_widget.update(_format_tool_output(output))
@@ -312,6 +363,10 @@ class ToolCard(Static):
     def set_error(self, output: str = "") -> None:
         self.status = "error"
         self.output = output
+        self.result_summary = summarize_tool_output(self.tool_name, output)
+        if self.compact:
+            self.compact = False
+            self.remove_class("compact")
         self._refresh_label()
         if self._output_widget is not None:
             self._output_widget.update(_format_tool_output(output))
@@ -419,7 +474,7 @@ class ProgressPanel(Static):
     DEFAULT_CSS = """
     ProgressPanel {
         height: auto;
-        max-height: 8;
+        max-height: 14;
         margin: 1 1 0 1;
         padding: 0 2;
         background: #15161c;
@@ -436,15 +491,19 @@ class ProgressPanel(Static):
         self.add_class("hidden")
 
     def update_agent(self, agent) -> None:
-        todos = getattr(agent, "session", {}).get("todos", {}) or {}
+        session = getattr(agent, "session", {}) or {}
+        todos = session.get("todos", {}) or {}
         items = list(todos.get("items", []) or [])
-        if not items:
+        workers = list((session.get("workers", {}) or {}).get("items", []) or [])
+        if not items and not workers:
             self.add_class("hidden")
             self.update("")
             return
         self.remove_class("hidden")
-        lines = ["Progress"]
-        for item in items[:6]:
+        done = sum(1 for item in items if item.get("status") == "done")
+        active = sum(1 for item in items if item.get("status") == "in_progress")
+        lines = [f"Progress  tasks {done}/{len(items)} done" + (f", {active} active" if active else "")]
+        for item in items[:8]:
             status = str(item.get("status", "pending"))
             icon = {
                 "done": "✓",
@@ -452,12 +511,26 @@ class ProgressPanel(Static):
                 "blocked": "!",
                 "pending": "•",
             }.get(status, "•")
-            content = str(item.get("content", "")).strip()
-            note = f" — {item.get('note')}" if item.get("note") else ""
-            lines.append(f"{icon} {content}{note}")
-        remaining = len(items) - 6
+            priority = str(item.get("priority", "")).strip()
+            if priority == "normal":
+                priority = ""
+            content = _clip(str(item.get("content", "")).strip(), 100)
+            note = _clip(str(item.get("note", "")).strip(), 80)
+            suffix = f" — {note}" if note else ""
+            prefix = f"{icon} {priority} " if priority else f"{icon} "
+            lines.append(f"{prefix}{content}{suffix}")
+        remaining = len(items) - 8
         if remaining > 0:
-            lines.append(f"... {remaining} more")
+            lines.append(f"... {remaining} more tasks; use /todo or plan file for full detail")
+        if workers:
+            lines.append("Agents")
+            for worker in workers[:5]:
+                status = str(worker.get("status", "idle"))
+                icon = {"running": "→", "completed": "✓", "failed": "!", "stopping": "…"}.get(status, "•")
+                kind = str(worker.get("subagent_type", "worker"))
+                desc = _clip(str(worker.get("description", "Worker task")), 80)
+                steps = int(worker.get("tool_steps", 0) or 0)
+                lines.append(f"{icon} {worker.get('id', '?')} ({kind}) {status}, tools {steps}: {desc}")
         self.update("\n".join(lines))
 
 
@@ -488,6 +561,14 @@ class ChatLog(VerticalScroll):
         card = ToolCard(tool_name=name, args_summary=format_tool_args(name, args))
         self.mount(card)
         self.call_after_refresh(self.scroll_end, animate=False)
+        return card
+
+    def add_tool_history(self, name: str, args: dict | None, content: str) -> ToolCard:
+        card = self.add_tool_call(name, args)
+        if str(content).startswith("error:"):
+            card.set_error(content)
+        else:
+            card.set_success(content)
         return card
 
     def clear_messages(self) -> None:
@@ -563,9 +644,12 @@ class StatusBar(Static):
             if getattr(agent, "is_pending_session", False)
             else str(agent.session.get("id", ""))[-10:]
         )
+        workers = list((agent.session.get("workers", {}) or {}).get("items", []) or [])
+        running = sum(1 for item in workers if item.get("status") in {"running", "stopping"})
+        worker_text = f" | agents {running}/{len(workers)}" if workers else ""
         self.agent_text = (
             f"provider {provider or '-'} | model {model or '-'} | "
-            f"mode {mode} | session {session}"
+            f"mode {mode} | session {session}{worker_text}"
         )
         self._render_status()
 
