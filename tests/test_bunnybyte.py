@@ -165,6 +165,23 @@ def test_agent_retries_after_malformed_tool_payload(tmp_path):
     assert any("valid <tool> call" in item for item in notices)
 
 
+def test_protocol_tags_inside_body_text_are_not_parsed_as_actions(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        [
+            "Here is an example: <tool>{bad}</tool> and &lt;final&gt;done&lt;/final&gt;.",
+            "<final>Recovered after ignoring body text tags.</final>",
+        ],
+    )
+
+    answer = agent.ask("Explain the protocol")
+
+    assert answer == "Recovered after ignoring body text tags."
+    assert not any(item.get("role") == "tool" for item in agent.session["history"])
+    notices = [item["content"] for item in agent.session["history"] if item["role"] == "assistant"]
+    assert any("missing leading <tool> or <final> protocol tag" in item for item in notices)
+
+
 def test_agent_accepts_xml_write_file_tool(tmp_path):
     agent = build_agent(
         tmp_path,

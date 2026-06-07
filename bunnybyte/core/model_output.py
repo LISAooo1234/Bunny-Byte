@@ -6,21 +6,21 @@ import re
 
 def parse(raw):
     raw = str(raw)
-    if "<tool" in raw and (
-        "<final>" not in raw or raw.find("<tool") < raw.find("<final>")
-    ):
-        parsed = parse_tool_blocks(raw)
+    stripped = raw.lstrip()
+    if stripped.startswith("<tool"):
+        parsed = parse_tool_blocks(stripped)
         if isinstance(parsed, str):
             return "retry", retry_notice(parsed)
         if parsed:
             return _tool_kind(parsed)
+        return "retry", retry_notice("tool payload must be valid JSON or supported XML")
 
-    if "<final>" in raw:
-        return "final", extract(raw, "final")
+    if stripped.startswith("<final>"):
+        return "final", extract(stripped, "final")
 
     if not raw.strip():
         return "retry", retry_notice("empty response")
-    return "retry", retry_notice("missing <tool> or <final> tag")
+    return "retry", retry_notice("missing leading <tool> or <final> protocol tag")
 
 
 def retry_notice(problem=None):
