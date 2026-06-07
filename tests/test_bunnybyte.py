@@ -171,6 +171,20 @@ def test_agent_accepts_fenced_protocol_response(tmp_path):
     assert agent.ask("Use fenced output") == "Recovered from fenced protocol."
 
 
+def test_agent_accepts_short_tool_preamble(tmp_path):
+    (tmp_path / "hello.txt").write_text("alpha\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            'Calling tool now: <tool>{"name":"read_file","args":{"path":"hello.txt","start":1,"end":1}}</tool>',
+            "<final>Read it.</final>",
+        ],
+    )
+
+    assert agent.ask("Inspect hello.txt") == "Read it."
+    assert any(item["role"] == "tool" and item["name"] == "read_file" for item in agent.session["history"])
+
+
 def test_synthetic_worker_prompt_does_not_become_session_topic(tmp_path):
     agent = build_agent(tmp_path, ["<final>Worker done.</final>"])
     prompt = (

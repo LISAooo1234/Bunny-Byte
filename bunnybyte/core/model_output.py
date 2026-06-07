@@ -7,20 +7,60 @@ import re
 def parse(raw):
     raw = str(raw)
     stripped = _strip_protocol_fence(raw).lstrip()
+    block = _leading_protocol_block(stripped)
+    if block:
+        stripped = block
     if stripped.startswith("<tool"):
         parsed = parse_tool_blocks(stripped)
         if isinstance(parsed, str):
-            return "retry", retry_notice(parsed)
+            return "retry", retry_notice(parsed, raw)
         if parsed:
             return _tool_kind(parsed)
-        return "retry", retry_notice("tool payload must be valid JSON or supported XML")
+        return "retry", retry_notice("tool payload must be valid JSON or supported XML", raw)
 
     if stripped.startswith("<final>"):
         return "final", extract(stripped, "final")
 
     if not raw.strip():
-        return "retry", retry_notice("empty response")
-    return "retry", retry_notice("missing leading <tool> or <final> protocol tag")
+        return "retry", retry_notice("empty response", raw)
+    return "retry", retry_notice("missing leading <tool> or <final> protocol tag", raw)
+
+
+def _leading_protocol_block(text):
+    text = str(text or "").lstrip()
+    match = re.search(r"<(?P<tag>tool|final)\b", text)
+    if not match:
+        return ""
+    prefix = text[: match.start()].strip()
+    tag = match.group("tag")
+    if not _is_ignorable_protocol_prefix(prefix, tag):
+        return ""
+    close = f"</{tag}>"
+    end = text.find(close, match.end())
+    if end < 0:
+        return ""
+    return text[match.start() : end + len(close)]
+
+
+def _is_ignorable_protocol_prefix(prefix, tag):
+    if not prefix:
+        return True
+    if len(prefix) > 160:
+        return False
+    if "```" in prefix or "example" in prefix.lower() or "示例" in prefix:
+        return False
+    if tag == "tool":
+        return bool(
+            re.search(
+                r"(?i)(^|\b)(calling|call|using tool|use tool|now using|now call|i will call|i'll call)\b",
+                prefix,
+            )
+            or re.search(r"(调用|使用工具|现在调用|我将调用|我会调用)", prefix)
+        )
+    return bool(
+        re.search(r"(?i)(^|\b)(final answer|answer|result|summary)\b", prefix)
+        or re.search(r"(最终答案|答案|结果|总结)", prefix)
+    )
 
 
 def _strip_protocol_fence(raw):
@@ -29,12 +69,23 @@ def _strip_protocol_fence(raw):
     return match.group(1).strip() if match else str(raw)
 
 
-def retry_notice(problem=None):
+def retry_notice(problem=None, raw=None):
     detail = f" Problem: {problem}." if problem else ""
+    preview = _raw_preview(raw)
+    preview_text = f" Offending output preview: {preview}" if preview else ""
     return (
         "Your previous response could not be executed."
-        f"{detail} Return one or more valid <tool> calls, or one <final> answer."
+        f"{detail}{preview_text} Return one or more valid <tool> calls, or one <final> answer."
     )
+
+
+def _raw_preview(raw, limit=180):
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not text:
+        return ""
+    if len(text) > limit:
+        text = text[: max(0, limit - 3)].rstrip() + "..."
+    return repr(text)
 
 
 def normalize_tool_payload(payload):
