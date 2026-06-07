@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
+import sys
 import threading
 from functools import partial
 
+from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.events import Key
@@ -45,7 +49,7 @@ class BunnyByteTuiApp(App):
     BINDINGS = [
         Binding(
             "ctrl+c,super+c",
-            "screen.copy_text",
+            "copy_selected_text",
             "Copy selected text",
             priority=True,
             show=False,
@@ -98,6 +102,13 @@ class BunnyByteTuiApp(App):
 
     def action_clear_screen(self) -> None:
         self.query_one(ChatLog).clear_messages()
+
+    def action_copy_selected_text(self) -> None:
+        selection = self.screen.get_selected_text()
+        if selection is None:
+            raise SkipAction()
+        self.copy_to_clipboard(selection)
+        _copy_to_system_clipboard(selection)
 
     def action_submit_input(self) -> None:
         if self._ask_user_prompt is not None:
@@ -513,6 +524,33 @@ class BunnyByteTuiApp(App):
             self._ask_user_prompt.remove()
         self._ask_user_prompt = None
         self._ask_user_decision = None
+
+
+def _copy_to_system_clipboard(text: str) -> None:
+    """Best-effort copy for terminals that don't accept Textual's OSC 52 clipboard."""
+    command: list[str] | None = None
+    if sys.platform == "darwin" and shutil.which("pbcopy"):
+        command = ["pbcopy"]
+    elif shutil.which("wl-copy"):
+        command = ["wl-copy"]
+    elif shutil.which("xclip"):
+        command = ["xclip", "-selection", "clipboard"]
+    elif shutil.which("xsel"):
+        command = ["xsel", "--clipboard", "--input"]
+    if command is None:
+        return
+    try:
+        subprocess.run(
+            command,
+            input=text,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1,
+            check=False,
+        )
+    except Exception:
+        return
 
 
 def _model_stream_preview(content: str) -> str:

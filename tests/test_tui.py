@@ -111,7 +111,13 @@ def test_cli_build_agent_defers_new_session_until_first_request(tmp_path, monkey
     ]
     assert agent.is_pending_session is False
     assert agent.session_path.exists()
+    assert agent.session_topic == "hello"
     assert [event["event"] for event in events[:2]] == ["session_started", "turn_started"]
+    assert any(
+        event["event"] == "session_topic_changed"
+        and event["payload"].get("topic") == "hello"
+        for event in events
+    )
 
 
 def test_pending_cli_resume_latest_does_not_create_empty_session(tmp_path, monkeypatch):
@@ -245,6 +251,27 @@ def test_welcome_banner_shows_runtime_hints_and_activity(tmp_path):
     assert len(banner._mascot_rows()[0].plain) == len(banner._mascot_rows()[3].plain)
 
 
+def test_welcome_banner_collapses_mascot_and_truncates_for_narrow_width(tmp_path):
+    from textual.geometry import Size
+
+    from bunnybyte.tui.widgets import WelcomeBanner
+
+    agent = build_agent(tmp_path, [])
+    agent.model_client.provider = "openai"
+    agent.model_client.model = "gpt-test"
+    banner = WelcomeBanner()
+    banner.styles.width = 30
+    banner._size = Size(30, 10)
+    banner.update_agent(agent)
+
+    text = rendered_text(banner)
+    lines = text.splitlines()
+
+    assert "provider" in text
+    assert "█" not in text
+    assert all(len(line) <= 24 for line in lines)
+
+
 def test_tool_output_plain_text_is_wrapped_as_markdown_code_block():
     from bunnybyte.tui.widgets import _format_tool_output
 
@@ -356,13 +383,15 @@ async def test_tui_hides_tool_protocol_from_model_stream_preview():
 
 
 @pytest.mark.asyncio
-async def test_tui_ctrl_c_copies_selected_text_before_input_handles_key(tmp_path):
+async def test_tui_ctrl_c_copies_selected_text_before_input_handles_key(tmp_path, monkeypatch):
     from textual.geometry import Offset
     from textual.selection import Selection
 
     from bunnybyte.tui.app import BunnyByteTuiApp
     from bunnybyte.tui.widgets import ChatLog, InputBar
 
+    copied = []
+    monkeypatch.setattr("bunnybyte.tui.app._copy_to_system_clipboard", copied.append)
     app = BunnyByteTuiApp(build_agent(tmp_path, []))
 
     async with app.run_test() as pilot:
@@ -377,6 +406,7 @@ async def test_tui_ctrl_c_copies_selected_text_before_input_handles_key(tmp_path
         await pilot.pause(delay=0.1)
 
         assert app._clipboard == "copy me"
+        assert copied == ["copy me"]
 
 
 @pytest.mark.asyncio

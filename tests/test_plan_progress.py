@@ -29,6 +29,26 @@ def test_plan_mode_prompt_describes_interactive_progress_workflow(tmp_path):
     assert "use ask_user before committing to a plan" in prompt
     assert "Use todo_add/todo_update/todo_list as the progress ledger" in prompt
     assert "objective, assumptions, user choices, steps, validation" in prompt
+    assert (
+        "relative to the current workspace root, not relative to the BunnyByte source directory"
+        in prompt
+    )
+
+
+def test_plan_mode_allows_non_bunnybyte_workspace(tmp_path):
+    workspace = tmp_path / "client-project"
+    workspace.mkdir()
+    agent = build_agent(workspace)
+
+    plan_path = agent.enter_plan_mode("client migration")
+
+    assert plan_path == ".bunnybyte/plans/client-migration-plan.md"
+    assert agent.root == workspace
+    assert agent.run_tool(
+        "write_file",
+        {"path": plan_path, "content": "# Client migration plan\n"},
+    ).startswith("wrote .bunnybyte/plans/client-migration-plan.md")
+    assert (workspace / plan_path).read_text(encoding="utf-8") == "# Client migration plan\n"
 
 
 def test_plan_mode_rejects_write_capable_worker_agents(tmp_path):

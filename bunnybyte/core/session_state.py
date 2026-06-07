@@ -54,6 +54,12 @@ class SessionStateMixin:
         if not topic:
             return current or DEFAULT_SESSION_TOPIC
         self.session["topic"] = topic
+        event_bus = getattr(self, "session_event_bus", None)
+        if event_bus is not None:
+            event_bus.emit(
+                "session_topic_changed",
+                {"topic": topic, "source": "first_user_message"},
+            )
         return topic
 
     @property

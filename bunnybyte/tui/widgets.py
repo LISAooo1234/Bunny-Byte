@@ -135,13 +135,34 @@ class WelcomeBanner(Static):
             self._info_line(("session", self.session or "-"), ("cwd", cwd_name), ("branch", self.branch or "-")),
             Text.assemble(Text(self.context_text, style=accent), Text("   "), Text(HELP_HINT, style=muted)),
         ]
+        content_width = self._content_width()
+        full_width = mascot_visible_width() + 3 + max(row.cell_len for row in info_rows)
+        if content_width and content_width < full_width:
+            return Text("\n").join(self._fit_line(row, content_width) for row in info_rows)
+
         rows = []
         height = max(len(mascot_rows), len(info_rows))
         for index in range(height):
             left = mascot_rows[index] if index < len(mascot_rows) else Text(" " * mascot_visible_width())
             right = info_rows[index] if index < len(info_rows) else Text("")
-            rows.append(Text.assemble(left, Text("   "), right))
+            rows.append(self._fit_line(Text.assemble(left, Text("   "), right), content_width))
         return Text("\n").join(rows)
+
+    def _content_width(self) -> int:
+        size = getattr(self, "size", None)
+        width = int(getattr(size, "width", 0) or 0)
+        if not width:
+            return 0
+        return max(0, width - 6)
+
+    def _fit_line(self, line: Text, width: int) -> Text:
+        if not width or line.cell_len <= width:
+            return line
+        if width <= 1:
+            return Text("")
+        clipped = line.copy()
+        clipped.truncate(width, overflow="ellipsis")
+        return clipped
 
     def _info_line(self, *pairs: tuple[str, str], value_style: str | None = None) -> Text:
         line = Text()
