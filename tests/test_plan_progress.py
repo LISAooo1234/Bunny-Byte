@@ -30,7 +30,7 @@ def test_plan_mode_prompt_describes_interactive_progress_workflow(tmp_path):
     assert "Use todo_add/todo_update/todo_list as the progress ledger" in prompt
     assert "objective, assumptions, user choices, steps, validation" in prompt
     assert (
-        "relative to the current workspace root, not relative to the BunnyByte source directory"
+        "relative to the current working directory artifact root, not relative to the BunnyByte source directory"
         in prompt
     )
 
@@ -49,6 +49,32 @@ def test_plan_mode_allows_non_bunnybyte_workspace(tmp_path):
         {"path": plan_path, "content": "# Client migration plan\n"},
     ).startswith("wrote .bunnybyte/plans/client-migration-plan.md")
     assert (workspace / plan_path).read_text(encoding="utf-8") == "# Client migration plan\n"
+
+
+def test_plan_mode_artifact_lives_under_launch_cwd_inside_repo(tmp_path):
+    repo = tmp_path / "repo"
+    app = repo / "apps" / "web"
+    app.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / "README.md").write_text("demo\n", encoding="utf-8")
+    workspace = WorkspaceContext.build(app, repo_root_override=repo)
+    agent = BunnyByte(
+        model_client=ScriptedModelClient([]),
+        workspace=workspace,
+        session_store=SessionStore(repo / ".bunnybyte" / "sessions"),
+        approval_policy="auto",
+    )
+
+    plan_path = agent.enter_plan_mode("frontend migration")
+
+    assert plan_path == "apps/web/.bunnybyte/plans/frontend-migration-plan.md"
+    assert agent.run_tool(
+        "write_file",
+        {"path": plan_path, "content": "# Frontend migration\n"},
+    ).startswith("wrote apps/web/.bunnybyte/plans/frontend-migration-plan.md")
+    assert (
+        app / ".bunnybyte" / "plans" / "frontend-migration-plan.md"
+    ).read_text(encoding="utf-8") == "# Frontend migration\n"
 
 
 def test_plan_mode_rejects_write_capable_worker_agents(tmp_path):
