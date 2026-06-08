@@ -29,6 +29,19 @@ NON_TERMINAL_FINAL_CUE_PATTERN = re.compile(
 )
 
 
+def _with_protocol_retry_notice(user_message, notice):
+    notice = str(notice or "").strip()
+    if not notice:
+        return user_message
+    return (
+        f"{user_message}\n\n"
+        "Protocol correction for your immediately previous response in this turn:\n"
+        f"{notice}\n"
+        "Continue the original user request. Return exactly one valid "
+        "<tool>...</tool> call or one <final>...</final> answer."
+    )
+
+
 class Engine:
     def __init__(self, runtime):
         self.runtime = runtime
@@ -110,6 +123,7 @@ class Engine:
         tool_steps = 0
         attempts = 0
         provider_retries = {}
+        protocol_retry_notice = ""
         # 不放大 attempts，避免出现"看不见的隐形重试"——失败必须被用户察觉。
         max_attempts = agent.max_steps + 2
 
@@ -129,7 +143,12 @@ class Engine:
             task_state.record_attempt()
             agent.run_store.write_task_state(task_state)
             prompt_started_at = time.monotonic()
-            prompt, prompt_metadata = agent._build_prompt_and_metadata(user_message)
+            prompt_user_message = _with_protocol_retry_notice(
+                user_message, protocol_retry_notice
+            )
+            prompt, prompt_metadata = agent._build_prompt_and_metadata(
+                prompt_user_message
+            )
             agent.emit_trace(
                 task_state,
                 "prompt_built",
@@ -293,7 +312,10 @@ class Engine:
                 prompt_metadata.update(completion_metadata)
             agent.last_completion_metadata = completion_metadata
             agent.last_prompt_metadata = prompt_metadata
-            kind, payload, parse_metadata = agent.parse_with_metadata(raw)
+            kind, payload, parse_metadata = agent.parse_with_metadata(
+                raw,
+                allow_truncated_json_tool=True,
+            )
             preamble = str(parse_metadata.get("preamble", "") or "").strip()
             if preamble and kind in {"tool", "tools"}:
                 agent.record(
@@ -332,6 +354,8 @@ class Engine:
                 "kind": kind,
                 "duration_ms": duration_ms,
             }
+            if kind != "retry":
+                protocol_retry_notice = ""
 
             if kind in {"tool", "tools"}:
                 tools = [payload] if kind == "tool" else list(payload)
@@ -357,9 +381,7 @@ class Engine:
                 continue
 
             if kind == "retry":
-                agent.record(
-                    {"role": "assistant", "content": payload, "created_at": now()}
-                )
+                protocol_retry_notice = payload
                 agent.session_event_bus.emit(
                     "assistant_message",
                     {

@@ -13,7 +13,6 @@ import time
 import shutil
 import sys
 import textwrap
-from urllib.parse import urlparse
 
 from .branding import (
     DISPLAY_HANDLE,
@@ -27,6 +26,7 @@ from .config import (
     DEFAULT_PROVIDER,
     PROVIDER_DEFAULTS,
     default_max_tokens_for_provider,
+    list_provider_profiles,
     load_project_env,
     resolve_project_sandbox_config,
     resolve_provider_config,
@@ -34,6 +34,7 @@ from .config import (
 from .features import skills as skillslib
 from .features.skills_runtime import invoke_skill
 from .providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
+from .providers.errors import sanitize_url
 from .core.runtime import BunnyByte, SessionStore
 from .core.workspace import WorkspaceContext, clip, middle
 
@@ -313,8 +314,15 @@ def _attach_provider_switching(agent, args):
             agent.max_new_tokens = default_max_tokens_for_provider(config.name)
         return client, config
 
+    def provider_profiles_factory():
+        return list_provider_profiles(
+            start=getattr(args, "cwd", "."),
+            config_path=getattr(args, "config", None),
+        )
+
     agent.model_client_factory = current_model_client_factory
     agent.provider_switch_factory = provider_switch_factory
+    agent.provider_profiles_factory = provider_profiles_factory
 
 
 def _client_string_attr(client, name):
@@ -527,7 +535,7 @@ def handle_repl_command(agent, user_input):
             return True, False, _format_provider(agent)
         provider = command_args.strip()
         if provider in {"list", "ls"}:
-            return True, False, _format_provider_list()
+            return True, False, _format_provider_list(agent)
         if " " in provider:
             return True, False, _format_usage_message("/provider [name]")
         try:
@@ -660,14 +668,13 @@ def _format_usage(agent):
         or {}
     )
     base_url = str(getattr(agent.model_client, "base_url", "") or "")
-    host = urlparse(base_url).netloc or "-"
     return _format_key_value_section(
         "Usage",
         [
             ("Provider profile", getattr(agent.model_client, "provider", "-") or "-"),
             ("Provider protocol", getattr(agent.model_client, "protocol", "-") or "-"),
             ("Model", getattr(agent.model_client, "model", "-") or "-"),
-            ("Base URL host", host),
+            ("Base URL", sanitize_url(base_url) or "-"),
             ("Prompt cache supported", bool(getattr(agent.model_client, "supports_prompt_cache", False))),
             ("Last input tokens", metadata.get("input_tokens", "unavailable")),
             ("Last output tokens", metadata.get("output_tokens", "unavailable")),
@@ -685,30 +692,39 @@ def _format_usage(agent):
 
 def _format_provider(agent):
     base_url = str(getattr(agent.model_client, "base_url", "") or "")
-    host = urlparse(base_url).netloc or "-"
     return _format_key_value_section(
         "Provider",
         [
             ("Provider", getattr(agent.model_client, "provider", "-") or "-"),
             ("Protocol", getattr(agent.model_client, "protocol", "-") or "-"),
             ("Model", getattr(agent.model_client, "model", "-") or "-"),
-            ("Base URL host", host),
+            ("Base URL", sanitize_url(base_url) or "-"),
             ("Max new tokens", getattr(agent, "max_new_tokens", "-")),
         ],
     )
 
 
-def _format_provider_list():
+def provider_profiles_for_agent(agent):
+    factory = getattr(agent, "provider_profiles_factory", None)
+    if callable(factory):
+        return list(factory())
+    return list_provider_profiles(start=getattr(agent, "root", "."))
+
+
+def _format_provider_list(agent):
+    current = str(getattr(agent.model_client, "provider", "") or "")
     lines = [
         "## Provider Profiles",
         "",
-        "| Profile | Protocol | Default model |",
-        "| --- | --- | --- |",
+        "| Active | Profile | Protocol | Default model | Base URL | Switch |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
-    for name in sorted(PROVIDER_DEFAULTS):
-        defaults = PROVIDER_DEFAULTS[name]
+    for profile in provider_profiles_for_agent(agent):
+        marker = "yes" if profile.name == current else ""
         lines.append(
-            f"| `{name}` | `{defaults['protocol']}` | `{defaults['model']}` |"
+            f"| {marker} | `{profile.name}` | `{profile.protocol}` | "
+            f"`{profile.model}` | `{sanitize_url(profile.base_url) or '-'}` | "
+            f"`/provider {profile.name}` |"
         )
     lines.extend(["", "Aliases: `gpt` → `openai`, `claude` → `anthropic`."])
     return "\n".join(lines)

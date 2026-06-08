@@ -524,6 +524,86 @@ async def test_tui_slash_suggestions_complete_partial_command(tmp_path):
         assert suggestions.visible is False
 
 
+@pytest.mark.asyncio
+async def test_tui_provider_profile_suggestions_complete_profile(tmp_path):
+    from bunnybyte.config import ProviderConfig
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar, SlashSuggestions
+
+    agent = build_agent(tmp_path, [])
+    agent.provider_profiles_factory = lambda: [
+        ProviderConfig(
+            name="deepseek",
+            protocol="anthropic",
+            api_key="",
+            base_url="https://api.deepseek.com/anthropic",
+            model="deepseek-v4-flash",
+        ),
+        ProviderConfig(
+            name="deepseek-pro",
+            protocol="anthropic",
+            api_key="",
+            base_url="https://api.deepseek.com/anthropic",
+            model="deepseek-v4-pro",
+        ),
+    ]
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = "/provider deepseek-"
+        bar.update_slash_suggestions()
+
+        suggestions = app.query_one(SlashSuggestions)
+        assert suggestions.visible is True
+        assert "/provider deepseek-pro" in rendered_text(suggestions)
+
+        await pilot.press("tab")
+        await pilot.pause(delay=0.1)
+
+        assert bar.input.value == "/provider deepseek-pro "
+        assert suggestions.visible is False
+
+
+@pytest.mark.asyncio
+async def test_tui_enter_executes_provider_profile_suggestion(tmp_path):
+    from bunnybyte.config import ProviderConfig
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar
+
+    class ProviderClient:
+        provider = "deepseek-pro"
+        protocol = "anthropic"
+        model = "deepseek-v4-pro"
+        base_url = "https://api.deepseek.com/anthropic"
+        supports_prompt_cache = False
+        last_completion_metadata = {}
+
+    agent = build_agent(tmp_path, [])
+    profile = ProviderConfig(
+        name="deepseek-pro",
+        protocol="anthropic",
+        api_key="",
+        base_url="https://api.deepseek.com/anthropic",
+        model="deepseek-v4-pro",
+    )
+    agent.provider_profiles_factory = lambda: [profile]
+    agent.provider_switch_factory = lambda provider: (ProviderClient(), profile)
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = "/provider deepseek-"
+        bar.update_slash_suggestions()
+
+        await pilot.press("enter")
+        await pilot.pause(delay=0.1)
+
+        assert bar.input.value == ""
+        assert agent.model_client.provider == "deepseek-pro"
+        assert "deepseek-v4-pro" in "\n".join(assistant_contents(app))
+
+
 def test_agents_slash_command_shows_worker_status(tmp_path):
     from bunnybyte.cli import handle_repl_command
 

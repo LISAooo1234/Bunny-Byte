@@ -13,7 +13,7 @@ from textual.binding import Binding
 from textual.events import Key
 
 from ..commands.slash import resolve_command
-from ..cli import HELP_DETAILS, handle_repl_command
+from ..cli import HELP_DETAILS, handle_repl_command, provider_profiles_for_agent
 from ..core.workspace import clip
 from .widgets import (
     AskUserPrompt,
@@ -97,6 +97,9 @@ class BunnyByteTuiApp(App):
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(WelcomeBanner).update_agent(self.agent)
         self.query_one(ProgressPanel).update_agent(self.agent)
+        self.query_one(InputBar).set_provider_profiles(
+            provider_profiles_for_agent(self.agent)
+        )
         self.query_one(InputBar).focus_input()
         self.set_interval(0.5, self._drain_idle_worker_notifications)
 
@@ -127,8 +130,12 @@ class BunnyByteTuiApp(App):
         if not text or bar.input.disabled:
             return
         selected_command = None
-        if text.startswith("/") and " " not in text[1:] and resolve_command(text) is None:
-            selected_command = bar.selected_slash_suggestion()
+        candidate = bar.selected_slash_suggestion()
+        if text.startswith("/") and candidate is not None:
+            if " " in candidate.name or (
+                " " not in text[1:] and resolve_command(text) is None
+            ):
+                selected_command = candidate
         if selected_command and bar.complete_slash_suggestion():
             text = bar.input.value.strip()
             if selected_command.requires_arguments:
@@ -327,6 +334,9 @@ class BunnyByteTuiApp(App):
         self.query_one(WelcomeBanner).update_agent(self.agent)
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(ProgressPanel).update_agent(self.agent)
+        self.query_one(InputBar).set_provider_profiles(
+            provider_profiles_for_agent(self.agent)
+        )
 
     def _advance_activity(self) -> None:
         self.query_one(ThinkingIndicator).advance()

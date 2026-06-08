@@ -268,6 +268,29 @@ def resolve_provider_config(
     )
 
 
+def list_provider_profiles(
+    *, start: str | Path = ".", config_path: str | None = None
+) -> list[ProviderConfig]:
+    """Return configured provider profiles without exposing API keys."""
+    file_values = _load_config_values(start=start, explicit_path=config_path)
+    names = set(PROVIDER_DEFAULTS)
+    names.update(file_values["providers"])
+    profiles = []
+    for name in sorted(names):
+        profile_values = _profile_values(file_values["providers"], name)
+        protocol = _validate_protocol(profile_values.get("protocol"), name)
+        profiles.append(
+            ProviderConfig(
+                name=name,
+                protocol=protocol,
+                api_key="",
+                base_url=str(profile_values.get("base_url", "") or ""),
+                model=str(profile_values.get("model", "") or ""),
+            )
+        )
+    return profiles
+
+
 def resolve_project_sandbox_config(
     *,
     start: str | Path = ".",

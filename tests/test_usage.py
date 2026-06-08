@@ -37,7 +37,7 @@ def test_usage_command_reports_provider_model_and_last_usage(tmp_path):
     assert handled is True
     assert "## Usage" in output
     assert "| Model | `gpt-test` |" in output
-    assert "| Base URL host | `example.com` |" in output
+    assert "| Base URL | `https://example.com/v1` |" in output
     assert "| Last input tokens | `10` |" in output
     assert "| Last output tokens | `5` |" in output
     assert "| Last cached tokens | `3` |" in output
@@ -133,6 +133,89 @@ def test_provider_command_switches_cli_runtime_only(tmp_path, monkeypatch):
     handled, _, output = handle_repl_command(agent, "/usage")
     assert handled is True
     assert "| Provider profile | `deepseek` |" in output
+
+
+def test_provider_list_includes_configured_profiles(tmp_path):
+    from bunnybyte.cli import handle_repl_command
+    from bunnybyte.config import ProviderConfig
+
+    agent = build_agent(tmp_path, [])
+    agent.model_client.provider = "deepseek"
+    agent.provider_profiles_factory = lambda: [
+        ProviderConfig(
+            name="deepseek",
+            protocol="anthropic",
+            api_key="",
+            base_url="https://api.deepseek.com/anthropic",
+            model="deepseek-v4-flash",
+        ),
+        ProviderConfig(
+            name="deepseek-pro",
+            protocol="anthropic",
+            api_key="",
+            base_url="https://api.deepseek.com/anthropic",
+            model="deepseek-v4-pro",
+        ),
+    ]
+
+    handled, _, output = handle_repl_command(agent, "/provider list")
+
+    assert handled is True
+    assert (
+        "| yes | `deepseek` | `anthropic` | `deepseek-v4-flash` | "
+        "`https://api.deepseek.com/anthropic` | `/provider deepseek` |"
+    ) in output
+    assert (
+        "|  | `deepseek-pro` | `anthropic` | `deepseek-v4-pro` | "
+        "`https://api.deepseek.com/anthropic` | `/provider deepseek-pro` |"
+    ) in output
+
+
+def test_provider_command_reports_sanitized_full_base_url(tmp_path):
+    from bunnybyte.cli import handle_repl_command
+
+    agent = build_agent(tmp_path, [])
+    agent.model_client.provider = "deepseek"
+    agent.model_client.protocol = "anthropic"
+    agent.model_client.model = "deepseek-v4-flash"
+    agent.model_client.base_url = (
+        "https://user:secret@api.deepseek.com/anthropic/v2?api_key=sk-secret#frag"
+    )
+
+    handled, _, output = handle_repl_command(agent, "/provider")
+
+    assert handled is True
+    assert "| Base URL | `https://api.deepseek.com/anthropic/v2` |" in output
+    assert "secret" not in output
+    assert "api_key" not in output
+
+
+def test_list_provider_profiles_reads_custom_config(tmp_path):
+    from bunnybyte.config import list_provider_profiles
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[providers.deepseek-pro]",
+                'protocol = "anthropic"',
+                'api_key = "sk-project-deepseek"',
+                'base_url = "https://api.deepseek.com/anthropic"',
+                'model = "deepseek-v4-pro"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    profiles = {
+        profile.name: profile
+        for profile in list_provider_profiles(start=tmp_path, config_path=str(config_path))
+    }
+
+    assert profiles["deepseek-pro"].protocol == "anthropic"
+    assert profiles["deepseek-pro"].model == "deepseek-v4-pro"
+    assert profiles["deepseek-pro"].api_key == ""
 
 
 def test_provider_command_applies_cli_overrides_when_switching(tmp_path, monkeypatch):

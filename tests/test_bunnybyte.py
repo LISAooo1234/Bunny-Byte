@@ -184,7 +184,9 @@ def test_agent_retries_after_empty_model_output(tmp_path):
 
     assert answer == "Recovered after retry."
     notices = [item["content"] for item in agent.session["history"] if item["role"] == "assistant"]
-    assert any("empty response" in item for item in notices)
+    assert not any("empty response" in item for item in notices)
+    assert "empty response" in agent.model_client.prompts[1]
+    assert "Protocol correction" in agent.model_client.prompts[1]
 
 
 def test_agent_retries_after_malformed_tool_payload(tmp_path):
@@ -203,7 +205,48 @@ def test_agent_retries_after_malformed_tool_payload(tmp_path):
     assert answer == "Recovered after malformed tool output."
     assert any(item["role"] == "tool" and item["name"] == "read_file" for item in agent.session["history"])
     notices = [item["content"] for item in agent.session["history"] if item["role"] == "assistant"]
-    assert any("valid <tool> call" in item for item in notices)
+    assert not any("tool args must be an object" in item for item in notices)
+    assert "tool args must be an object" in agent.model_client.prompts[1]
+
+
+def test_agent_repairs_truncated_json_tool_closing_tag(tmp_path):
+    (tmp_path / "hello.txt").write_text("alpha\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"hello.txt","start":1,"end":1}}',
+            "<final>Read after repair.</final>",
+        ],
+    )
+
+    answer = agent.ask("Inspect hello.txt")
+
+    assert answer == "Read after repair."
+    assert any(
+        item["role"] == "tool" and item["name"] == "read_file"
+        for item in agent.session["history"]
+    )
+    assert not any(
+        "could not be executed" in item.get("content", "")
+        for item in agent.session["history"]
+        if item.get("role") == "assistant"
+    )
+
+
+def test_plain_text_without_protocol_is_not_auto_final(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        [
+            "Plain answer without the final tag.",
+            "<final>Wrapped answer.</final>",
+        ],
+    )
+
+    answer = agent.ask("Answer plainly")
+
+    assert answer == "Wrapped answer."
+    assert agent.model_client.prompts[1].count("Plain answer without the final tag.") == 1
+    assert "missing leading <tool> or <final> protocol tag" in agent.model_client.prompts[1]
 
 
 def test_agent_accepts_fenced_protocol_response(tmp_path):
@@ -270,7 +313,8 @@ def test_protocol_tags_inside_body_text_are_not_parsed_as_actions(tmp_path):
     assert answer == "Recovered after ignoring body text tags."
     assert not any(item.get("role") == "tool" for item in agent.session["history"])
     notices = [item["content"] for item in agent.session["history"] if item["role"] == "assistant"]
-    assert any("missing leading <tool> or <final> protocol tag" in item for item in notices)
+    assert not any("missing leading <tool> or <final> protocol tag" in item for item in notices)
+    assert "missing leading <tool> or <final> protocol tag" in agent.model_client.prompts[1]
 
 
 def test_short_chinese_chatter_before_tool_is_preserved(tmp_path):

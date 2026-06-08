@@ -9,7 +9,7 @@ def parse(raw):
     return kind, payload
 
 
-def parse_with_metadata(raw):
+def parse_with_metadata(raw, *, allow_truncated_json_tool=False):
     raw = str(raw)
     stripped = _strip_protocol_fence(raw).lstrip()
     block, preamble = _leading_protocol_block(stripped)
@@ -23,6 +23,15 @@ def parse_with_metadata(raw):
         if parsed:
             kind, payload = _tool_kind(parsed)
             return kind, payload, metadata
+        if allow_truncated_json_tool:
+            repaired = _recover_truncated_json_tool(stripped)
+            if isinstance(repaired, str):
+                return "retry", retry_notice(repaired, raw), metadata
+            if repaired:
+                metadata = dict(metadata)
+                metadata["repair"] = "truncated_json_tool"
+                kind, payload = _tool_kind(repaired)
+                return kind, payload, metadata
         return "retry", retry_notice("tool payload must be valid JSON or supported XML", raw), metadata
 
     if stripped.startswith("{") or stripped.startswith("["):
@@ -48,6 +57,29 @@ def parse_with_metadata(raw):
     return "retry", retry_notice("missing leading <tool> or <final> protocol tag", raw), metadata
 
 
+def _recover_truncated_json_tool(text):
+    if "</tool>" in text:
+        return None
+    match = re.fullmatch(
+        r"<tool\b(?P<attrs>[^>]*)>(?P<body>.*)",
+        str(text).strip(),
+        flags=re.DOTALL,
+    )
+    if not match:
+        return None
+    attrs = parse_attrs(match.group("attrs"))
+    if attrs.get("name", "").strip():
+        return None
+    body = match.group("body").strip()
+    if not body:
+        return None
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return normalize_tool_payload(payload)
+
+
 def _leading_protocol_block(text):
     text = str(text or "").lstrip()
     match = re.search(r"<(?P<tag>tool|final)\b", text)
@@ -61,6 +93,8 @@ def _leading_protocol_block(text):
     end = text.find(close, match.end())
     if end < 0:
         return "", ""
+    if tag == "tool":
+        return text[match.start() :], prefix
     return text[match.start() : end + len(close)], prefix
 
 

@@ -747,6 +747,7 @@ class InputBar(Static):
         self.history_index = 0
         self._slash_suggestions: list[SlashCommand] = []
         self._slash_index = 0
+        self._provider_profiles: list[tuple[str, str, str]] = []
 
     def compose(self):
         yield self.input
@@ -758,6 +759,17 @@ class InputBar(Static):
     def set_busy(self, busy: bool) -> None:
         self.input.disabled = bool(busy)
         self.input.placeholder = BUSY_PLACEHOLDER if busy else PROMPT_PLACEHOLDER
+
+    def set_provider_profiles(self, profiles) -> None:
+        self._provider_profiles = [
+            (
+                str(getattr(profile, "name", "") or ""),
+                str(getattr(profile, "protocol", "") or ""),
+                str(getattr(profile, "model", "") or ""),
+            )
+            for profile in profiles
+            if str(getattr(profile, "name", "") or "").strip()
+        ]
 
     def history_prev(self) -> None:
         if not self.history:
@@ -780,7 +792,7 @@ class InputBar(Static):
 
     def update_slash_suggestions(self, text: str | None = None) -> None:
         text = self.input.value if text is None else str(text)
-        self._slash_suggestions = suggest_commands(text)
+        self._slash_suggestions = self._provider_suggestions(text) or suggest_commands(text)
         self._slash_index = 0
         self.query_one(SlashSuggestions).update_suggestions(
             self._slash_suggestions, self._slash_index
@@ -800,6 +812,11 @@ class InputBar(Static):
         command = self.selected_slash_suggestion()
         if command is None:
             return False
+        if " " in command.name:
+            self.input.value = f"/{command.name} "
+            self.input.cursor_position = len(self.input.value)
+            self.hide_slash_suggestions()
+            return True
         raw = self.input.value
         _, separator, rest = (
             raw[1:].partition(" ") if raw.startswith("/") else ("", "", "")
@@ -823,6 +840,28 @@ class InputBar(Static):
 
     def apply_slash_completion(self) -> bool:
         return self.complete_slash_suggestion()
+
+    def _provider_suggestions(self, text: str) -> list[SlashCommand]:
+        if not str(text or "").startswith("/provider "):
+            return []
+        _, _, token = str(text).partition(" ")
+        token = token.strip().lower()
+        names = {name.lower() for name, _protocol, _model in self._provider_profiles}
+        if token in names and str(text).endswith(" "):
+            return []
+        suggestions = []
+        for name, protocol, model in self._provider_profiles:
+            if token and not name.lower().startswith(token):
+                continue
+            suggestions.append(
+                SlashCommand(
+                    f"provider {name}",
+                    f"/provider {name}",
+                    f"{protocol} · {model}",
+                    "Runtime",
+                )
+            )
+        return suggestions[:8]
 
 
 def _session_display_label(agent, limit: int = 32) -> str:
