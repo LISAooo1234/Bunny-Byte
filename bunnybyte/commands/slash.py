@@ -17,62 +17,62 @@ class SlashCommand:
 
 
 SLASH_COMMANDS: tuple[SlashCommand, ...] = (
-    SlashCommand("help", "/help", "Show commands.", "General", False, ("h",)),
-    SlashCommand("clear", "/clear", "Create a new empty session.", "Session"),
-    SlashCommand("compact", "/compact", "Compact older session history.", "Session"),
-    SlashCommand("context", "/context", "Show prompt context usage.", "Runtime"),
-    SlashCommand("dream", "/dream", "Consolidate durable memory.", "Memory"),
-    SlashCommand("history", "/history", "List saved sessions.", "Session"),
-    SlashCommand("memory", "/memory", "Show durable memory index.", "Memory"),
-    SlashCommand("mode", "/mode", "Show runtime mode.", "Runtime"),
+    SlashCommand("help", "/help", "显示可用命令。", "通用", False, ("h",)),
+    SlashCommand("clear", "/clear", "创建一个新的空会话。", "会话"),
+    SlashCommand("compact", "/compact", "压缩较早的会话历史。", "会话"),
+    SlashCommand("context", "/context", "查看当前提示词上下文用量。", "运行时"),
+    SlashCommand("dream", "/dream", "整理并固化长期记忆。", "记忆"),
+    SlashCommand("history", "/history", "列出已保存的会话。", "会话"),
+    SlashCommand("memory", "/memory", "查看长期记忆索引。", "记忆"),
+    SlashCommand("mode", "/mode", "查看当前运行模式。", "运行时"),
     SlashCommand(
-        "model", "/model [name]", "Show or switch the current model.", "Runtime"
+        "model", "/model [name]", "查看或切换当前模型。", "运行时"
     ),
     SlashCommand(
         "provider",
         "/provider [name]",
-        "Show or switch the current provider profile.",
-        "Runtime",
+        "查看或切换当前 provider 配置。",
+        "运行时",
     ),
-    SlashCommand("plan", "/plan <topic>", "Enter plan mode.", "Planning", True),
-    SlashCommand("plan-exit", "/plan-exit", "Exit plan mode.", "Planning"),
-    SlashCommand("remember", "/remember <text>", "Save a durable memory note.", "Memory", True),
-    SlashCommand("reset", "/reset", "Reset current session memory and history.", "Session"),
-    SlashCommand("resume", "/resume <id|index|latest>", "Resume a saved session by id, index, topic, or latest.", "Session", True),
-    SlashCommand("session", "/session", "Show session status.", "Session"),
-    SlashCommand("topic", "/topic [name]", "Show or rename the current session topic.", "Session"),
-    SlashCommand("skills", "/skills", "List available BunnyByte skills.", "Skills", False, ("sk",)),
-    SlashCommand("skill", "/skill <name> [args]", "Load and run a BunnyByte skill.", "Skills", True),
-    SlashCommand("agents", "/agents", "Show subagent worker status.", "Planning", False, ("agent",)),
+    SlashCommand("plan", "/plan <topic>", "进入计划模式。", "计划", True),
+    SlashCommand("plan-exit", "/plan-exit", "退出计划模式。", "计划"),
+    SlashCommand("remember", "/remember <text>", "保存一条长期记忆。", "记忆", True),
+    SlashCommand("reset", "/reset", "重置当前会话的记忆和历史。", "会话"),
+    SlashCommand("resume", "/resume <id|index|latest>", "按 id、序号、主题或 latest 恢复会话。", "会话", True),
+    SlashCommand("session", "/session", "查看当前会话状态。", "会话"),
+    SlashCommand("topic", "/topic [name]", "查看或重命名当前会话主题。", "会话"),
+    SlashCommand("skills", "/skills", "列出可用的 BunnyByte 技能。", "技能", False, ("sk",)),
+    SlashCommand("skill", "/skill <name> [args]", "加载并运行一个 BunnyByte 技能。", "技能", True),
+    SlashCommand("agents", "/agents", "查看子 agent/worker 状态。", "计划", False, ("agent",)),
     SlashCommand(
         "subagent",
         "/subagent explore <task>",
-        "Launch a bounded local child run: Explore or scoped worker.",
-        "Planning",
+        "启动一个有边界的本地子任务：Explore 或限定写入范围的 worker。",
+        "计划",
         True,
         ("sub",),
     ),
-    SlashCommand("usage", "/usage", "Show model/provider usage metadata.", "Runtime"),
-    SlashCommand("working-memory", "/working-memory", "Show working memory.", "Memory"),
-    SlashCommand("exit", "/exit", "Exit BunnyByte.", "General", False, ("quit",)),
+    SlashCommand("usage", "/usage", "查看模型/provider 使用元数据。", "运行时"),
+    SlashCommand("working-memory", "/working-memory", "查看当前工作记忆。", "记忆"),
+    SlashCommand("exit", "/exit", "退出 BunnyByte。", "通用", False, ("quit",)),
 )
 
 
 def command_help_text() -> str:
     lines = [
-        "## Commands",
+        "## 命令",
         "",
-        "Type `/` to open command suggestions. Press `Tab` to accept a suggestion. Press `Enter` to run no-arg commands or fill in commands that still need arguments.",
+        "输入 `/` 打开命令建议；按 `Tab` 接受建议；无参数命令可直接按 `Enter` 运行，需要参数的命令请补全后再执行。",
     ]
-    categories = ("General", "Session", "Runtime", "Memory", "Planning", "Skills")
+    categories = ("通用", "会话", "运行时", "记忆", "计划", "技能")
     for category in categories:
         commands = [command for command in SLASH_COMMANDS if command.category == category]
         if not commands:
             continue
-        lines.extend(["", f"### {category}", "", "| Command | Description |", "| --- | --- |"])
+        lines.extend(["", f"### {category}", "", "| 命令 | 说明 |", "| --- | --- |"])
         for command in commands:
             alias_text = (
-                f" Aliases: {', '.join(f'`/{alias}`' for alias in command.aliases)}."
+                f" 别名：{', '.join(f'`/{alias}`' for alias in command.aliases)}。"
                 if command.aliases
                 else ""
             )
@@ -80,10 +80,10 @@ def command_help_text() -> str:
     lines.extend(
         [
             "",
-            "### Quick Tips",
+            "### 快速提示",
             "",
-            "- Use `/resume latest` to continue the most recent saved session.",
-            "- Use `/history` to list sessions, then `/resume 1` to switch to one of them.",
+            "- 使用 `/resume latest` 继续最近保存的会话。",
+            "- 使用 `/history` 查看会话列表，然后用 `/resume 1` 切换到其中一个会话。",
         ]
     )
     return "\n".join(lines)
@@ -116,7 +116,7 @@ def suggest_commands(text: str, limit: int = 8) -> list[SlashCommand]:
 
 
 def parse_subagent_args(args: str) -> tuple[dict | None, str]:
-    usage = "Usage: /subagent explore <task> or /subagent worker --scope <path[,path]> <task>"
+    usage = "用法：/subagent explore <任务> 或 /subagent worker --scope <路径[,路径]> <任务>"
     try:
         tokens = shlex.split(str(args or ""))
     except ValueError as exc:

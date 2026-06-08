@@ -205,9 +205,9 @@ class BunnyByteTuiApp(App):
 
     def _run_command_in_executor(self, text: str) -> None:
         self.query_one(InputBar).set_busy(True)
-        self.query_one(WelcomeBanner).set_activity(True, f"running {text.strip()}")
+        self.query_one(WelcomeBanner).set_activity(True, f"运行 {text.strip()}")
         self.query_one(ThinkingIndicator).show()
-        self.query_one(ThinkingIndicator).set_detail(f"running {text.strip()}")
+        self.query_one(ThinkingIndicator).set_detail(f"运行 {text.strip()}")
         self._thinking_timer = self.set_interval(0.3, self._advance_activity)
         asyncio.create_task(self._command_task(text))
 
@@ -218,7 +218,7 @@ class BunnyByteTuiApp(App):
                 None, partial(self._handle_command_result, text, from_thread=True)
             )
         except Exception as exc:
-            self.query_one(ChatLog).add_message("assistant", f"[Error] {exc}")
+            self.query_one(ChatLog).add_message("assistant", f"[错误] {exc}")
         finally:
             self._stop_thinking()
             self.query_one(InputBar).set_busy(False)
@@ -248,7 +248,7 @@ class BunnyByteTuiApp(App):
             return
         run_ui(
             self._add_assistant_message,
-            f"Unknown command. Use /help.\n\n{HELP_DETAILS}",
+            f"未知命令。使用 /help 查看帮助。\n\n{HELP_DETAILS}",
         )
 
     def _add_assistant_message(self, content: str) -> None:
@@ -274,7 +274,7 @@ class BunnyByteTuiApp(App):
                 args = item.get("args") if isinstance(item.get("args"), dict) else {}
                 chat.add_tool_history(name, args, content)
         session_id = str(self.agent.session.get("id", ""))
-        chat.add_message("assistant", f"resumed session {session_id}")
+        chat.add_message("assistant", f"已恢复会话 {session_id}")
 
     def _history_tool_summary(self, item: dict) -> str:
         name = str(item.get("name", "tool") or "tool")
@@ -286,7 +286,7 @@ class BunnyByteTuiApp(App):
 
     def _run_agent(self, text: str) -> None:
         self.query_one(InputBar).set_busy(True)
-        self.query_one(WelcomeBanner).set_activity(True, "thinking")
+        self.query_one(WelcomeBanner).set_activity(True, "思考中")
         self.query_one(ThinkingIndicator).show()
         self._thinking_timer = self.set_interval(0.3, self._advance_activity)
         asyncio.create_task(self._agent_task(text))
@@ -299,7 +299,7 @@ class BunnyByteTuiApp(App):
             return
         chat = self.query_one(ChatLog)
         for notification in notifications:
-            chat.add_message("assistant", f"[worker notification]\n{notification}")
+            chat.add_message("assistant", f"[worker 通知]\n{notification}")
         self.query_one(ProgressPanel).update_agent(self.agent)
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(WelcomeBanner).update_agent(self.agent)
@@ -309,7 +309,7 @@ class BunnyByteTuiApp(App):
         try:
             await loop.run_in_executor(None, partial(self._drive_turn, text))
         except Exception as exc:
-            self.query_one(ChatLog).add_message("assistant", f"[Error] {exc}")
+            self.query_one(ChatLog).add_message("assistant", f"[错误] {exc}")
         finally:
             if self._assistant_stream_task is not None:
                 try:
@@ -362,7 +362,7 @@ class BunnyByteTuiApp(App):
             return
         if event_type == "model_delta":
             self._append_model_stream_delta(str(event.get("content", "")))
-            detail = f"receiving model output {event.get('total_chars', 0)} chars"
+            detail = f"接收模型输出 {event.get('total_chars', 0)} 字符"
             self.query_one(ThinkingIndicator).set_detail(detail)
             self.query_one(WelcomeBanner).advance_activity(detail)
             return
@@ -370,14 +370,14 @@ class BunnyByteTuiApp(App):
             kind = event.get("kind", "")
             if kind in {"tool", "tools"}:
                 self._discard_model_stream()
-            detail = f"model returned {kind}"
+            detail = f"模型返回 {kind}"
             self.query_one(ThinkingIndicator).set_detail(detail)
             self.query_one(WelcomeBanner).advance_activity(detail)
             return
         if event_type == "tool_call":
             name = str(event.get("name", ""))
             args = event.get("args") if isinstance(event.get("args"), dict) else {}
-            detail = f"running {name}"
+            detail = f"运行 {name}"
             self.query_one(ThinkingIndicator).set_detail(detail)
             self.query_one(WelcomeBanner).advance_activity(detail)
             card = self.query_one(ChatLog).add_tool_call(name, args)
@@ -386,12 +386,12 @@ class BunnyByteTuiApp(App):
         if event_type == "tool_result":
             self._finish_tool_card(event)
             self.query_one(ProgressPanel).update_agent(self.agent)
-            self.query_one(ThinkingIndicator).set_detail("thinking after tool")
-            self.query_one(WelcomeBanner).advance_activity("thinking after tool")
+            self.query_one(ThinkingIndicator).set_detail("工具完成，继续思考")
+            self.query_one(WelcomeBanner).advance_activity("工具完成，继续思考")
             return
         if event_type == "worker_notification":
             self.query_one(ChatLog).add_message(
-                "assistant", f"[worker notification]\n{event.get('content', '')}"
+                "assistant", f"[worker 通知]\n{event.get('content', '')}"
             )
             return
         if event_type in {"assistant_preamble", "retry", "runtime_notice", "final", "stop"}:
@@ -427,14 +427,14 @@ class BunnyByteTuiApp(App):
             timer.stop()
             self._thinking_timer = None
         self.query_one(ThinkingIndicator).hide()
-        self.query_one(WelcomeBanner).set_activity(False, "ready")
+        self.query_one(WelcomeBanner).set_activity(False, "就绪")
 
     def _queue_retry_notice(self, content: str) -> None:
         signature = _retry_signature(content)
         if signature == self._last_retry_signature and self._last_retry_widget is not None:
             self._last_retry_count += 1
             self._last_retry_content = content
-            self._last_retry_widget.update_content(f"{content}\n\n(repeated {self._last_retry_count} times)")
+            self._last_retry_widget.update_content(f"{content}\n\n（重复 {self._last_retry_count} 次）")
             return
         self._last_retry_signature = signature
         self._last_retry_content = content

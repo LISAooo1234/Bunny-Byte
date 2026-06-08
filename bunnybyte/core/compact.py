@@ -34,6 +34,12 @@ Conversation to summarize:
 """
 
 
+def _compact_output_tokens(max_new_tokens):
+    if max_new_tokens is None:
+        return None
+    return max(COMPACT_MAX_OUTPUT_TOKENS, int(max_new_tokens or 0))
+
+
 class CompactManager:
     def __init__(self, agent):
         self.agent = agent
@@ -180,7 +186,7 @@ class CompactManager:
             result = complete_model(
                 self.agent.model_client,
                 prompt,
-                max(COMPACT_MAX_OUTPUT_TOKENS, int(getattr(self.agent, "max_new_tokens", 0) or 0)),
+                _compact_output_tokens(getattr(self.agent, "max_new_tokens", None)),
             )
             summary = self._extract_summary(result.text)
             if summary:

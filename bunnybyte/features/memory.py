@@ -26,9 +26,15 @@ HOLDER_STALE_S = 3600
 # 单次 dream 最多消化的 session 数。超出时 dream prompt 只列最近 N 个，
 # 防止 75+ session ID 撑爆模型上下文导致 empty_response。
 DREAM_SESSION_CAP = 30
-# dream 任务需要更多输出 token（要写多个 topic 文件 + 更新索引）。
+# dream 任务在用户显式设置输出 token 时至少保留这些预算；默认不额外限制。
 DREAM_MIN_NEW_TOKENS = 4096
 DREAM_SESSION_KIND = "internal_dream"
+
+
+def _dream_output_tokens(max_new_tokens):
+    if max_new_tokens is None:
+        return None
+    return max(max_new_tokens, DREAM_MIN_NEW_TOKENS)
 
 DURABLE_MEMORY_INTENT_PATTERN = re.compile(r"(?i)\b(capture|remember|save|store|persist|note)\b")
 DURABLE_MEMORY_INTENT_ZH_PATTERN = re.compile(r"(记住|保存|记录|沉淀|长期记忆|持久记忆)")
@@ -548,7 +554,7 @@ def run_dream(agent, quiet=False, session_ids=None):
         session=dream_session,
         approval_policy="auto",
         max_steps=max(agent.max_steps, 20),
-        max_new_tokens=max(agent.max_new_tokens, DREAM_MIN_NEW_TOKENS),
+        max_new_tokens=_dream_output_tokens(agent.max_new_tokens),
         secret_env_names=agent.secret_env_names,
         feature_flags={**agent.feature_flags, "memory": False, "relevant_memory": False},
         write_scope=[str(memory_scope)],

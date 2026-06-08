@@ -6,11 +6,12 @@ import math
 
 DISPLAY_NAME = "BunnyByte"
 DISPLAY_HANDLE = "bunnybyte"
-SUBTITLE = "blue-bunny coding agent"
-WELCOME_STATUS = "sugar, spice, and shipped code"
-HELP_HINT = "type /help for commands, Ctrl+L to clear, Ctrl+Q to quit"
-PROMPT_PLACEHOLDER = "Ask BunnyByte or type /help"
-BUSY_PLACEHOLDER = "BunnyByte is working..."
+SUBTITLE = ""
+WELCOME_STATUS = "准备好写代码"
+AI_NOTICE = "BunnyByte is AI and can make mistakes. Please double-check responses."
+HELP_HINT = "输入 /help 查看命令，Ctrl+L 清屏，Ctrl+Q 退出"
+PROMPT_PLACEHOLDER = "向 BunnyByte 提问，或输入 /help"
+BUSY_PLACEHOLDER = "BunnyByte 正在工作..."
 
 TUI_PANEL_BG = "#10131b"
 TUI_PANEL_BORDER = "#66b6ff"

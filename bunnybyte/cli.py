@@ -59,8 +59,8 @@ HELP_DETAILS = (
     + "\n\n"
     + textwrap.dedent(
         """\
-    Skill workflows:
-    /skill <name> [args] Run a BunnyByte skill.
+    技能工作流：
+    /skill <name> [args] 运行一个 BunnyByte 技能。
     """
     ).strip()
 )
@@ -229,10 +229,9 @@ def build_agent(args):
     def model_client_factory():
         return _build_model_client(args)
 
+    # 默认不设置输出 token 上限；只有用户显式传 --max-new-tokens 时才下发限制。
     max_new_tokens_defaulted = args.max_new_tokens is None
     setattr(args, "_bunnybyte_max_new_tokens_defaulted", max_new_tokens_defaulted)
-    if args.max_new_tokens is None:
-        args.max_new_tokens = default_max_tokens_for_provider(provider_config.name)
 
     sandbox_config = resolve_project_sandbox_config(
         start=workspace.repo_root,
@@ -335,112 +334,112 @@ def build_arg_parser():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description="Minimal coding agent for provider profiles backed by OpenAI-compatible or Anthropic-compatible APIs.",
     )
-    parser.add_argument("prompt", nargs="*", help="Optional one-shot prompt.")
-    parser.add_argument("--cwd", default=".", help="Workspace directory.")
+    parser.add_argument("prompt", nargs="*", help="可选的一次性提示词。")
+    parser.add_argument("--cwd", default=".", help="工作区目录。")
     parser.add_argument(
-        "--config", default=None, help="Path to a BunnyByte TOML config file."
+        "--config", default=None, help="BunnyByte TOML 配置文件路径。"
     )
     parser.add_argument(
         "--provider",
         default=None,
-        help=f"Provider profile to use. Defaults to config provider or {DEFAULT_PROVIDER}.",
+        help=f"要使用的 provider 配置；默认读取配置文件，未配置时使用 {DEFAULT_PROVIDER}。",
     )
     parser.add_argument(
         "--api-key",
         default=None,
-        help="API key override for the selected provider profile.",
+        help="所选 provider 配置的 API key 覆盖值。",
     )
     parser.add_argument(
         "--model",
         default=None,
-        help="Model name override for the selected provider profile.",
+        help="所选 provider 配置的模型名覆盖值。",
     )
     parser.add_argument(
         "--base-url",
         default=None,
-        help="API base URL override for the selected provider profile.",
+        help="所选 provider 配置的 API base URL 覆盖值。",
     )
     parser.add_argument(
         "--openai-timeout",
         type=int,
         default=300,
-        help="Provider request timeout in seconds.",
+        help="Provider 请求超时时间（秒）。",
     )
     parser.add_argument(
-        "--resume", default=None, help="Session id to resume or 'latest'."
+        "--resume", default=None, help="要恢复的会话 id，或使用 'latest'。"
     )
     parser.add_argument(
         "--memory-dir",
         default=None,
-        help="Memory directory. Defaults to .bunnybyte/memory in the workspace.",
+        help="记忆目录；默认使用工作区内的 .bunnybyte/memory。",
     )
     parser.add_argument(
         "--no-auto-dream",
         action="store_true",
-        help="Disable automatic memory consolidation.",
+        help="关闭自动记忆整理。",
     )
     parser.add_argument(
         "--dream-interval",
         type=float,
         default=24.0,
-        help="Hours between automatic dream runs.",
+        help="自动 dream/记忆整理的最小间隔小时数。",
     )
     parser.add_argument(
         "--dream-min-sessions",
         type=int,
         default=5,
-        help="Minimum new sessions before automatic dream runs.",
+        help="触发自动 dream/记忆整理前需要的新会话数量。",
     )
     parser.add_argument(
         "--approval",
         choices=("ask", "auto", "never"),
         default="ask",
-        help="Approval policy for risky tools.",
+        help="高风险工具的审批策略。",
     )
     parser.add_argument(
         "--sandbox",
         choices=("off", "best_effort", "required"),
         default=None,
-        help="Sandbox mode for run_shell.",
+        help="run_shell 的沙箱模式。",
     )
     parser.add_argument(
         "--sandbox-backend",
         choices=("auto", "bubblewrap", "none"),
         default=None,
-        help="Sandbox backend for run_shell.",
+        help="run_shell 的沙箱后端。",
     )
     parser.add_argument(
         "--secret-env-name",
         dest="secret_env_names",
         action="append",
         default=[],
-        help="Extra environment variable names to treat as secrets for trace/report redaction.",
+        help="额外按密钥处理的环境变量名，用于 trace/report 脱敏。",
     )
     parser.add_argument(
         "--max-steps",
         type=int,
         default=50,
-        help="Maximum tool/model iterations per request.",
+        help="每个请求最多允许的工具/模型迭代次数。",
     )
     parser.add_argument(
         "--max-new-tokens",
         type=int,
         default=None,
-        help="Maximum model output tokens per step. Defaults to a provider-aware value (anthropic 32000, openai/deepseek 8192).",
+        help="每步模型输出 token 上限；默认不设置上限，只有显式传入时才限制。",
     )
     parser.add_argument(
         "--temperature",
         type=float,
         default=0.2,
-        help="Sampling temperature sent to the provider.",
+        help="发送给 provider 的采样温度。",
     )
     parser.add_argument(
-        "--tui", action="store_true", help="Start the Textual terminal UI."
+        "--tui", action="store_true", help="启动 Textual 终端 UI。"
     )
     parser.add_argument(
         "--repl",
         action="store_true",
-        help="Use the plain line-oriented REPL instead of the TUI.",
+        help="使用普通行式 REPL，而不是 TUI。",
     )
     return parser
 

@@ -10,6 +10,7 @@ from textual.widget import Widget
 from textual.widgets import Collapsible, Input, Markdown, Static
 
 from ..branding import (
+    AI_NOTICE,
     BUSY_PLACEHOLDER,
     DISPLAY_NAME,
     HELP_HINT,
@@ -75,7 +76,7 @@ class WelcomeBanner(Static):
         self.approval = approval
         self.turns = 0
         self.context_text = "context -"
-        self.activity_detail = "ready"
+        self.activity_detail = "就绪"
         self.activity_frame = 0
         self.busy = False
 
@@ -107,7 +108,7 @@ class WelcomeBanner(Static):
 
     def set_activity(self, busy: bool, detail: str = "") -> None:
         self.busy = bool(busy)
-        self.activity_detail = detail or ("working" if busy else "ready")
+        self.activity_detail = detail or ("工作中" if busy else "就绪")
         self.refresh()
 
     def advance_activity(self, detail: str | None = None) -> None:
@@ -123,11 +124,15 @@ class WelcomeBanner(Static):
         accent = TUI_ACCENT
         status_style = "#ffd43b" if self.busy else "#8ce99a"
         mascot_rows = self._mascot_rows()
+        title = Text(DISPLAY_NAME, style=f"bold {accent}")
+        if SUBTITLE:
+            title.append(f"  {SUBTITLE}", style=muted)
         info_rows = [
-            Text.assemble(Text(DISPLAY_NAME, style=f"bold {accent}"), Text(f"  {SUBTITLE}", style=muted)),
+            title,
             self._info_line(("status", self.activity_detail), ("mode", self.mode), ("turns", str(self.turns)), value_style=status_style),
             self._info_line(("provider", self.provider or "-"), ("model", self.model_name or "-"), ("approval", self.approval or "-")),
             self._info_line(("session", self.session or "-"), ("cwd", cwd_name), ("branch", self.branch or "-")),
+            Text(AI_NOTICE, style=muted),
             Text.assemble(Text(self.context_text, style=accent), Text("   "), Text(HELP_HINT, style=muted)),
         ]
         content_width = self._content_width()
@@ -261,7 +266,7 @@ def summarize_tool_output(name: str, output: str) -> str:
             lines, total, eof = meta.groups()
             return f"{lines} lines read, {total} total" + (", complete" if eof == "true" else "")
         if text.startswith("File range already read"):
-            return "already read; reused cached range"
+            return "已读取过，复用缓存范围"
         line_count = sum(1 for line in text.splitlines() if re.match(r"\s*\d+:", line))
         return f"{line_count} lines read"
     if name == "search":
@@ -394,7 +399,7 @@ class ConfirmPrompt(Static):
             Text("Approve tool call? ", style="bold yellow"),
             Text(self.tool_name, style="yellow"),
             Text(f" {self.args_summary}\n", style="#ffe8a1"),
-            Text("Left/Right choose, Enter confirms, Esc denies: ", style="#c9a227"),
+            Text("左/右选择，Enter 确认，Esc 拒绝：", style="#c9a227"),
             Text(deny, style="bold red"),
             Text("  "),
             Text(allow, style="bold green"),
@@ -437,7 +442,7 @@ class AskUserPrompt(Static):
         if not self.choices:
             return Text.assemble(
                 Text(self.question + "\n", style="bold #d0ebff"),
-                Text("Enter continues, Esc cancels", style="#74c0fc"),
+                Text("Enter 继续，Esc 取消", style="#74c0fc"),
             )
         parts = [Text(self.question + "\n", style="bold #d0ebff")]
         for index, choice in enumerate(self.choices):
@@ -450,7 +455,7 @@ class AskUserPrompt(Static):
             )
             parts.append(Text("  "))
         parts.append(
-            Text("\nLeft/Right choose, Enter confirms, Esc cancels", style="#74c0fc")
+            Text("\n左/右选择，Enter 确认，Esc 取消", style="#74c0fc")
         )
         return Text.assemble(*parts)
 
@@ -584,7 +589,7 @@ class ThinkingIndicator(Static):
     }
     """
 
-    FRAMES = ("thinking", "thinking.", "thinking..", "thinking...")
+    FRAMES = ("思考中", "思考中.", "思考中..", "思考中...")
 
     def __init__(self) -> None:
         super().__init__("")
@@ -858,7 +863,7 @@ class InputBar(Static):
                     f"provider {name}",
                     f"/provider {name}",
                     f"{protocol} · {model}",
-                    "Runtime",
+                    "运行时",
                 )
             )
         return suggestions[:8]
@@ -869,7 +874,7 @@ def _session_display_label(agent, limit: int = 32) -> str:
     if topic and topic != "Untitled session":
         return _clip(topic, limit)
     return (
-        "pending"
+        "待开始"
         if getattr(agent, "is_pending_session", False)
         else str((getattr(agent, "session", {}) or {}).get("id", ""))[-10:]
     )

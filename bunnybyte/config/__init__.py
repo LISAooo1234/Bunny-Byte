@@ -55,15 +55,15 @@ PROVIDER_ALIASES = {
 
 PROTOCOLS = {"openai", "anthropic"}
 
-PROVIDER_MAX_TOKENS: dict[str, int] = {
-    "openai": 8192,
-    "anthropic": 32000,
-    "deepseek": 8192,
+PROVIDER_MAX_TOKENS: dict[str, int | None] = {
+    "openai": None,
+    "anthropic": None,
+    "deepseek": None,
 }
-DEFAULT_MAX_TOKENS_FALLBACK = 4096
+DEFAULT_MAX_TOKENS_FALLBACK = None
 
 
-def default_max_tokens_for_provider(provider: str | None) -> int:
+def default_max_tokens_for_provider(provider: str | None) -> int | None:
     if not provider:
         return DEFAULT_MAX_TOKENS_FALLBACK
     key = PROVIDER_ALIASES.get(provider, provider)

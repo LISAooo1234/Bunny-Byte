@@ -13,10 +13,14 @@ def finish_model_error(engine, task_state, user_message, prompt_metadata, exc, d
     error = dict(error_metadata.get("provider_error", {}))
     code = str(error.get("code") or "model_error")
     if code == "empty_response":
+        limit_text = (
+            f"当前 --max-new-tokens={agent.max_new_tokens}"
+            if agent.max_new_tokens is not None
+            else "当前未设置 --max-new-tokens 上限"
+        )
         final = (
-            "模型返回空响应。可能原因：max_new_tokens 太小（当前 "
-            f"{agent.max_new_tokens}）、provider 临时异常、或 prompt 超出窗口。"
-            "建议：加大 --max-new-tokens、检查 provider 状态、或减少历史长度后重试。"
+            f"模型返回空响应。可能原因：provider 临时异常、prompt 超出窗口，或输出 token 配置不合适（{limit_text}）。"
+            "建议：检查 provider 状态、减少历史长度后重试，或显式设置 --max-new-tokens。"
         )
     elif code in {"prompt_too_long", "context_length_exceeded"}:
         final = (

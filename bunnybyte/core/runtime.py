@@ -113,7 +113,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         run_store=None,
         approval_policy="ask",
         max_steps=50,
-        max_new_tokens=8192,
+        max_new_tokens=None,
         depth=0,
         max_depth=1,
         read_only=False,
@@ -278,7 +278,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             "approval_policy": self.approval_policy,
             "read_only": bool(self.read_only),
             "max_steps": int(self.max_steps),
-            "max_new_tokens": int(self.max_new_tokens),
+            "max_new_tokens": self.max_new_tokens,
             "feature_flags": dict(self.feature_flags),
             "shell_env_allowlist": list(self.shell_env_allowlist),
             "workspace_fingerprint": getattr(

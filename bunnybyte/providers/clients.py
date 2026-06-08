@@ -510,9 +510,10 @@ class OpenAICompatibleModelClient:
                     ],
                 }
             ],
-            "max_output_tokens": max_new_tokens,
             "stream": bool(on_delta),
         }
+        if max_new_tokens is not None:
+            payload["max_output_tokens"] = max_new_tokens
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         # runtime 传入的是“稳定前缀”的签名，而不是整段 prompt 的签名。
@@ -704,9 +705,10 @@ class AnthropicCompatibleModelClient:
                     ],
                 }
             ],
-            "max_tokens": max_new_tokens,
             "stream": bool(on_delta),
         }
+        if max_new_tokens is not None:
+            payload["max_tokens"] = max_new_tokens
         if self.temperature is not None:
             payload["temperature"] = self.temperature
 
