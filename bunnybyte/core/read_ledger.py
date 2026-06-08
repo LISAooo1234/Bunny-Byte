@@ -4,7 +4,6 @@ import html
 import re
 
 from ..features import memory as memorylib
-from .workspace import MAX_TOOL_OUTPUT, clip
 
 META_RE = re.compile(
     r'<read_file_meta\s+path="(?P<path>[^"]+)"\s+start="(?P<start>\d+)"\s+'
@@ -54,19 +53,7 @@ def read_stub_metadata():
 
 
 def render_read_file_result(full_result):
-    full_result = str(full_result)
-    meta_start = full_result.rfind("<read_file_meta ")
-    if len(full_result) <= MAX_TOOL_OUTPUT:
-        return full_result
-    meta = full_result[meta_start:].strip() if meta_start >= 0 else ""
-    body = full_result[:meta_start].rstrip() if meta_start >= 0 else full_result
-    reminder = (
-        "\n<system-reminder>read_file output was truncated before entering history; "
-        "use narrower start/end ranges or search if you need omitted lines.</system-reminder>"
-    )
-    budget = max(200, MAX_TOOL_OUTPUT - len(meta) - len(reminder) - 40)
-    clipped = clip(body, budget)
-    return f"{clipped}{reminder}\n{meta}" if meta else f"{clipped}{reminder}"
+    return str(full_result)
 
 
 class ReadLedger:

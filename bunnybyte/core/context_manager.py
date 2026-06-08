@@ -12,20 +12,22 @@ from ..features import memory as memorylib, skills as skillslib
 from .context_usage import ContextUsageAnalyzer
 from .turn_history import TurnHistoryBuilder, tail_clip
 
-DEFAULT_TOTAL_BUDGET = 60000
+# Temporary diagnostic mode: keep prompt sections effectively unbounded so read_file
+# results remain visible across turns while investigating repeated-read behavior.
+DEFAULT_TOTAL_BUDGET = 10_000_000
 DEFAULT_SECTION_BUDGETS = {
-    "prefix": 12000,
-    "memory": 8000,
-    "skills": 4000,
-    "relevant_memory": 6000,
-    "history": 30000,
+    "prefix": 10_000_000,
+    "memory": 10_000_000,
+    "skills": 10_000_000,
+    "relevant_memory": 10_000_000,
+    "history": 10_000_000,
 }
 DEFAULT_SECTION_FLOORS = {
-    "prefix": 4000,
-    "memory": 1200,
-    "skills": 600,
-    "relevant_memory": 1000,
-    "history": 6000,
+    "prefix": 10_000_000,
+    "memory": 10_000_000,
+    "skills": 10_000_000,
+    "relevant_memory": 10_000_000,
+    "history": 10_000_000,
 }
 # 当 prompt 超预算时，会优先压缩这些 section。
 DEFAULT_REDUCTION_ORDER = ("relevant_memory", "skills", "history", "memory", "prefix")

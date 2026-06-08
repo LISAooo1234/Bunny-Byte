@@ -41,7 +41,7 @@ from .todo_ledger import TodoLedger
 from .turn_history import TurnHistoryBuilder
 from .worker_manager import WorkerManager
 from ..tools import registry as toolkit
-from .workspace import MAX_HISTORY, WorkspaceContext, clip, now
+from .workspace import WorkspaceContext, clip, now
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
     "HOME",
@@ -585,27 +585,16 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             return "- empty"
 
         lines = []
-        seen_reads = set()
-        recent_start = max(0, len(history) - 6)
-        for index, item in enumerate(history):
-            recent = index >= recent_start
-            if item["role"] == "tool" and item["name"] == "read_file" and not recent:
-                path = str(item["args"].get("path", ""))
-                if path in seen_reads:
-                    continue
-                seen_reads.add(path)
-
+        for item in history:
             if item["role"] == "tool":
-                limit = 900 if recent else 180
                 lines.append(
                     f"[tool:{item['name']}] {json.dumps(item['args'], sort_keys=True)}"
                 )
-                lines.append(clip(item["content"], limit))
+                lines.append(str(item["content"]))
             else:
-                limit = 900 if recent else 220
-                lines.append(f"[{item['role']}] {clip(item['content'], limit)}")
+                lines.append(f"[{item['role']}] {item['content']}")
 
-        return clip("\n".join(lines), MAX_HISTORY)
+        return "\n".join(lines)
 
     def feature_enabled(self, name):
         return bool(self.feature_flags.get(str(name), False))

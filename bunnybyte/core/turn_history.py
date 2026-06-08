@@ -61,27 +61,16 @@ class TurnHistoryBuilder:
                 "rendered_turns": 0,
             }
 
-        turns = self._group_turns(history)
-        recent_window = 3
-        recent_turns = set(list(turns)[-recent_window:])
-        entries, details = self._compressed_turn_entries(turns, recent_turns)
-        rendered_entries = []
-        for entry in reversed(entries):
-            candidate = entry["lines"] + rendered_entries
-            if len("\n".join(["Transcript:", *candidate])) <= budget:
-                rendered_entries = candidate
-                continue
-            if entry["turn_id"] in recent_turns:
-                clipped = [tail_clip(line, max(40, budget // max(1, len(entry["lines"])))) for line in entry["lines"]]
-                candidate = clipped + rendered_entries
-                if len("\n".join(["Transcript:", *candidate])) <= budget:
-                    rendered_entries = candidate
-        rendered = "\n".join(["Transcript:", *rendered_entries])
-        if len(rendered) > budget and budget > 0:
-            rendered = tail_clip(raw, budget)
-        details["rendered_entries"] = rendered_entries
-        details["rendered_turns"] = sum(1 for line in rendered_entries if line.startswith("Turn "))
-        return rendered, details
+        rendered_entries = list(self._render_turn_lines(history, line_limit=10_000_000))
+        details = {
+            "rendered_entries": rendered_entries,
+            "older_entries_count": 0,
+            "collapsed_duplicate_reads": 0,
+            "reused_file_summary_count": 0,
+            "summarized_tool_count": 0,
+            "rendered_turns": sum(1 for line in rendered_entries if line.startswith("Turn ")),
+        }
+        return "\n".join(["Transcript:", *rendered_entries]), details
 
     def _group_turns(self, history):
         turns = OrderedDict()
