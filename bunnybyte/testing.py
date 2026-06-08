@@ -9,6 +9,7 @@ class ScriptedModelClient:
         self.prompts = []
         self.supports_prompt_cache = False
         self.last_completion_metadata = {}
+        self.deterministic_scripted = True
 
     def complete(self, prompt, max_new_tokens, **kwargs):
         self.prompts.append(prompt)

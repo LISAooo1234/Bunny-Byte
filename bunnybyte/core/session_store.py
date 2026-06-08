@@ -9,7 +9,7 @@ from pathlib import Path
 from .session_topics import DEFAULT_SESSION_TOPIC, topic_from_history
 from .workspace import clip
 
-INTERNAL_SESSION_KINDS = {"internal_dream"}
+INTERNAL_SESSION_KINDS = {"internal_dream", "worker"}
 
 
 class SessionStore:

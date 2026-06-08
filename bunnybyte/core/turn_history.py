@@ -61,13 +61,16 @@ class TurnHistoryBuilder:
                 "rendered_turns": 0,
             }
 
-        rendered_entries = list(self._render_turn_lines(history, line_limit=10_000_000))
+        turns = self._group_turns(history)
+        recent_turn_ids = set(list(turns.keys())[-3:])
+        compressed_entries, compression_details = self._compressed_turn_entries(turns, recent_turn_ids)
+        rendered_entries = [line for entry in compressed_entries for line in entry["lines"]]
         details = {
             "rendered_entries": rendered_entries,
-            "older_entries_count": 0,
-            "collapsed_duplicate_reads": 0,
-            "reused_file_summary_count": 0,
-            "summarized_tool_count": 0,
+            "older_entries_count": int(compression_details.get("older_entries_count", 0)),
+            "collapsed_duplicate_reads": int(compression_details.get("collapsed_duplicate_reads", 0)),
+            "reused_file_summary_count": int(compression_details.get("reused_file_summary_count", 0)),
+            "summarized_tool_count": int(compression_details.get("summarized_tool_count", 0)),
             "rendered_turns": sum(1 for line in rendered_entries if line.startswith("Turn ")),
         }
         return "\n".join(["Transcript:", *rendered_entries]), details

@@ -227,6 +227,13 @@ class ContextManager:
             section: max(20, int(budget) // 4)
             for section, budget in self.section_budgets.items()
         }
+        # Relevant memory is already capped to a tiny number of retrieved notes and
+        # clipped per-note inside its own renderer. Do not shrink this section a
+        # second time during global budget reduction, otherwise every selected
+        # note can collapse to a one-character bullet and become useless even
+        # though metadata says it was selected.
+        if "relevant_memory" in self.section_budgets:
+            floors["relevant_memory"] = int(self.section_budgets["relevant_memory"])
         floors.update(self._section_floor_overrides)
         return floors
 
@@ -276,10 +283,6 @@ class ContextManager:
             if len(rendered) <= budget or per_note_budget <= 1:
                 break
             per_note_budget -= 1
-
-        if len(rendered) > budget and budget > 0:
-            rendered = tail_clip(raw, budget)
-            rendered_notes = [rendered]
 
         return SectionRender(
             raw=raw,

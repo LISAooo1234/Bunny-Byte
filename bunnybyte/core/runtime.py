@@ -647,6 +647,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         if (
             metadata.get("prompt_over_budget")
             and len(self.session.get("history", [])) > 4
+            and not getattr(self.model_client, "deterministic_scripted", False)
         ):
             self.compact_history(trigger="auto_prompt_over_budget")
             prompt, metadata = self.context_manager.build(user_message)
@@ -936,6 +937,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         return answer.strip().lower() in {"y", "yes"}
 
     parse = staticmethod(model_output.parse)
+    parse_with_metadata = staticmethod(model_output.parse_with_metadata)
     retry_notice = staticmethod(model_output.retry_notice)
     parse_xml_tool = staticmethod(model_output.parse_xml_tool)
     parse_attrs = staticmethod(model_output.parse_attrs)

@@ -5,41 +5,70 @@ import re
 
 
 def parse(raw):
+    kind, payload, _metadata = parse_with_metadata(raw)
+    return kind, payload
+
+
+def parse_with_metadata(raw):
     raw = str(raw)
     stripped = _strip_protocol_fence(raw).lstrip()
-    block = _leading_protocol_block(stripped)
+    block, preamble = _leading_protocol_block(stripped)
+    metadata = {"preamble": preamble} if preamble else {}
     if block:
         stripped = block
     if stripped.startswith("<tool"):
         parsed = parse_tool_blocks(stripped)
         if isinstance(parsed, str):
-            return "retry", retry_notice(parsed, raw)
+            return "retry", retry_notice(parsed, raw), metadata
         if parsed:
-            return _tool_kind(parsed)
-        return "retry", retry_notice("tool payload must be valid JSON or supported XML", raw)
+            kind, payload = _tool_kind(parsed)
+            return kind, payload, metadata
+        return "retry", retry_notice("tool payload must be valid JSON or supported XML", raw), metadata
+
+    if stripped.startswith("{") or stripped.startswith("["):
+        parsed = parse_raw_json_tool(stripped)
+        if isinstance(parsed, str):
+            return "retry", retry_notice(parsed, raw), metadata
+        if parsed:
+            kind, payload = _tool_kind(parsed)
+            return kind, payload, metadata
 
     if stripped.startswith("<final>"):
-        return "final", extract(stripped, "final")
+        return "final", extract(stripped, "final"), metadata
+
+    final_block, final_preamble = _recover_embedded_final(stripped)
+    if final_block:
+        metadata = dict(metadata)
+        if final_preamble:
+            metadata["preamble"] = final_preamble
+        return "final", extract(final_block, "final"), metadata
 
     if not raw.strip():
-        return "retry", retry_notice("empty response", raw)
-    return "retry", retry_notice("missing leading <tool> or <final> protocol tag", raw)
+        return "retry", retry_notice("empty response", raw), metadata
+    return "retry", retry_notice("missing leading <tool> or <final> protocol tag", raw), metadata
 
 
 def _leading_protocol_block(text):
     text = str(text or "").lstrip()
     match = re.search(r"<(?P<tag>tool|final)\b", text)
     if not match:
-        return ""
+        return "", ""
     prefix = text[: match.start()].strip()
     tag = match.group("tag")
     if not _is_ignorable_protocol_prefix(prefix, tag):
-        return ""
+        return "", ""
     close = f"</{tag}>"
     end = text.find(close, match.end())
     if end < 0:
-        return ""
-    return text[match.start() : end + len(close)]
+        return "", ""
+    return text[match.start() : end + len(close)], prefix
+
+
+def _recover_embedded_final(text):
+    block, preamble = _leading_protocol_block(text)
+    if not block or not block.startswith("<final>"):
+        return "", ""
+    return block, preamble
 
 
 def _is_ignorable_protocol_prefix(prefix, tag):
@@ -49,18 +78,13 @@ def _is_ignorable_protocol_prefix(prefix, tag):
         return False
     if "```" in prefix or "example" in prefix.lower() or "示例" in prefix:
         return False
-    if tag == "tool":
-        return bool(
-            re.search(
-                r"(?i)(^|\b)(calling|call|using tool|use tool|now using|now call|i will call|i'll call)\b",
-                prefix,
-            )
-            or re.search(r"(调用|使用工具|现在调用|我将调用|我会调用)", prefix)
-        )
-    return bool(
-        re.search(r"(?i)(^|\b)(final answer|answer|result|summary)\b", prefix)
-        or re.search(r"(最终答案|答案|结果|总结)", prefix)
-    )
+    if "<" in prefix or ">" in prefix:
+        return False
+    # Some models, especially when answering in Chinese, prepend a short
+    # narration such as "好的，继续读取。" before the real protocol block. Treat
+    # that as harmless chatter, while still rejecting examples/code fences
+    # above so body-text protocol tags are not executed accidentally.
+    return True
 
 
 def _strip_protocol_fence(raw):
@@ -86,6 +110,14 @@ def _raw_preview(raw, limit=180):
     if len(text) > limit:
         text = text[: max(0, limit - 3)].rstrip() + "..."
     return repr(text)
+
+
+def parse_raw_json_tool(raw):
+    try:
+        payload = json.loads(str(raw).strip())
+    except json.JSONDecodeError:
+        return "tool payload must be valid JSON or supported XML"
+    return normalize_tool_payload(payload)
 
 
 def normalize_tool_payload(payload):

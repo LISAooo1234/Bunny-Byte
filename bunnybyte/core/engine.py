@@ -293,7 +293,25 @@ class Engine:
                 prompt_metadata.update(completion_metadata)
             agent.last_completion_metadata = completion_metadata
             agent.last_prompt_metadata = prompt_metadata
-            kind, payload = agent.parse(raw)
+            kind, payload, parse_metadata = agent.parse_with_metadata(raw)
+            preamble = str(parse_metadata.get("preamble", "") or "").strip()
+            if preamble and kind in {"tool", "tools"}:
+                agent.record(
+                    {"role": "assistant", "content": preamble, "created_at": now()}
+                )
+                agent.session_event_bus.emit(
+                    "assistant_message",
+                    {
+                        "run_id": task_state.run_id,
+                        "kind": "preamble",
+                        "content": clip(preamble, 500),
+                    },
+                )
+                yield {
+                    "type": "assistant_preamble",
+                    "run_id": task_state.run_id,
+                    "content": preamble,
+                }
             duration_ms = int((time.monotonic() - model_started_at) * 1000)
             agent.emit_trace(
                 task_state,

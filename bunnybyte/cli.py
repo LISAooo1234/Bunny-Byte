@@ -927,7 +927,7 @@ def _print_turn_stream(agent, user_message):
             )
             sys.stdout.flush()
             continue
-        if event_type in {"retry", "runtime_notice", "final", "stop"}:
+        if event_type in {"assistant_preamble", "retry", "runtime_notice", "final", "stop"}:
             content = str(event.get("content", ""))
             if event_type in {"final", "stop"}:
                 final_answer = content

@@ -242,6 +242,31 @@ def test_explore_agent_runs_real_readonly_child_session_and_records_notification
     assert report["workers"]["items"][0]["subagent_type"] == "Explore"
 
 
+def test_worker_child_sessions_are_hidden_from_history_and_latest(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"agent","args":{"description":"Inspect readme","prompt":"Read README.md and summarize it","subagent_type":"Explore"}}</tool>',
+            '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":1}}</tool>',
+            "<final>README says demo readme.</final>",
+            "<final>Exploration complete.</final>",
+        ],
+        max_steps=4,
+    )
+
+    assert agent.ask("inspect with a subagent") == "Exploration complete."
+
+    child_ids = [
+        path.stem
+        for path in agent.session_store.root.glob("*.json")
+        if path.stem != agent.session["id"]
+    ]
+    assert child_ids
+    visible_ids = [row["id"] for row in agent.session_store.list_sessions()]
+    assert visible_ids == [agent.session["id"]]
+    assert agent.session_store.latest(include_empty=False) == agent.session["id"]
+
+
 def test_worker_agent_can_be_continued_with_same_child_context_and_write_scope(
     tmp_path,
 ):

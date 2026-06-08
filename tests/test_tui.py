@@ -789,6 +789,32 @@ async def test_retry_notices_are_coalesced(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_retry_notices_with_different_previews_are_coalesced_by_problem(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import AssistantMessage
+
+    agent = build_agent(tmp_path, [])
+    app = BunnyByteTuiApp(agent)
+    first = (
+        "Your previous response could not be executed. Problem: tool payload must be valid JSON or supported XML. "
+        "Offending output preview: '<'. Return one or more valid <tool> calls, or one <final> answer."
+    )
+    second = (
+        "Your previous response could not be executed. Problem: tool payload must be valid JSON or supported XML. "
+        "Offending output preview: '{\"name\":\"agent\",...'. Return one or more valid <tool> calls, or one <final> answer."
+    )
+
+    async with app.run_test():
+        app._handle_runtime_event({"type": "retry", "content": first})
+        app._handle_runtime_event({"type": "retry", "content": second})
+
+        messages = list(app.query(AssistantMessage))
+        assert len(messages) == 1
+        assert "repeated 2 times" in messages[0].content
+        assert "'{\"name\":\"agent\",...'" in messages[0].content
+
+
+@pytest.mark.asyncio
 async def test_tui_resume_command_renders_tool_history(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
     from bunnybyte.tui.widgets import InputBar, ToolCard

@@ -74,6 +74,7 @@ class BunnyByteTuiApp(App):
         self._model_stream_rendered = ""
         self._last_retry_widget = None
         self._last_retry_content = ""
+        self._last_retry_signature = ""
         self._last_retry_count = 0
         self._previous_approve = getattr(agent, "approve", None)
         self._previous_ask_user = getattr(agent, "ask_user_callback", None)
@@ -383,7 +384,7 @@ class BunnyByteTuiApp(App):
                 "assistant", f"[worker notification]\n{event.get('content', '')}"
             )
             return
-        if event_type in {"retry", "runtime_notice", "final", "stop"}:
+        if event_type in {"assistant_preamble", "retry", "runtime_notice", "final", "stop"}:
             content = str(event.get("content", ""))
             if event_type == "retry" and content.startswith("Your previous response could not be executed."):
                 self._queue_retry_notice(content)
@@ -419,10 +420,13 @@ class BunnyByteTuiApp(App):
         self.query_one(WelcomeBanner).set_activity(False, "ready")
 
     def _queue_retry_notice(self, content: str) -> None:
-        if content == self._last_retry_content and self._last_retry_widget is not None:
+        signature = _retry_signature(content)
+        if signature == self._last_retry_signature and self._last_retry_widget is not None:
             self._last_retry_count += 1
+            self._last_retry_content = content
             self._last_retry_widget.update_content(f"{content}\n\n(repeated {self._last_retry_count} times)")
             return
+        self._last_retry_signature = signature
         self._last_retry_content = content
         self._last_retry_count = 1
         self._last_retry_widget = self.query_one(ChatLog).add_message("assistant", content)
@@ -431,6 +435,7 @@ class BunnyByteTuiApp(App):
         content = str(content or "")
         self._last_retry_widget = None
         self._last_retry_content = ""
+        self._last_retry_signature = ""
         self._last_retry_count = 0
         if self._assistant_stream_task is not None and not self._assistant_stream_task.done():
             self._assistant_stream_task.cancel()
@@ -575,6 +580,15 @@ def _copy_to_system_clipboard(text: str) -> None:
         )
     except Exception:
         return
+
+
+def _retry_signature(content: str) -> str:
+    text = str(content or "")
+    if "Offending output preview:" in text:
+        text = text.split("Offending output preview:", 1)[0]
+    if " Return one or more valid" in text:
+        text = text.split(" Return one or more valid", 1)[0]
+    return " ".join(text.split())
 
 
 def _model_stream_preview(content: str) -> str:

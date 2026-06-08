@@ -58,6 +58,47 @@ def test_agent_runs_tool_then_final(tmp_path):
     assert "hello.txt" in agent.session["memory"]["files"]
 
 
+def test_agent_accepts_raw_json_tool_payload(tmp_path):
+    (tmp_path / "hello.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            '{"name":"read_file","args":{"path":"hello.txt","start":1,"end":1}}',
+            "<final>Read raw JSON tool call.</final>",
+        ],
+    )
+
+    answer = agent.ask("Inspect hello.txt")
+
+    assert answer == "Read raw JSON tool call."
+    assert any(item["role"] == "tool" and item["name"] == "read_file" for item in agent.session["history"])
+    notices = [item["content"] for item in agent.session["history"] if item["role"] == "assistant"]
+    assert not any("could not be executed" in item for item in notices)
+
+
+def test_agent_accepts_raw_json_tool_list(tmp_path):
+    (tmp_path / "one.txt").write_text("one\n", encoding="utf-8")
+    (tmp_path / "two.txt").write_text("two\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            json.dumps(
+                [
+                    {"name": "read_file", "args": {"path": "one.txt", "start": 1, "end": 1}},
+                    {"name": "read_file", "args": {"path": "two.txt", "start": 1, "end": 1}},
+                ]
+            ),
+            "<final>Read both raw JSON tool calls.</final>",
+        ],
+    )
+
+    answer = agent.ask("Inspect both files")
+
+    assert answer == "Read both raw JSON tool calls."
+    read_tools = [item for item in agent.session["history"] if item.get("role") == "tool" and item.get("name") == "read_file"]
+    assert len(read_tools) == 2
+
+
 def test_agent_updates_task_summary_on_each_request(tmp_path):
     agent = build_agent(
         tmp_path,
@@ -171,6 +212,15 @@ def test_agent_accepts_fenced_protocol_response(tmp_path):
     assert agent.ask("Use fenced output") == "Recovered from fenced protocol."
 
 
+def test_agent_accepts_short_chinese_chatter_before_final(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        ["最终报告：\n<final>这是中文报告。</final>"],
+    )
+
+    assert agent.ask("给出最终报告") == "这是中文报告。"
+
+
 def test_agent_accepts_short_tool_preamble(tmp_path):
     (tmp_path / "hello.txt").write_text("alpha\n", encoding="utf-8")
     agent = build_agent(
@@ -221,6 +271,26 @@ def test_protocol_tags_inside_body_text_are_not_parsed_as_actions(tmp_path):
     assert not any(item.get("role") == "tool" for item in agent.session["history"])
     notices = [item["content"] for item in agent.session["history"] if item["role"] == "assistant"]
     assert any("missing leading <tool> or <final> protocol tag" in item for item in notices)
+
+
+def test_short_chinese_chatter_before_tool_is_preserved(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        [
+            '好的，继续读取主脚本。 <tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":1}}</tool>',
+            "<final>Recovered.</final>",
+        ],
+    )
+    (tmp_path / "README.md").write_text("hello\n", encoding="utf-8")
+
+    answer = agent.ask("Read the README")
+
+    assert answer == "Recovered."
+    assert any(item.get("role") == "tool" for item in agent.session["history"])
+    assert any(
+        item.get("role") == "assistant" and item.get("content") == "好的，继续读取主脚本。"
+        for item in agent.session["history"]
+    )
 
 
 def test_agent_accepts_xml_write_file_tool(tmp_path):
