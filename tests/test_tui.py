@@ -29,7 +29,7 @@ def rendered_text(widget) -> str:
 def test_read_only_tool_cards_are_compact_by_default():
     from bunnybyte.tui.widgets import ToolCard
 
-    read_card = ToolCard("read_file", "bunnybyte/core/runtime.py:1-80")
+    read_card = ToolCard("read_file", "runtime.py · lines 1-80")
     shell_card = ToolCard("run_shell", "pytest -q")
 
     assert read_card.compact is True
@@ -44,16 +44,16 @@ def test_compact_tool_card_success_label_is_one_line():
     card = ToolCard("search", "Engine in bunnybyte/core")
     card.set_success("bunnybyte/core/engine.py:27:class Engine:")
 
-    assert card._label() == "· search: Engine in bunnybyte/core — 1 match"
+    assert card._label() == "✓ Search  │  Engine in bunnybyte/core  │  1 match"
 
 
 def test_compact_tool_card_summarizes_read_metadata():
     from bunnybyte.tui.widgets import ToolCard
 
-    card = ToolCard("read_file", "bunnybyte/core/runtime.py:1-80")
+    card = ToolCard("read_file", "runtime.py · lines 1-80")
     card.set_success('# bunnybyte/core/runtime.py\n   1: hello\n<read_file_meta path="bunnybyte/core/runtime.py" start="1" end="80" returned_lines="80" total_lines="980" eof="false" />')
 
-    assert card._label() == "· read_file: bunnybyte/core/runtime.py:1-80 — 80 lines read, 980 total"
+    assert card._label() == "✓ Read file  │  runtime.py · lines 1-80  │  80 lines · 980 total"
 
 
 def test_read_only_tool_card_error_expands():
@@ -64,7 +64,7 @@ def test_read_only_tool_card_error_expands():
 
     assert card.compact is False
     assert not card.has_class("compact")
-    assert card._label().startswith("[ERR] read_file")
+    assert card._label().startswith("[!] Read file")
 
 
 def test_compact_tool_card_output_remains_expandable():
@@ -419,6 +419,18 @@ def test_tool_output_keeps_markdown_tables_renderable():
     assert _format_tool_output(table) == table
 
 
+def test_read_file_tool_output_gets_clean_preview_without_metadata():
+    from bunnybyte.tui.widgets import _format_tool_output
+
+    raw = '# bunnybyte/core/runtime.py\n   1: hello\n   2: world\n<read_file_meta path="bunnybyte/core/runtime.py" start="1" end="2" returned_lines="2" total_lines="2" eof="true" />'
+
+    output = _format_tool_output(raw, "read_file")
+
+    assert output.startswith("### runtime.py")
+    assert "```text\n   1: hello\n   2: world\n```" in output
+    assert "read_file_meta" not in output
+
+
 def test_status_bar_reads_context_usage_governance_fields():
     from bunnybyte.tui.widgets import StatusBar
 
@@ -760,6 +772,9 @@ async def test_tui_dream_command_runs_without_blocking_event_loop(tmp_path, monk
 
         assert started.wait(timeout=1)
         assert bar.input.disabled is True
+        assert app._command_task_handle is not None
+        assert not app._command_task_handle.done()
+        assert bar.stop_button.has_class("stoppable")
 
         ticked = False
 
@@ -970,7 +985,7 @@ def test_read_file_tool_card_summary_includes_line_range():
 
     summary = format_tool_args("read_file", {"path": "bunnybyte/core/compact.py", "start": 20, "end": 80})
 
-    assert summary == "bunnybyte/core/compact.py:20-80"
+    assert summary == "compact.py · lines 20-80"
 
 
 @pytest.mark.asyncio
@@ -1028,7 +1043,132 @@ async def test_tui_provider_command_refreshes_welcome_banner(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_tui_runs_agent_turn_and_renders_final_answer(tmp_path):
+async def test_tui_stop_button_aborts_running_agent_turn(tmp_path):
+    import threading
+
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar
+
+    class BlockingClient:
+        provider = "test"
+        protocol = "test"
+        model = "blocking"
+
+        def __init__(self):
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.abort_called = False
+
+        def complete(self, messages, tools=None, **kwargs):
+            self.started.set()
+            self.release.wait(timeout=2)
+            return "<final>late</final>"
+
+        def abort(self):
+            self.abort_called = True
+            self.release.set()
+
+    client = BlockingClient()
+    agent = build_agent(tmp_path, [])
+    agent.model_client = client
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = "stop me"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.1)
+
+        assert client.started.wait(timeout=1)
+        assert bar.input.disabled is True
+        assert bar.stop_button.has_class("stoppable")
+
+        await pilot.click("#stop-turn")
+        await pilot.pause(delay=0.1)
+
+        assert client.abort_called is True
+        assert app._stop_requested is True
+
+
+@pytest.mark.asyncio
+async def test_tui_stop_button_sets_stopping_state_while_agent_turn_is_still_running(tmp_path):
+    import threading
+
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar
+
+    class StickyAbortClient:
+        provider = "test"
+        protocol = "test"
+        model = "blocking"
+
+        def __init__(self):
+            self.started = threading.Event()
+            self.abort_called = False
+
+        def complete(self, messages, tools=None, **kwargs):
+            self.started.set()
+            threading.Event().wait(timeout=1)
+            return "<final>late</final>"
+
+        def abort(self):
+            self.abort_called = True
+
+    client = StickyAbortClient()
+    agent = build_agent(tmp_path, [])
+    agent.model_client = client
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = "stop me"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.1)
+
+        assert client.started.wait(timeout=1)
+        await pilot.click("#stop-turn")
+        await pilot.pause(delay=0.1)
+
+        assert client.abort_called is True
+        assert bar.stop_button.disabled is True
+        assert bar.stop_button.has_class("stopping")
+
+
+@pytest.mark.asyncio
+async def test_tui_stop_button_cancels_running_command_task(tmp_path, monkeypatch):
+    import threading
+
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_command(_agent, text):
+        started.set()
+        release.wait(timeout=2)
+        return True, False, "finished"
+
+    monkeypatch.setattr("bunnybyte.tui.app.handle_repl_command", slow_command)
+    agent = build_agent(tmp_path, [])
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = "/dream"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.1)
+
+        assert started.wait(timeout=1)
+        assert app._is_command_running() is True
+
+        await pilot.click("#stop-turn")
+        await pilot.pause(delay=0.1)
+
+        assert app._is_command_running() is False
+        assert "已请求停止当前命令" in "\n".join(assistant_contents(app))
+        release.set()
+
     from bunnybyte.tui.app import BunnyByteTuiApp
     from bunnybyte.tui.widgets import InputBar
 

@@ -11,6 +11,7 @@ from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.events import Key
+from textual.widgets import Button
 
 from ..commands.slash import resolve_command
 from ..cli import HELP_DETAILS, handle_repl_command, provider_profiles_for_agent
@@ -55,6 +56,7 @@ class BunnyByteTuiApp(App):
             show=False,
         ),
         Binding("enter", "submit_input", "Send", priority=True, show=False),
+        Binding("ctrl+x", "stop_turn", "Stop response", priority=True),
         Binding("ctrl+l", "clear_screen", "Clear"),
         Binding("ctrl+q", "quit", "Quit"),
     ]
@@ -69,6 +71,9 @@ class BunnyByteTuiApp(App):
         self._ask_user_prompt: AskUserPrompt | None = None
         self._ask_user_decision: tuple[threading.Event, dict] | None = None
         self._assistant_stream_task: asyncio.Task | None = None
+        self._agent_task_handle: asyncio.Task | None = None
+        self._command_task_handle: asyncio.Task | None = None
+        self._stop_requested = False
         self._model_stream_widget = None
         self._model_stream_content = ""
         self._model_stream_rendered = ""
@@ -117,6 +122,38 @@ class BunnyByteTuiApp(App):
             raise SkipAction()
         self.copy_to_clipboard(selection)
         _copy_to_system_clipboard(selection)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "stop-turn":
+            event.stop()
+            self.action_stop_turn()
+
+    def action_stop_turn(self) -> None:
+        if self._is_agent_turn_running():
+            if self._stop_requested:
+                return
+            self._stop_requested = True
+            self.agent.abort_current_turn()
+            detail = "正在停止当前回复..."
+            self.query_one(InputBar).set_busy(True, stopping=True)
+            self.query_one(ThinkingIndicator).set_detail(detail)
+            self.query_one(WelcomeBanner).advance_activity(detail)
+            return
+        if self._is_command_running():
+            if self._command_task_handle is not None:
+                self._command_task_handle.cancel()
+            detail = "正在停止当前命令..."
+            self.query_one(InputBar).set_busy(True, stopping=True)
+            self.query_one(ThinkingIndicator).set_detail(detail)
+            self.query_one(WelcomeBanner).advance_activity(detail)
+            return
+        raise SkipAction()
+
+    def _is_agent_turn_running(self) -> bool:
+        return self._agent_task_handle is not None and not self._agent_task_handle.done()
+
+    def _is_command_running(self) -> bool:
+        return self._command_task_handle is not None and not self._command_task_handle.done()
 
     def action_submit_input(self) -> None:
         if self._ask_user_prompt is not None:
@@ -188,7 +225,10 @@ class BunnyByteTuiApp(App):
         elif event.key == "down" and bar.move_slash_selection(1):
             event.prevent_default()
         elif event.key == "escape":
-            bar.hide_slash_suggestions()
+            if self._is_agent_turn_running() or self._is_command_running():
+                self.action_stop_turn()
+            else:
+                bar.hide_slash_suggestions()
             event.prevent_default()
         elif event.key == "up":
             bar.history_prev()
@@ -204,12 +244,12 @@ class BunnyByteTuiApp(App):
         self._handle_command_result(text, from_thread=False)
 
     def _run_command_in_executor(self, text: str) -> None:
-        self.query_one(InputBar).set_busy(True)
+        self.query_one(InputBar).set_busy(True, stoppable=True)
         self.query_one(WelcomeBanner).set_activity(True, f"运行 {text.strip()}")
-        self.query_one(ThinkingIndicator).show()
+        self.query_one(ThinkingIndicator).show("Ctrl+X / Esc 或 Stop 停止命令")
         self.query_one(ThinkingIndicator).set_detail(f"运行 {text.strip()}")
         self._thinking_timer = self.set_interval(0.3, self._advance_activity)
-        asyncio.create_task(self._command_task(text))
+        self._command_task_handle = asyncio.create_task(self._command_task(text))
 
     async def _command_task(self, text: str) -> None:
         loop = asyncio.get_running_loop()
@@ -217,6 +257,9 @@ class BunnyByteTuiApp(App):
             await loop.run_in_executor(
                 None, partial(self._handle_command_result, text, from_thread=True)
             )
+        except asyncio.CancelledError:
+            self.query_one(ChatLog).add_message("assistant", "已请求停止当前命令。")
+            raise
         except Exception as exc:
             self.query_one(ChatLog).add_message("assistant", f"[错误] {exc}")
         finally:
@@ -285,11 +328,12 @@ class BunnyByteTuiApp(App):
         return format_tool_args(name, args)
 
     def _run_agent(self, text: str) -> None:
+        self._stop_requested = False
         self.query_one(InputBar).set_busy(True)
         self.query_one(WelcomeBanner).set_activity(True, "思考中")
-        self.query_one(ThinkingIndicator).show()
+        self.query_one(ThinkingIndicator).show("按 Ctrl+X / Esc 或点击 Stop 停止")
         self._thinking_timer = self.set_interval(0.3, self._advance_activity)
-        asyncio.create_task(self._agent_task(text))
+        self._agent_task_handle = asyncio.create_task(self._agent_task(text))
 
     def _drain_idle_worker_notifications(self) -> None:
         if self.query_one(InputBar).input.disabled:

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import html
 import json
 import re
 from pathlib import Path
 
 from rich.text import Text
-from textual.containers import VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Collapsible, Input, Markdown, Static
+from textual.widgets import Button, Collapsible, Input, Markdown, Static
 
 from ..branding import (
     AI_NOTICE,
@@ -38,7 +39,7 @@ def format_tool_args(name: str, args: dict | None) -> str:
         if name == "read_file":
             start = args.get("start", 1)
             end = args.get("end", 200)
-            return f"{path}:{start}-{end}"
+            return f"{Path(path).name} · lines {start}-{end}"
         if name == "write_file":
             return f"{path} ({len(str(args.get('content', '')))} chars)"
         return path
@@ -254,6 +255,21 @@ class AssistantMessage(Static):
 
 
 READ_ONLY_DISPLAY_TOOLS = {"read_file", "search", "list_files"}
+TOOL_DISPLAY_NAMES = {
+    "read_file": "Read file",
+    "search": "Search",
+    "list_files": "List files",
+    "run_shell": "Run shell",
+    "write_file": "Write file",
+    "patch_file": "Patch file",
+    "agent": "Agent",
+    "send_message": "Message agent",
+    "task_stop": "Stop task",
+}
+
+
+def _display_tool_name(name: str) -> str:
+    return TOOL_DISPLAY_NAMES.get(name, name.replace("_", " ").title())
 
 
 def summarize_tool_output(name: str, output: str) -> str:
@@ -264,11 +280,12 @@ def summarize_tool_output(name: str, output: str) -> str:
         meta = re.search(r'<read_file_meta [^>]*returned_lines="(\d+)"[^>]*total_lines="(\d+)"[^>]*eof="(true|false)"', text)
         if meta:
             lines, total, eof = meta.groups()
-            return f"{lines} lines read, {total} total" + (", complete" if eof == "true" else "")
+            summary = f"{lines} lines · {total} total"
+            return summary + (" · complete" if eof == "true" else "")
         if text.startswith("File range already read"):
-            return "已读取过，复用缓存范围"
+            return "已读取过 · 复用缓存"
         line_count = sum(1 for line in text.splitlines() if re.match(r"\s*\d+:", line))
-        return f"{line_count} lines read"
+        return f"{line_count} lines"
     if name == "search":
         count = len([line for line in text.splitlines() if line.strip()])
         return "no matches" if text == "(no matches)" else f"{count} match" + ("" if count == 1 else "es")
@@ -304,13 +321,16 @@ class ToolCard(Static):
         width: 100%;
     }
     ToolCard.compact {
-        margin: 0 0 0 0;
+        margin: 0 0 1 0;
         padding: 0 1;
-        background: #0f1117;
-        border: none;
+        background: #10131b;
+        border-left: thick #3b82f6;
     }
     ToolCard.compact .tool-output {
-        max-height: 14;
+        max-height: 16;
+        margin: 1 0 0 0;
+        padding: 0 1;
+        background: #0b0f16;
     }
     """
 
@@ -335,15 +355,22 @@ class ToolCard(Static):
         yield self._collapsible
 
     def _label(self) -> str:
-        icon = {"running": "...", "success": "OK", "error": "ERR"}.get(
-            self.status, ".."
+        icon = {"running": "…", "success": "✓", "error": "!"}.get(
+            self.status, "•"
         )
-        prefix = "·" if self.compact and self.status == "success" else f"[{icon}]"
-        label = f"{prefix} {self.tool_name}"
+        tool_name = _display_tool_name(self.tool_name)
+        if self.compact and self.status == "success":
+            parts = [f"✓ {tool_name}"]
+            if self.args_summary:
+                parts.append(self.args_summary)
+            if self.result_summary:
+                parts.append(self.result_summary)
+            return "  │  ".join(parts)
+        label = f"[{icon}] {tool_name}"
         if self.args_summary:
-            label += f": {self.args_summary}"
+            label += f"  │  {self.args_summary}"
         if self.result_summary:
-            label += f" — {self.result_summary}"
+            label += f"  │  {self.result_summary}"
         return label
 
     def _refresh_label(self) -> None:
@@ -356,7 +383,7 @@ class ToolCard(Static):
         self.result_summary = summarize_tool_output(self.tool_name, output) if self.compact else ""
         self._refresh_label()
         if self._output_widget is not None:
-            self._output_widget.update(_format_tool_output(output))
+            self._output_widget.update(_format_tool_output(output, self.tool_name))
         if self._collapsible is not None:
             self._collapsible.collapsed = True
 
@@ -369,7 +396,7 @@ class ToolCard(Static):
             self.remove_class("compact")
         self._refresh_label()
         if self._output_widget is not None:
-            self._output_widget.update(_format_tool_output(output))
+            self._output_widget.update(_format_tool_output(output, self.tool_name))
         if self._collapsible is not None:
             self._collapsible.collapsed = False
 
@@ -739,15 +766,52 @@ class InputBar(Static):
         padding: 0 1 1 1;
         background: #0f1117;
     }
+    InputBar Horizontal {
+        height: 3;
+        width: 100%;
+    }
     InputBar Input {
         height: 3;
+        width: 1fr;
         border: round #6fd13e;
+    }
+    InputBar Button {
+        display: none;
+        width: 9;
+        height: 3;
+        min-width: 9;
+        margin: 0 0 0 1;
+        border: round #6b7280;
+        background: #161b24;
+        color: #cbd5e1;
+    }
+    InputBar Button:hover {
+        border: round #fb7185;
+        background: #2a1218;
+        color: #ffe4e6;
+    }
+    InputBar.busy Button.stoppable {
+        display: block;
+        border: round #fb7185;
+        background: #241117;
+        color: #fecdd3;
+    }
+    InputBar.busy Button.stopping {
+        display: block;
+        border: round #f59e0b;
+        background: #261904;
+        color: #fde68a;
+    }
+    InputBar.busy Input {
+        border: round #f59e0b;
     }
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.input = Input(placeholder=PROMPT_PLACEHOLDER)
+        self.stop_button = Button("Stop", id="stop-turn")
+        self.stop_button.add_class("stoppable")
         self.history: list[str] = []
         self.history_index = 0
         self._slash_suggestions: list[SlashCommand] = []
@@ -756,15 +820,38 @@ class InputBar(Static):
         self._skill_commands: list[SlashCommand] = []
 
     def compose(self):
-        yield self.input
+        with Horizontal():
+            yield self.input
+            yield self.stop_button
         yield SlashSuggestions()
 
     def focus_input(self) -> None:
         self.input.focus()
 
-    def set_busy(self, busy: bool) -> None:
-        self.input.disabled = bool(busy)
-        self.input.placeholder = BUSY_PLACEHOLDER if busy else PROMPT_PLACEHOLDER
+    def set_busy(self, busy: bool, stoppable: bool = True, stopping: bool = False) -> None:
+        busy = bool(busy)
+        stoppable = bool(stoppable) and busy
+        stopping = bool(stopping) and stoppable
+        self.input.disabled = busy
+        if not busy:
+            self.input.placeholder = PROMPT_PLACEHOLDER
+            self.stop_button.label = "Stop"
+            self.stop_button.disabled = False
+        elif stopping:
+            self.input.placeholder = f"{BUSY_PLACEHOLDER}  正在停止..."
+            self.stop_button.label = "Stopping"
+            self.stop_button.disabled = True
+        elif stoppable:
+            self.input.placeholder = f"{BUSY_PLACEHOLDER}  Ctrl+X / Esc 停止"
+            self.stop_button.label = "Stop"
+            self.stop_button.disabled = False
+        else:
+            self.input.placeholder = BUSY_PLACEHOLDER
+            self.stop_button.label = "Stop"
+            self.stop_button.disabled = True
+        self.set_class(busy, "busy")
+        self.stop_button.set_class(stoppable and not stopping, "stoppable")
+        self.stop_button.set_class(stopping, "stopping")
 
     def set_provider_profiles(self, profiles) -> None:
         self._provider_profiles = [
@@ -956,13 +1043,38 @@ def _clip(text: str, limit: int = 1200) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-def _format_tool_output(text: str, limit: int = 1200) -> str:
+def _format_tool_output(text: str, tool_name: str = "", limit: int = 1200) -> str:
     clipped = _clip(text, limit=limit).strip()
     if not clipped:
         return ""
+    if tool_name == "read_file":
+        return _format_read_file_output(clipped)
     if _looks_like_markdown(clipped):
         return clipped
     return "```text\n" + clipped.replace("```", "`​``") + "\n```"
+
+
+def _format_read_file_output(text: str) -> str:
+    lines = []
+    path = ""
+    for raw_line in text.splitlines():
+        if raw_line.startswith("<read_file_meta "):
+            meta_path = re.search(r'path="([^"]*)"', raw_line)
+            if meta_path:
+                path = html.unescape(meta_path.group(1))
+            continue
+        if raw_line.startswith("# ") and not path:
+            path = raw_line[2:].strip()
+            continue
+        if re.match(r"\s*\d+:", raw_line):
+            lines.append(raw_line)
+    if not lines:
+        return "```text\n" + text.replace("```", "`​``") + "\n```"
+    title = f"### {Path(path).name}" if path else "### File preview"
+    preview = "\n".join(lines[:120]).replace("```", "`​``")
+    if len(lines) > 120:
+        preview += f"\n... {len(lines) - 120} more lines"
+    return f"{title}\n\n```text\n{preview}\n```"
 
 
 def _looks_like_markdown(text: str) -> bool:
