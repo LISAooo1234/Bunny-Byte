@@ -38,8 +38,6 @@ Bunny Byte 的目标是：**像本地工程工具一样透明，像 coding agent
 
 TUI 和 REPL 使用同一个 runtime。TUI 里可以看到模型状态、工具调用、工具结果、worker 通知、slash command 补全、session 进度和上下文用量。
 
-> 下面图片均来自实际 TUI 运行截图；如果界面有变化，请用真实运行截图替换，不要使用合成图。
-
 <p align="center">
   <strong>工具和子 agent</strong><br>
   <img src="assets/screenshots/bunnybyte-tui-tools.png" alt="bunnybyte TUI 工具调用和子 agent" width="960">
@@ -129,12 +127,12 @@ bbtui          # TUI 短别名
 
 Bunny Byte 启动前会解析一个 **provider profile**。profile 名字用于选择配置；真正决定 HTTP 请求格式的是 `protocol`。
 
-| 字段 | 作用 |
-| --- | --- |
+| 字段         | 作用                                             |
+| ------------ | ------------------------------------------------ |
 | `protocol` | 请求协议，目前支持 `openai` 和 `anthropic`。 |
-| `api_key` | 发给 provider 的 key。 |
-| `base_url` | provider endpoint。 |
-| `model` | 本次请求使用的模型名。 |
+| `api_key`  | 发给 provider 的 key。                           |
+| `base_url` | provider endpoint。                              |
+| `model`    | 本次请求使用的模型名。                           |
 
 ### 小白推荐：全局配置一次
 
@@ -237,12 +235,12 @@ bunny
 
 常用变量：
 
-| Provider | 变量 |
-| --- | --- |
-| DeepSeek | `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL` |
-| OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` |
+| Provider             | 变量                                                               |
+| -------------------- | ------------------------------------------------------------------ |
+| DeepSeek             | `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`    |
+| OpenAI-compatible    | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`          |
 | Anthropic-compatible | `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` |
-| 通用覆盖 | `BUNNYBYTE_API_KEY`, `BUNNYBYTE_BASE_URL`, `BUNNYBYTE_MODEL` |
+| 通用覆盖             | `BUNNYBYTE_API_KEY`, `BUNNYBYTE_BASE_URL`, `BUNNYBYTE_MODEL` |
 
 更多配置见 [docs/configuration.md](docs/configuration.md)。
 
@@ -288,44 +286,44 @@ bunny --max-new-tokens 32000           # 可选：显式限制每步最大输出
 
 常用命令：
 
-| 命令 | 作用 |
-| --- | --- |
-| `/help` | 查看内置命令。 |
-| `/skills` | 列出可用 skills。 |
-| `/skill <name> [args]` | 运行指定 skill。 |
-| `/session` | 查看当前 session、events、run 路径。 |
-| `/history` | 列出历史普通 session（默认隐藏 worker / dream 内部 session）。 |
-| `/resume latest` | 续接最近普通 session。 |
-| `/context` | 查看 prompt context 使用情况。 |
-| `/usage` | 查看 provider、model、token 元数据。 |
-| `/memory` | 查看 durable memory 索引。 |
-| `/working-memory` | 查看当前 session 工作记忆。 |
-| `/remember <text>` | 保存一条 durable note 到 daily log。 |
-| `/dream` | 把 daily log 整合成 durable memory topics。 |
-| `/plan <topic>` | 进入 plan mode。 |
-| `/plan-exit` | 退出 plan mode。 |
-| `/agents` | 查看子 agent / worker 状态。 |
-| `/subagent explore <task>` | 手动启动只读 Explore 子任务。 |
-| `/model <name>` | 当前 session 临时切模型。 |
-| `/provider <name>` | 当前 session 临时切 provider profile。 |
-| `/compact` | 压缩较早的对话历史。 |
-| `/clear` | 开一个新的空 session。 |
-| `/exit` | 退出 bunnybyte。 |
+| 命令                         | 作用                                                           |
+| ---------------------------- | -------------------------------------------------------------- |
+| `/help`                    | 查看内置命令。                                                 |
+| `/skills`                  | 列出可用 skills。                                              |
+| `/skill <name> [args]`     | 运行指定 skill。                                               |
+| `/session`                 | 查看当前 session、events、run 路径。                           |
+| `/history`                 | 列出历史普通 session（默认隐藏 worker / dream 内部 session）。 |
+| `/resume latest`           | 续接最近普通 session。                                         |
+| `/context`                 | 查看 prompt context 使用情况。                                 |
+| `/usage`                   | 查看 provider、model、token 元数据。                           |
+| `/memory`                  | 查看 durable memory 索引。                                     |
+| `/working-memory`          | 查看当前 session 工作记忆。                                    |
+| `/remember <text>`         | 保存一条 durable note 到 daily log。                           |
+| `/dream`                   | 把 daily log 整合成 durable memory topics。                    |
+| `/plan <topic>`            | 进入 plan mode。                                               |
+| `/plan-exit`               | 退出 plan mode。                                               |
+| `/agents`                  | 查看子 agent / worker 状态。                                   |
+| `/subagent explore <task>` | 手动启动只读 Explore 子任务。                                  |
+| `/model <name>`            | 当前 session 临时切模型。                                      |
+| `/provider <name>`         | 当前 session 临时切 provider profile。                         |
+| `/compact`                 | 压缩较早的对话历史。                                           |
+| `/clear`                   | 开一个新的空 session。                                         |
+| `/exit`                    | 退出 bunnybyte。                                               |
 
 ## 核心能力
 
-| 能力 | 说明 |
-| --- | --- |
-| TUI / REPL / one-shot | 同一个 runtime，不同入口。 |
-| 文本协议解析 | 支持 `<tool>` / `<final>`；可保留短 preamble；支持多工具块和部分格式恢复。 |
-| 工具执行 | 文件列表、读文件、搜索、shell、写文件、patch、ask_user、todo、子 agent。 |
-| Retry 修正 | 模型协议错误会作为当前 turn 的临时 correction 重试，不再长期污染普通 history。 |
-| Plan mode | 先读代码和拆计划，再进入执行阶段。 |
-| 子 agent | Explore 只读探索；worker 可按 write scope 处理局部任务；内部 session 默认隐藏。 |
-| Skills | 内置 `/review`、`/test`、`/commit`、`/simplify`，也支持用户和项目自定义。 |
-| Memory | working memory、daily logs、durable topics、auto-dream。 |
-| Evidence | session JSON、event stream、run trace、task state、report、checkpoint。 |
-| Sandbox | 对 `run_shell` 做可选隔离。 |
+| 能力                  | 说明                                                                              |
+| --------------------- | --------------------------------------------------------------------------------- |
+| TUI / REPL / one-shot | 同一个 runtime，不同入口。                                                        |
+| 文本协议解析          | 支持 `<tool>` / `<final>`；可保留短 preamble；支持多工具块和部分格式恢复。    |
+| 工具执行              | 文件列表、读文件、搜索、shell、写文件、patch、ask_user、todo、子 agent。          |
+| Retry 修正            | 模型协议错误会作为当前 turn 的临时 correction 重试，不再长期污染普通 history。    |
+| Plan mode             | 先读代码和拆计划，再进入执行阶段。                                                |
+| 子 agent              | Explore 只读探索；worker 可按 write scope 处理局部任务；内部 session 默认隐藏。   |
+| Skills                | 内置 `/review`、`/test`、`/commit`、`/simplify`，也支持用户和项目自定义。 |
+| Memory                | working memory、daily logs、durable topics、auto-dream。                          |
+| Evidence              | session JSON、event stream、run trace、task state、report、checkpoint。           |
+| Sandbox               | 对 `run_shell` 做可选隔离。                                                     |
 
 ## 子 agent 和委派任务
 
@@ -338,19 +336,19 @@ Bunny Byte 可以把复杂任务拆给子 agent：
 
 ## 本地文件
 
-| 数据 | 路径 |
-| --- | --- |
-| 全局配置 | `~/.config/bunnybyte/config.toml` |
-| 项目级覆盖配置 | `.bunnybyte.toml` |
-| 会话历史 | `.bunnybyte/sessions/<id>.json` |
-| 事件流 | `.bunnybyte/sessions/<id>.events.jsonl` |
-| 运行证据 | `.bunnybyte/runs/<run_id>/` |
-| 记忆索引 | `.bunnybyte/memory/MEMORY.md` |
-| Daily logs | `.bunnybyte/memory/logs/YYYY/MM/YYYY-MM-DD.md` |
-| Durable topics | `.bunnybyte/memory/topics/*.md` |
-| 用户 skills | `~/.bunnybyte/skills/<name>/SKILL.md` |
-| 项目 skills | `skills/<name>/SKILL.md` 或 `.bunnybyte/skills/<name>/SKILL.md` |
-| 计划文件 | `.bunnybyte/plans/*.md` |
+| 数据           | 路径                                                                |
+| -------------- | ------------------------------------------------------------------- |
+| 全局配置       | `~/.config/bunnybyte/config.toml`                                 |
+| 项目级覆盖配置 | `.bunnybyte.toml`                                                 |
+| 会话历史       | `.bunnybyte/sessions/<id>.json`                                   |
+| 事件流         | `.bunnybyte/sessions/<id>.events.jsonl`                           |
+| 运行证据       | `.bunnybyte/runs/<run_id>/`                                       |
+| 记忆索引       | `.bunnybyte/memory/MEMORY.md`                                     |
+| Daily logs     | `.bunnybyte/memory/logs/YYYY/MM/YYYY-MM-DD.md`                    |
+| Durable topics | `.bunnybyte/memory/topics/*.md`                                   |
+| 用户 skills    | `~/.bunnybyte/skills/<name>/SKILL.md`                             |
+| 项目 skills    | `skills/<name>/SKILL.md` 或 `.bunnybyte/skills/<name>/SKILL.md` |
+| 计划文件       | `.bunnybyte/plans/*.md`                                           |
 
 ## 项目结构
 
@@ -383,12 +381,12 @@ BUNNYBYTE_LIVE_SMOKE=1 pytest tests/test_release_smoke.py -q
 
 ## 文档
 
-| 入口 | 内容 |
-| --- | --- |
-| [配置](docs/configuration.md) | 全局 provider 配置、项目级覆盖、环境变量和 sandbox 配置。 |
-| [分层记忆 + auto-dream](docs/memory.md) | working memory、daily logs、durable topics 和后台整合。 |
-| [Skills](docs/skills.md) | `SKILL.md` 目录结构、内置技能和自定义 workflow。 |
-| [Sandbox](docs/sandbox.md) | `run_shell` 隔离模式、backend 选择和文件系统边界。 |
+| 入口                                 | 内容                                                      |
+| ------------------------------------ | --------------------------------------------------------- |
+| [配置](docs/configuration.md)           | 全局 provider 配置、项目级覆盖、环境变量和 sandbox 配置。 |
+| [分层记忆 + auto-dream](docs/memory.md) | working memory、daily logs、durable topics 和后台整合。   |
+| [Skills](docs/skills.md)                | `SKILL.md` 目录结构、内置技能和自定义 workflow。        |
+| [Sandbox](docs/sandbox.md)              | `run_shell` 隔离模式、backend 选择和文件系统边界。      |
 
 ## License
 
