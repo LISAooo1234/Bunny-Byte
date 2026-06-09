@@ -380,6 +380,78 @@ def test_provider_command_applies_cli_overrides_when_switching(tmp_path, monkeyp
     assert agent.model_client.model == "cli-model-override"
 
 
+def test_model_client_factory_rereads_provider_config_without_stale_client_values(
+    tmp_path, monkeypatch
+):
+    from bunnybyte.cli import (
+        build_agent as build_cli_agent,
+        build_arg_parser,
+        handle_repl_command,
+    )
+
+    class DummyOpenAIClient:
+        provider = "openai"
+        protocol = "openai"
+        supports_prompt_cache = False
+
+        def __init__(self, model="", base_url="", api_key="", temperature=None, timeout=0):
+            self.model = model
+            self.base_url = base_url
+            self.api_key = api_key
+            self.temperature = temperature
+            self.timeout = timeout
+            self.last_completion_metadata = {}
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                'provider = "openai"',
+                "",
+                "[providers.openai]",
+                'protocol = "openai"',
+                'api_key = "sk-old"',
+                'base_url = "https://old.example.test"',
+                'model = "old-model"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("bunnybyte.cli.OpenAICompatibleModelClient", DummyOpenAIClient)
+    args = build_arg_parser().parse_args(
+        ["--cwd", str(tmp_path), "--config", str(config_path), "--approval", "auto"]
+    )
+    agent = build_cli_agent(args)
+
+    assert agent.model_client.base_url == "https://old.example.test"
+    config_path.write_text(
+        "\n".join(
+            [
+                'provider = "openai"',
+                "",
+                "[providers.openai]",
+                'protocol = "openai"',
+                'api_key = "sk-new"',
+                'base_url = "https://new.example.test"',
+                'model = "new-model"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    refreshed = agent.model_client_factory()
+
+    assert refreshed.base_url == "https://new.example.test"
+    assert refreshed.api_key == "sk-new"
+    assert refreshed.model == "new-model"
+
+    handled, _, _ = handle_repl_command(agent, "/model manual-model")
+    assert handled is True
+    assert agent.model_client_factory().model == "manual-model"
+
+
 def test_session_history_resume_and_clear_commands(tmp_path):
     from bunnybyte.cli import handle_repl_command
 

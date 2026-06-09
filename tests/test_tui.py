@@ -67,6 +67,31 @@ def test_read_only_tool_card_error_expands():
     assert card._label().startswith("[ERR] read_file")
 
 
+def test_slash_suggestions_include_direct_skills(tmp_path):
+    from bunnybyte.tui.widgets import InputBar
+
+    agent = build_agent(tmp_path, [])
+    bar = InputBar()
+    bar.set_skills(agent.skills)
+
+    suggestions = bar._skill_suggestions("/re")
+
+    assert any(command.name == "review" for command in suggestions)
+
+
+def test_skill_command_suggests_skill_names(tmp_path):
+    from bunnybyte.tui.widgets import InputBar
+
+    agent = build_agent(tmp_path, [])
+    bar = InputBar()
+    bar.set_skills(agent.skills)
+
+    suggestions = bar._skill_suggestions("/skill re")
+
+    assert suggestions
+    assert suggestions[0].name == "skill review"
+
+
 def test_progress_panel_shows_tasks_and_workers(tmp_path):
     from bunnybyte.tui.widgets import ProgressPanel
 

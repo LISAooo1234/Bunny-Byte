@@ -299,14 +299,15 @@ def build_agent(args):
 def _attach_provider_switching(agent, args):
     def current_model_client_factory():
         current = getattr(agent, "model_client", None)
+        model_override = getattr(agent, "_bunnybyte_model_override", None)
         config = resolve_provider_config(
             _client_string_attr(current, "provider")
             or getattr(args, "provider", None),
             start=getattr(args, "cwd", "."),
             config_path=getattr(args, "config", None),
-            model=_client_string_attr(current, "model"),
-            base_url=_client_string_attr(current, "base_url"),
-            api_key=_client_string_attr(current, "api_key"),
+            model=model_override or getattr(args, "model", None),
+            base_url=getattr(args, "base_url", None),
+            api_key=getattr(args, "api_key", None),
         )
         return _model_client_from_config(args, config)
 
@@ -741,6 +742,7 @@ def handle_repl_command(agent, user_input):
         if not model:
             return True, False, _format_model(agent)
         setattr(agent.model_client, "model", model)
+        setattr(agent, "_bunnybyte_model_override", model)
         agent.session_event_bus.emit("model_changed", {"model": model})
         agent.refresh_prefix(force=True)
         return True, False, _format_model(agent)
@@ -930,6 +932,7 @@ def _switch_provider(agent, provider):
     previous_provider = getattr(agent.model_client, "provider", "") or ""
     previous_model = getattr(agent.model_client, "model", "") or ""
     agent.model_client = client
+    setattr(agent, "_bunnybyte_model_override", None)
     agent.last_completion_metadata = {}
     agent.refresh_prefix(force=True)
     agent.resume_state = agent.evaluate_resume_state()

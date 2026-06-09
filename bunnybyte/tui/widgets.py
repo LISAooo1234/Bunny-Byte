@@ -753,6 +753,7 @@ class InputBar(Static):
         self._slash_suggestions: list[SlashCommand] = []
         self._slash_index = 0
         self._provider_profiles: list[tuple[str, str, str]] = []
+        self._skill_commands: list[SlashCommand] = []
 
     def compose(self):
         yield self.input
@@ -776,6 +777,30 @@ class InputBar(Static):
             if str(getattr(profile, "name", "") or "").strip()
         ]
 
+    def set_skills(self, skills) -> None:
+        commands: list[SlashCommand] = []
+        for name in sorted(skills or {}):
+            skill = skills[name]
+            if not getattr(skill, "user_invocable", True):
+                continue
+            hint = str(getattr(skill, "argument_hint", "") or "").strip()
+            usage = f"/{name} <{hint}>" if hint else f"/{name}"
+            description = (
+                str(getattr(skill, "description", "") or "").strip()
+                or str(getattr(skill, "when_to_use", "") or "").strip()
+                or "Run skill."
+            )
+            commands.append(
+                SlashCommand(
+                    str(name),
+                    usage,
+                    description,
+                    "技能",
+                    bool(hint),
+                )
+            )
+        self._skill_commands = commands
+
     def history_prev(self) -> None:
         if not self.history:
             return
@@ -797,7 +822,17 @@ class InputBar(Static):
 
     def update_slash_suggestions(self, text: str | None = None) -> None:
         text = self.input.value if text is None else str(text)
-        self._slash_suggestions = self._provider_suggestions(text) or suggest_commands(text)
+        provider_suggestions = self._provider_suggestions(text)
+        if provider_suggestions:
+            self._slash_suggestions = provider_suggestions
+        else:
+            builtin_suggestions = suggest_commands(text)
+            skill_suggestions = self._skill_suggestions(text)
+            seen = {command.name for command in builtin_suggestions}
+            self._slash_suggestions = (
+                builtin_suggestions
+                + [command for command in skill_suggestions if command.name not in seen]
+            )[:8]
         self._slash_index = 0
         self.query_one(SlashSuggestions).update_suggestions(
             self._slash_suggestions, self._slash_index
@@ -867,6 +902,42 @@ class InputBar(Static):
                 )
             )
         return suggestions[:8]
+
+    def _skill_suggestions(self, text: str) -> list[SlashCommand]:
+        raw = str(text or "")
+        if not raw.startswith("/"):
+            return []
+        body = raw[1:]
+        if " " in body:
+            command, _separator, token = body.partition(" ")
+            if command != "skill":
+                return []
+            token = token.strip().lower()
+            if token and any(command.name == f"skill {token}" for command in self._skill_commands) and raw.endswith(" "):
+                return []
+            matches = []
+            for command in self._skill_commands:
+                skill_name = command.name
+                if token and not skill_name.startswith(token):
+                    continue
+                matches.append(
+                    SlashCommand(
+                        f"skill {skill_name}",
+                        f"/skill {skill_name}",
+                        command.description,
+                        command.category,
+                        command.requires_arguments,
+                    )
+                )
+            return matches[:8]
+        token = body.lower()
+        if token and "skill".startswith(token):
+            return []
+        return [
+            command
+            for command in self._skill_commands
+            if not token or command.name.startswith(token)
+        ][:8]
 
 
 def _session_display_label(agent, limit: int = 32) -> str:
