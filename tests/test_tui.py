@@ -67,6 +67,18 @@ def test_read_only_tool_card_error_expands():
     assert card._label().startswith("[ERR] read_file")
 
 
+def test_compact_tool_card_output_remains_expandable():
+    from bunnybyte.tui.widgets import ToolCard
+
+    card = ToolCard("read_file", "bunnybyte/core/runtime.py:1-2")
+    output = '# bunnybyte/core/runtime.py\n   1: hello\n   2: world\n<read_file_meta path="bunnybyte/core/runtime.py" start="1" end="2" returned_lines="2" total_lines="2" eof="true" />'
+    card.set_success(output)
+
+    assert card.compact is True
+    assert card.output == output
+    assert "ToolCard.compact .tool-output {\n        display: none;" not in ToolCard.DEFAULT_CSS
+
+
 def test_slash_suggestions_include_direct_skills(tmp_path):
     from bunnybyte.tui.widgets import InputBar
 

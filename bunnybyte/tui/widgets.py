@@ -310,7 +310,7 @@ class ToolCard(Static):
         border: none;
     }
     ToolCard.compact .tool-output {
-        display: none;
+        max-height: 14;
     }
     """
 
