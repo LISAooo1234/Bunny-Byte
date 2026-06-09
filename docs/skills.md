@@ -4,10 +4,10 @@ Skill 是一段写在 markdown 文件里的可复用 prompt，可以通过 `/ski
 
 ## 内置 skill
 
-- `/review` — 代码审查当前改动
-- `/test` — 跑测试、整理失败原因
-- `/commit` — 准备 commit 消息和拆分建议
-- `/simplify` — 找代码冗余并修
+- `/review` — 审查当前改动，只报告问题，不直接修改文件
+- `/test` — 运行相关测试并分析失败原因
+- `/commit` — 基于当前 staged changes 创建聚焦的 git commit
+- `/simplify` — 检查改动里的复用、质量和效率问题，并直接修复
 
 ```bash
 bunnybyte

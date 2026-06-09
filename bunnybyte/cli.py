@@ -6,6 +6,7 @@
 """
 
 import argparse
+import getpass
 import json
 import os
 import re
@@ -13,6 +14,7 @@ import time
 import shutil
 import sys
 import textwrap
+from pathlib import Path
 
 from .branding import (
     DISPLAY_HANDLE,
@@ -23,13 +25,16 @@ from .branding import (
 )
 from .commands.slash import command_help_text, parse_subagent_args, resolve_command
 from .config import (
+    DEFAULT_CONFIG_PATH,
     DEFAULT_PROVIDER,
     PROVIDER_DEFAULTS,
+    default_provider_values,
     default_max_tokens_for_provider,
     list_provider_profiles,
     load_project_env,
     resolve_project_sandbox_config,
     resolve_provider_config,
+    write_global_provider_config,
 )
 from .features import skills as skillslib
 from .features.skills_runtime import invoke_skill
@@ -333,6 +338,7 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description="Minimal coding agent for provider profiles backed by OpenAI-compatible or Anthropic-compatible APIs.",
+        epilog="First-time setup: bunny setup. Config helpers: bunny config path, bunny config show.",
     )
     parser.add_argument("prompt", nargs="*", help="可选的一次性提示词。")
     parser.add_argument("--cwd", default=".", help="工作区目录。")
@@ -442,6 +448,193 @@ def build_arg_parser():
         help="使用普通行式 REPL，而不是 TUI。",
     )
     return parser
+
+
+def build_setup_parser():
+    parser = argparse.ArgumentParser(
+        prog="bunny setup",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="Create or update the global Bunny Byte provider config.",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=tuple(PROVIDER_DEFAULTS),
+        default=None,
+        help="Provider profile to configure.",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="Provider API key. Interactive setup uses a hidden prompt instead.",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Provider API base URL. Defaults to the selected provider value.",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model name. Defaults to the selected provider value.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite/update an existing global config without asking.",
+    )
+    parser.add_argument(
+        "--config-path",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="Advanced: write to a custom config path.",
+    )
+    return parser
+
+
+def build_config_parser():
+    parser = argparse.ArgumentParser(
+        prog="bunny config",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="Inspect Bunny Byte's global configuration.",
+    )
+    parser.add_argument(
+        "action",
+        nargs="?",
+        choices=("path", "show"),
+        default="show",
+        help="What to inspect.",
+    )
+    parser.add_argument(
+        "--config-path",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="Advanced: inspect a custom config path.",
+    )
+    return parser
+
+
+def run_setup_command(argv=None):
+    args = build_setup_parser().parse_args(argv)
+    config_path = Path(args.config_path).expanduser()
+    if config_path.exists() and not args.force:
+        if sys.stdin.isatty():
+            answer = input(
+                f"全局配置已存在：{config_path}\n要更新它吗？[y/N] "
+            ).strip().lower()
+            if answer not in {"y", "yes"}:
+                print("未修改配置。")
+                print("查看当前配置：bunny config show")
+                return 0
+        else:
+            print(
+                f"全局配置已存在：{config_path}\n"
+                "如需更新，请运行：bunny setup --force",
+                file=sys.stderr,
+            )
+            return 2
+
+    provider = args.provider or _prompt_provider()
+    if not provider:
+        print(
+            "缺少 provider。示例：bunny setup --provider deepseek --api-key sk-...",
+            file=sys.stderr,
+        )
+        return 2
+
+    defaults = default_provider_values(provider)
+    if not defaults:
+        print(f"未知 provider：{provider}", file=sys.stderr)
+        return 2
+
+    api_key = args.api_key or _prompt_api_key(provider)
+    base_url = args.base_url or _prompt_with_default("Base URL", defaults["base_url"])
+    model = args.model or _prompt_with_default("Model", defaults["model"])
+
+    try:
+        config = write_global_provider_config(
+            provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            protocol=defaults["protocol"],
+            config_path=config_path,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    print(f"已保存全局配置：{config_path}")
+    print(f"默认 provider：{config.name}")
+    print(f"模型：{config.model}")
+    print("")
+    print("现在可以在任意项目目录运行：")
+    print("  bunny")
+    return 0
+
+
+def run_config_command(argv=None):
+    args = build_config_parser().parse_args(argv)
+    config_path = Path(args.config_path).expanduser()
+    if args.action == "path":
+        print(config_path)
+        return 0
+
+    if not config_path.exists():
+        print(f"还没有全局配置：{config_path}")
+        print("运行 `bunny setup` 创建一次，之后任意目录都能直接用。")
+        return 0
+
+    try:
+        active = resolve_provider_config(
+            None, start=Path.cwd(), config_path=str(config_path)
+        )
+        profiles = list_provider_profiles(
+            start=Path.cwd(), config_path=str(config_path)
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    print("全局配置")
+    print(f"路径：{config_path}")
+    print(f"默认 provider：{active.name}")
+    print(f"协议：{active.protocol}")
+    print(f"模型：{active.model}")
+    print(f"Base URL：{sanitize_url(active.base_url) or '-'}")
+    print(f"API key：{'已配置' if active.api_key else '未配置'}")
+    print("")
+    print("可用 provider：")
+    for profile in profiles:
+        marker = "*" if profile.name == active.name else " "
+        print(f" {marker} {profile.name} ({profile.protocol}) {profile.model}")
+    return 0
+
+
+def _prompt_provider():
+    if not sys.stdin.isatty():
+        return ""
+    print("选择默认 provider：")
+    choices = list(PROVIDER_DEFAULTS)
+    for index, name in enumerate(choices, start=1):
+        defaults = PROVIDER_DEFAULTS[name]
+        print(f"  {index}. {name} ({defaults['model']})")
+    answer = input("> ").strip().lower()
+    if answer.isdigit():
+        index = int(answer)
+        if 1 <= index <= len(choices):
+            return choices[index - 1]
+    return answer
+
+
+def _prompt_api_key(provider):
+    if not sys.stdin.isatty():
+        return ""
+    return getpass.getpass(f"{provider} API key: ").strip()
+
+
+def _prompt_with_default(label, default):
+    if not sys.stdin.isatty():
+        return default
+    answer = input(f"{label} [{default}]: ").strip()
+    return answer or default
 
 
 def handle_repl_command(agent, user_input):
@@ -985,6 +1178,14 @@ def interaction_mode(args):
 
 
 def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = list(argv)
+    if argv and argv[0] in {"setup", "configure"}:
+        return run_setup_command(argv[1:])
+    if argv and argv[0] == "config":
+        return run_config_command(argv[1:])
+
     args = build_arg_parser().parse_args(argv)
     try:
         agent = build_agent(args)

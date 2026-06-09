@@ -13,10 +13,18 @@ dependencies = [
 ]
 
 [project.scripts]
+bunny = "bunnybyte.cli:main"
 bunnybyte = "bunnybyte.cli:main"
 bunnybyte-tui = "bunnybyte.tui.main:main"
 bb = "bunnybyte.cli:main"
 bbtui = "bunnybyte.tui.main:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.5",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.4.4",
+]
 
 [dependency-groups]
 dev = [

@@ -26,7 +26,7 @@ find_python() {
 
 main() {
     printf "\n${BOLD}╔══════════════════════════════════════════╗${RESET}\n"
-    printf   "${BOLD}║        bunnybyte  一键安装                    ║${RESET}\n"
+    printf   "${BOLD}║        bunnybyte  one-line install      ║${RESET}\n"
     printf   "${BOLD}╚══════════════════════════════════════════╝${RESET}\n\n"
 
     command -v git &>/dev/null || die "找不到 git，请先安装。"
@@ -60,13 +60,20 @@ main() {
 
     BIN_DIR="${BUNNYBYTE_BIN_DIR:-$HOME/.local/bin}"
     mkdir -p "$BIN_DIR"
-    LAUNCHER="$BIN_DIR/bunnybyte"
+    BUNNY_LAUNCHER="$BIN_DIR/bunny"
+    BUNNYBYTE_LAUNCHER="$BIN_DIR/bunnybyte"
 
-    cat > "$LAUNCHER" <<EOF
+    cat > "$BUNNY_LAUNCHER" <<EOF
+#!/usr/bin/env bash
+exec "${VENV_DIR}/bin/bunny" "\$@"
+EOF
+    chmod +x "$BUNNY_LAUNCHER"
+
+    cat > "$BUNNYBYTE_LAUNCHER" <<EOF
 #!/usr/bin/env bash
 exec "${VENV_DIR}/bin/bunnybyte" "\$@"
 EOF
-    chmod +x "$LAUNCHER"
+    chmod +x "$BUNNYBYTE_LAUNCHER"
 
     printf "\n"
     success "bunnybyte 安装完成！"
@@ -78,15 +85,16 @@ EOF
         printf "    ${BOLD}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc${RESET}\n"
         printf "    ${BOLD}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc  && source ~/.zshrc${RESET}\n\n"
     else
-        printf "  运行：${BOLD}bunnybyte${RESET}\n\n"
+        printf "  运行：${BOLD}bunny${RESET}\n\n"
     fi
 
-    printf "  使用前请设置 API key（三种 provider 任选一个）：\n"
-    printf "    ${BOLD}export ANTHROPIC_API_KEY=sk-ant-...${RESET}        # 使用 Claude\n"
-    printf "    ${BOLD}export OPENAI_API_KEY=sk-...${RESET}                # 使用 GPT\n"
-    printf "    ${BOLD}export DEEPSEEK_API_KEY=sk-...${RESET}              # 使用 DeepSeek\n\n"
+    printf "  首次使用先做一次全局配置：\n"
+    printf "    ${BOLD}bunny setup${RESET}\n\n"
+    printf "  配置后在任意项目目录启动：\n"
+    printf "    ${BOLD}bunny${RESET}\n\n"
     printf "  安装位置：${CYAN}${INSTALL_DIR}${RESET}\n"
-    printf "  启动器：  ${CYAN}${LAUNCHER}${RESET}\n\n"
+    printf "  启动器：  ${CYAN}${BUNNY_LAUNCHER}${RESET}\n"
+    printf "            ${CYAN}${BUNNYBYTE_LAUNCHER}${RESET}\n\n"
 }
 
 main "$@"

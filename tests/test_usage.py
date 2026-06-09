@@ -218,6 +218,84 @@ def test_list_provider_profiles_reads_custom_config(tmp_path):
     assert profiles["deepseek-pro"].api_key == ""
 
 
+def test_setup_command_writes_global_provider_config(tmp_path, capsys):
+    from bunnybyte.cli import main
+
+    config_path = tmp_path / "config.toml"
+
+    assert (
+        main(
+            [
+                "setup",
+                "--provider",
+                "deepseek",
+                "--api-key",
+                "sk-test",
+                "--config-path",
+                str(config_path),
+                "--force",
+            ]
+        )
+        == 0
+    )
+
+    text = config_path.read_text(encoding="utf-8")
+    assert 'provider = "deepseek"' in text
+    assert 'api_key = "sk-test"' in text
+    assert 'base_url = "https://api.deepseek.com/anthropic"' in text
+    assert 'model = "deepseek-v4-pro"' in text
+
+    capsys.readouterr()
+    assert main(["config", "show", "--config-path", str(config_path)]) == 0
+    output = capsys.readouterr().out
+    assert "默认 provider：deepseek" in output
+    assert "API key：已配置" in output
+    assert "sk-test" not in output
+
+
+def test_setup_command_does_not_overwrite_existing_config_without_force(
+    tmp_path, capsys
+):
+    from bunnybyte.cli import main
+
+    config_path = tmp_path / "config.toml"
+    assert (
+        main(
+            [
+                "setup",
+                "--provider",
+                "deepseek",
+                "--api-key",
+                "sk-deepseek",
+                "--config-path",
+                str(config_path),
+                "--force",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "setup",
+                "--provider",
+                "openai",
+                "--api-key",
+                "sk-openai",
+                "--config-path",
+                str(config_path),
+            ]
+        )
+        == 2
+    )
+
+    text = config_path.read_text(encoding="utf-8")
+    assert 'provider = "deepseek"' in text
+    assert "sk-openai" not in text
+
+
 def test_provider_command_applies_cli_overrides_when_switching(tmp_path, monkeypatch):
     from bunnybyte.cli import (
         build_agent as build_cli_agent,

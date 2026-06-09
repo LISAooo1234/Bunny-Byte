@@ -1,5 +1,6 @@
-"""Project-local configuration helpers."""
+"""Configuration helpers."""
 
+import json
 import os
 import re
 import sys
@@ -68,6 +69,11 @@ def default_max_tokens_for_provider(provider: str | None) -> int | None:
         return DEFAULT_MAX_TOKENS_FALLBACK
     key = PROVIDER_ALIASES.get(provider, provider)
     return PROVIDER_MAX_TOKENS.get(key, DEFAULT_MAX_TOKENS_FALLBACK)
+
+
+def default_provider_values(provider: str | None) -> dict[str, str]:
+    provider_name = normalize_provider_name(provider)
+    return dict(PROVIDER_DEFAULTS.get(provider_name, {}))
 
 ENV_PROVIDER = "BUNNYBYTE_PROVIDER"
 ENV_API_KEY = "BUNNYBYTE_API_KEY"
@@ -291,6 +297,66 @@ def list_provider_profiles(
     return profiles
 
 
+def write_global_provider_config(
+    provider: str,
+    *,
+    api_key: str,
+    base_url: str | None = None,
+    model: str | None = None,
+    protocol: str | None = None,
+    config_path: str | Path | None = None,
+) -> ProviderConfig:
+    provider_name = normalize_provider_name(provider)
+    defaults = default_provider_values(provider_name)
+    if not defaults and not protocol:
+        raise ValueError(f"custom provider {provider_name!r} requires protocol")
+    resolved_protocol = _validate_protocol(
+        protocol or defaults.get("protocol"), provider_name
+    )
+    resolved_base_url = str(base_url or defaults.get("base_url") or "").strip()
+    resolved_model = str(model or defaults.get("model") or "").strip()
+    resolved_api_key = str(api_key or "").strip()
+    if not resolved_api_key:
+        raise ValueError("api key is required")
+    if not resolved_base_url:
+        raise ValueError("base URL is required")
+    if not resolved_model:
+        raise ValueError("model is required")
+
+    path = Path(config_path or DEFAULT_CONFIG_PATH).expanduser()
+    values: dict[str, Any] = {"top": {}, "providers": {}, "sandbox": {}}
+    if path.exists():
+        _merge_config_values(values, _read_config_file(path))
+
+    values["top"]["provider"] = provider_name
+    values["providers"].setdefault(provider_name, {}).update(
+        {
+            "protocol": resolved_protocol,
+            "api_key": resolved_api_key,
+            "base_url": resolved_base_url,
+            "model": resolved_model,
+        }
+    )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.chmod(0o700)
+    except OSError:
+        pass
+    path.write_text(_render_config_values(values), encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return ProviderConfig(
+        name=provider_name,
+        protocol=resolved_protocol,
+        api_key=resolved_api_key,
+        base_url=resolved_base_url,
+        model=resolved_model,
+    )
+
+
 def resolve_project_sandbox_config(
     *,
     start: str | Path = ".",
@@ -354,6 +420,61 @@ def _read_config_file(path: Path) -> dict[str, Any]:
         if isinstance(section, dict):
             values["providers"].setdefault(name, {}).update(section)
     return values
+
+
+def _render_config_values(values: dict[str, Any]) -> str:
+    lines: list[str] = []
+    provider = values.get("top", {}).get("provider")
+    if provider:
+        lines.append(f"provider = {_toml_value(provider)}")
+        lines.append("")
+
+    providers = dict(values.get("providers", {}) or {})
+    provider_names = list(providers)
+    if provider in provider_names:
+        provider_names.remove(provider)
+        provider_names.insert(0, provider)
+    for name in provider_names:
+        section = dict(providers.get(name, {}) or {})
+        if not section:
+            continue
+        lines.append(f"[providers.{_toml_key(name)}]")
+        for key in ("protocol", "api_key", "base_url", "model"):
+            value = section.get(key)
+            if value:
+                lines.append(f"{key} = {_toml_value(value)}")
+        extra_keys = sorted(set(section) - {"protocol", "api_key", "base_url", "model"})
+        for key in extra_keys:
+            value = section.get(key)
+            if value is not None:
+                lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
+        lines.append("")
+
+    sandbox = dict(values.get("sandbox", {}) or {})
+    if sandbox:
+        lines.append("[sandbox]")
+        for key in sorted(sandbox):
+            value = sandbox.get(key)
+            if value is not None:
+                lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _toml_key(value: Any) -> str:
+    text = str(value)
+    if re.fullmatch(r"[A-Za-z0-9_-]+", text):
+        return text
+    return json.dumps(text)
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(str(value))
 
 
 def _merge_config_values(target: dict[str, Any], incoming: dict[str, Any]) -> None:

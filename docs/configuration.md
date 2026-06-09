@@ -1,6 +1,8 @@
 # 配置
 
-bunnybyte 的配置按下面这个优先级合并：
+bunnybyte 默认使用全局配置。普通用户只需要运行一次 `bunny setup`，以后在任意项目目录都可以直接 `bunny`。
+
+配置按下面这个优先级合并：
 
 ```
 CLI 显式参数 > 环境变量 > 项目 .bunnybyte.toml > 全局 ~/.config/bunnybyte/config.toml > 代码默认
@@ -10,9 +12,34 @@ CLI 显式参数 > 环境变量 > 项目 .bunnybyte.toml > 全局 ~/.config/bunn
 
 provider 是 TOML 里的一段配置 profile，名字（如 `deepseek` `openai` `anthropic`）只用于人类辨识；真正决定走哪个协议的是 `protocol` 字段，目前支持 `openai` 和 `anthropic` 两种。
 
-### .bunnybyte.toml 示例
+## 新手路径：全局配置
 
-放在仓库根目录，**不要提交真实 key**（默认已被 `.gitignore` 忽略）：
+交互式配置：
+
+```bash
+bunny setup
+```
+
+非交互配置：
+
+```bash
+bunny setup --provider deepseek --api-key sk-...
+```
+
+这会写入：
+
+```text
+~/.config/bunnybyte/config.toml
+```
+
+查看配置：
+
+```bash
+bunny config show
+bunny config path
+```
+
+生成的全局配置示例：
 
 ```toml
 provider = "deepseek"
@@ -22,6 +49,24 @@ protocol = "anthropic"
 api_key = "sk-..."
 base_url = "https://api.deepseek.com/anthropic"
 model = "deepseek-v4-pro"
+```
+
+切 provider：
+
+```bash
+bunny                       # 用全局配置里的默认 provider
+bunny --provider openai     # 临时切换
+bunny --provider anthropic --model claude-opus-4-6
+```
+
+## 项目级覆盖（可选）
+
+只有某个仓库必须使用不同 provider 或不同模型时，才需要项目 `.bunnybyte.toml`。它会覆盖全局配置。
+
+放在仓库根目录，**不要提交真实 key**（默认已被 `.gitignore` 忽略）：
+
+```toml
+provider = "openai"
 
 [providers.openai]
 protocol = "openai"
@@ -34,14 +79,6 @@ protocol = "anthropic"
 api_key = "sk-ant-..."
 base_url = "https://api.anthropic.com"
 model = "claude-sonnet-4-6"
-```
-
-切 provider：
-
-```bash
-bunnybyte                       # 用 toml 里的默认 provider
-bunnybyte --provider openai     # 临时切换
-bunnybyte --provider anthropic --model claude-opus-4-6
 ```
 
 ## 环境变量
@@ -58,38 +95,45 @@ bunnybyte --provider anthropic --model claude-opus-4-6
 
 兼容历史 `.env`：`BUNNYBYTE_OPENAI_*` / `BUNNYBYTE_ANTHROPIC_*` / `BUNNYBYTE_DEEPSEEK_*` 仍然能用。
 
-## 全局配置
-
-`~/.config/bunnybyte/config.toml` 适合放跨项目都用的 provider profile。项目 `.bunnybyte.toml` 覆盖它，CLI 参数再覆盖项目。
-
 ## CLI 参数
 
 ```bash
-bunnybyte --provider deepseek --model deepseek-v4-pro
-bunnybyte --api-key sk-... --base-url https://...
-bunnybyte --max-steps 50 --max-new-tokens 4096
-bunnybyte --temperature 0.0
-bunnybyte --approval ask          # ask | auto | never
-bunnybyte --sandbox best_effort   # off | best_effort | required
-bunnybyte --no-auto-dream         # 关闭后台 memory 整合
-bunnybyte --cwd /path/to/repo     # 切换工作目录
-bunnybyte --resume latest         # 续接上一个 session
-bunnybyte --config /path/to/custom.toml
+bunny --provider deepseek --model deepseek-v4-pro
+bunny --api-key sk-... --base-url https://...
+bunny --max-steps 50
+bunny --max-new-tokens 4096  # 可选：显式限制每步最大输出 token
+bunny --temperature 0.0
+bunny --approval ask          # ask | auto | never
+bunny --sandbox best_effort   # off | best_effort | required
+bunny --no-auto-dream         # 关闭后台 memory 整合
+bunny --cwd /path/to/repo     # 切换工作目录
+bunny --resume latest         # 续接上一个 session
+bunny --config /path/to/custom.toml
 ```
 
-跑 `bunnybyte --help` 看完整参数。
+跑 `bunny --help` 看完整参数。
 
 ## 默认值速查
 
 | 项 | 默认 |
 |----|------|
 | `max-steps` | 50 |
-| `max-new-tokens` | Anthropic 32000 / OpenAI 8192 / DeepSeek 8192 / fallback 4096 |
+| `max-new-tokens` | 默认不设置上限；只有显式传入 `--max-new-tokens` 时才下发限制 |
 | `temperature` | 0.2 |
 | `approval` | `ask` |
 | `sandbox` | `off` |
 | `dream-interval` | 24 小时 |
 | `dream-min-sessions` | 5 |
+
+## 输出 token 上限
+
+默认情况下，Bunny Byte 不主动向 provider 下发 `max_tokens` / `max_output_tokens`，让模型按 provider 自身策略输出。只有用户显式传入时才限制：
+
+```bash
+bunny --max-new-tokens 32000
+```
+
+如果某个兼容后端要求必须传输出上限，或者你希望控制成本和响应长度，可以显式设置该参数。
 
 ## 调试
 
