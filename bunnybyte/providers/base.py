@@ -5,9 +5,17 @@ import inspect
 
 
 @dataclass(frozen=True)
+class ModelToolCall:
+    name: str
+    args: dict = field(default_factory=dict)
+    id: str = ""
+
+
+@dataclass(frozen=True)
 class ModelResult:
     text: str
     metadata: dict = field(default_factory=dict)
+    tool_calls: list[ModelToolCall] = field(default_factory=list)
 
 
 def complete_model(model_client, prompt, max_new_tokens, **kwargs):

@@ -219,9 +219,9 @@ def maintain_memory_safely(agent, task_state, final_answer):
 
 _STEP_LIMIT_SUMMARY_NOTICE = (
     "You have hit the per-turn tool budget (max_steps). Do not call any more tools. "
-    "Right now, return a single <final>...</final> answer in the user's language that "
-    "briefly covers: (1) what you accomplished this turn, (2) what remains undone, "
-    "(3) how the user can continue (e.g., `/resume` then `继续`). Keep it concise."
+    "Right now, return a concise answer in the user's language that briefly covers: "
+    "(1) what you accomplished this turn, (2) what remains undone, "
+    "(3) how the user can continue (e.g., `/resume` then `继续`)."
 )
 
 
@@ -247,7 +247,10 @@ def request_step_limit_summary(engine, task_state, user_message):
         )
         return None
     raw = (result.text or "").strip() if result else ""
-    kind, payload = agent.parse(raw)
+    if getattr(agent.model_client, "supports_native_tools", False):
+        kind, payload = ("final", raw) if raw else ("retry", "")
+    else:
+        kind, payload = agent.parse(raw)
     duration_ms = int((time.monotonic() - started_at) * 1000)
     agent.emit_trace(
         task_state,

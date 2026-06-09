@@ -8,6 +8,7 @@ import re
 import time
 
 from .model_stream import complete_model_with_deltas
+from ..providers.base import ModelToolCall
 from .model_errors import finish_model_error
 from .engine_helpers import (
     execute_tool_payload,
@@ -29,10 +30,18 @@ NON_TERMINAL_FINAL_CUE_PATTERN = re.compile(
 )
 
 
-def _with_protocol_retry_notice(user_message, notice):
+def _with_protocol_retry_notice(user_message, notice, native_tools=False):
     notice = str(notice or "").strip()
     if not notice:
         return user_message
+    if native_tools:
+        return (
+            f"{user_message}\n\n"
+            "Protocol correction for your immediately previous response in this turn:\n"
+            f"{notice}\n"
+            "Continue the original user request. Use native tool calls when action is needed, "
+            "or return a normal final assistant answer."
+        )
     return (
         f"{user_message}\n\n"
         "Protocol correction for your immediately previous response in this turn:\n"
@@ -40,6 +49,14 @@ def _with_protocol_retry_notice(user_message, notice):
         "Continue the original user request. Return exactly one valid "
         "<tool>...</tool> call or one <final>...</final> answer."
     )
+
+
+def _tool_call_payload(call):
+    if isinstance(call, ModelToolCall):
+        return {"name": call.name, "args": dict(call.args or {})}
+    if isinstance(call, dict):
+        return {"name": call.get("name", ""), "args": dict(call.get("args") or {})}
+    return {"name": getattr(call, "name", ""), "args": dict(getattr(call, "args", {}) or {})}
 
 
 class Engine:
@@ -143,8 +160,9 @@ class Engine:
             task_state.record_attempt()
             agent.run_store.write_task_state(task_state)
             prompt_started_at = time.monotonic()
+            native_tools = agent.native_tools() if hasattr(agent, "native_tools") else None
             prompt_user_message = _with_protocol_retry_notice(
-                user_message, protocol_retry_notice
+                user_message, protocol_retry_notice, native_tools=bool(native_tools)
             )
             prompt, prompt_metadata = agent._build_prompt_and_metadata(
                 prompt_user_message
@@ -246,6 +264,7 @@ class Engine:
                     prompt,
                     prompt_cache_key=prompt_cache_key,
                     prompt_cache_retention=prompt_cache_retention,
+                    tools=native_tools,
                 )
             except Exception as exc:
                 if agent.abort_requested:
@@ -303,19 +322,50 @@ class Engine:
                 )
                 return
             raw = result.text
+            result_tool_calls = list(getattr(result, "tool_calls", []) or [])
             completion_metadata = dict(
                 result.metadata
                 or getattr(agent.model_client, "last_completion_metadata", {})
                 or {}
             )
-            if completion_metadata:
-                prompt_metadata.update(completion_metadata)
-            agent.last_completion_metadata = completion_metadata
+            metadata_tool_calls = list(completion_metadata.get("tool_calls", []) or [])
+            if not result_tool_calls and metadata_tool_calls:
+                result_tool_calls = metadata_tool_calls
+            trace_completion_metadata = dict(completion_metadata)
+            if trace_completion_metadata.get("tool_calls"):
+                trace_completion_metadata["tool_calls"] = [
+                    {"name": _tool_call_payload(call).get("name", ""), "args": _tool_call_payload(call).get("args", {})}
+                    for call in trace_completion_metadata["tool_calls"]
+                ]
+            if trace_completion_metadata:
+                prompt_metadata.update(trace_completion_metadata)
+            agent.last_completion_metadata = trace_completion_metadata
             agent.last_prompt_metadata = prompt_metadata
-            kind, payload, parse_metadata = agent.parse_with_metadata(
-                raw,
-                allow_truncated_json_tool=True,
-            )
+            native_tool_calls = result_tool_calls
+            if native_tool_calls:
+                kind = "tool" if len(native_tool_calls) == 1 else "tools"
+                payload = (
+                    _tool_call_payload(native_tool_calls[0])
+                    if kind == "tool"
+                    else [_tool_call_payload(call) for call in native_tool_calls]
+                )
+                parse_metadata = {"native_tool_calls": len(native_tool_calls)}
+            elif native_tools:
+                raw_text = str(raw or "").strip()
+                kind, payload, parse_metadata = (
+                    ("final", raw_text, {})
+                    if raw_text
+                    else (
+                        "retry",
+                        "Return a normal final answer or request a native tool call.",
+                        {},
+                    )
+                )
+            else:
+                kind, payload, parse_metadata = agent.parse_with_metadata(
+                    raw,
+                    allow_truncated_json_tool=True,
+                )
             preamble = str(parse_metadata.get("preamble", "") or "").strip()
             if preamble and kind in {"tool", "tools"}:
                 agent.record(
@@ -340,7 +390,7 @@ class Engine:
                 "model_parsed",
                 {
                     "kind": kind,
-                    "completion_metadata": completion_metadata,
+                    "completion_metadata": trace_completion_metadata,
                     "duration_ms": duration_ms,
                 },
             )

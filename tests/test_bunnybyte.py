@@ -11,6 +11,7 @@ from unittest.mock import patch
 import bunnybyte as bunnybyte_pkg
 import bunnybyte.providers as providers_pkg
 import pytest
+from bunnybyte.providers.base import ModelToolCall
 from bunnybyte.testing import ScriptedModelClient
 from bunnybyte import (
     AnthropicCompatibleModelClient,
@@ -522,6 +523,46 @@ def test_read_only_tool_skips_per_tool_checkpoint(tmp_path):
     assert any(event["event"] == "checkpoint_created" and event.get("trigger") == "run_finished" for event in trace_events)
 
 
+def test_native_tool_protocol_executes_openai_tool_call_and_final_text(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        [
+            ModelToolCall(name="read_file", args={"path": "README.md", "start": 1, "end": 5}),
+            "Read the README; it says demo.",
+        ],
+    )
+    agent.model_client.supports_native_tools = True
+    agent.model_client.native_tool_protocol = "openai"
+    agent.refresh_prefix(force=True)
+
+    answer = agent.ask("What does the README say?")
+
+    assert "demo" in answer
+    tool_history = [item for item in agent.session["history"] if item["role"] == "tool"]
+    assert tool_history[0]["name"] == "read_file"
+    assert agent.model_client.tool_batches[0]
+    assert agent.model_client.tool_batches[0][0]["type"] == "function"
+    assert "<tool>" not in agent.model_client.prompts[0]
+    assert "</tool>" not in agent.model_client.prompts[0]
+    assert "<final>" not in agent.model_client.prompts[0]
+    assert "</final>" not in agent.model_client.prompts[0]
+
+
+def test_native_anthropic_tool_specs_use_input_schema(tmp_path):
+    agent = build_agent(tmp_path, ["Done."])
+    agent.model_client.supports_native_tools = True
+    agent.model_client.native_tool_protocol = "anthropic"
+    agent.refresh_prefix(force=True)
+
+    assert agent.ask("Just answer") == "Done."
+
+    read_file_spec = next(
+        item for item in agent.model_client.tool_batches[0] if item["name"] == "read_file"
+    )
+    assert "input_schema" in read_file_spec
+    assert read_file_spec["input_schema"]["required"] == ["path"]
+
+
 def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
     deep = tmp_path / "very" / "long" / "path" / "for" / "the" / "mini" / "agent" / "welcome" / "screen"
     deep.mkdir(parents=True)
@@ -601,6 +642,64 @@ def test_openai_compatible_client_posts_expected_responses_payload():
         "temperature": 0.2,
     }
 
+
+def test_openai_compatible_client_posts_native_tools_and_extracts_function_call():
+    captured = {}
+
+    class FakeResponse:
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "read_file",
+                            "arguments": '{"path":"README.md"}',
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    client = OpenAICompatibleModelClient(
+        model="gpt-test",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        result = client.complete_result(
+            "hello",
+            42,
+            tools=[
+                {
+                    "type": "function",
+                    "name": "read_file",
+                    "parameters": {"type": "object"},
+                }
+            ],
+        )
+
+    assert result.text == ""
+    assert result.tool_calls[0].name == "read_file"
+    assert result.tool_calls[0].args == {"path": "README.md"}
+    assert captured["body"]["tool_choice"] == "auto"
+    assert captured["body"]["tools"][0]["name"] == "read_file"
 
 def test_openai_compatible_client_sends_prompt_cache_fields_and_records_usage():
     captured = {}
@@ -963,6 +1062,58 @@ def test_anthropic_compatible_client_posts_expected_messages_payload():
         "temperature": 0.2,
     }
 
+
+def test_anthropic_compatible_client_posts_native_tools_and_extracts_tool_use():
+    captured = {}
+
+    class FakeResponse:
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "read_file",
+                            "input": {"path": "README.md"},
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    client = AnthropicCompatibleModelClient(
+        model="claude-test",
+        base_url="https://api.anthropic.com",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        result = client.complete_result(
+            "hello",
+            42,
+            tools=[{"name": "read_file", "input_schema": {"type": "object"}}],
+        )
+
+    assert result.text == ""
+    assert result.tool_calls[0].name == "read_file"
+    assert result.tool_calls[0].args == {"path": "README.md"}
+    assert captured["body"]["tool_choice"] == {"type": "auto"}
+    assert captured["body"]["tools"][0]["name"] == "read_file"
 
 def test_anthropic_compatible_client_extracts_first_text_block():
     class FakeResponse:

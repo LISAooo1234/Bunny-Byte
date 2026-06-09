@@ -7,7 +7,12 @@ from ..providers.base import complete_model
 
 
 def complete_model_with_deltas(
-    engine, task_state, prompt, prompt_cache_key=None, prompt_cache_retention=None
+    engine,
+    task_state,
+    prompt,
+    prompt_cache_key=None,
+    prompt_cache_retention=None,
+    tools=None,
 ):
     agent = engine.runtime
     events = queue.Queue()
@@ -27,6 +32,7 @@ def complete_model_with_deltas(
                 agent.max_new_tokens,
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
+                tools=tools,
                 on_delta=on_delta,
             )
         except Exception as exc:

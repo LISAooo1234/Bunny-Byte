@@ -41,6 +41,7 @@ from .todo_ledger import TodoLedger
 from .turn_history import TurnHistoryBuilder
 from .worker_manager import WorkerManager
 from ..tools import registry as toolkit
+from ..tools.schema import native_tool_specs
 from .workspace import WorkspaceContext, clip, now
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
@@ -448,6 +449,14 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             json.dumps(payload, sort_keys=True).encode("utf-8")
         ).hexdigest()
 
+    def native_tools(self):
+        protocol = getattr(self.model_client, "native_tool_protocol", "")
+        if not getattr(self.model_client, "supports_native_tools", False):
+            return None
+        if protocol not in {"openai", "anthropic"}:
+            return None
+        return native_tool_specs(self.available_tools(), protocol)
+
     def build_prefix(self):
         tool_lines = []
         for name, tool in self.available_tools().items():
@@ -468,6 +477,29 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
                 "<final>Done.</final>",
             ]
         )
+        native_tools_enabled = bool(
+            getattr(self.model_client, "supports_native_tools", False)
+        )
+        if native_tools_enabled:
+            protocol_rules = """\
+            - Use the provider-native tool calling protocol for tool calls. Do not write XML or JSON tool call blocks in text.
+            - When you are done, answer with normal assistant text.
+            - Never invent tool results."""
+            examples_section = (
+                "Native tool calls are provided out-of-band by the API; "
+                "no text tool-call examples are needed."
+            )
+        else:
+            protocol_rules = """\
+            - Return exactly one <tool>...</tool> or one <final>...</final>.
+            - Tool calls must look like:
+              <tool>{\"name\":\"tool_name\",\"args\":{...}}</tool>
+            - For write_file and patch_file with multi-line text, prefer XML style:
+              <tool name=\"write_file\" path=\"file.py\"><content>...</content></tool>
+            - Final answers must look like:
+              <final>your answer</final>
+            - Never invent tool results."""
+            examples_section = f"Valid response examples:\n{examples}"
         # prefix 可以理解成 agent 的“工作手册”：
         # 它是谁、工具怎么调用、当前仓库是什么状态，都写在这里。
         text = textwrap.dedent(
@@ -476,14 +508,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
 
             Rules:
             - Use tools instead of guessing about the workspace.
-            - Return exactly one <tool>...</tool> or one <final>...</final>.
-            - Tool calls must look like:
-              <tool>{{"name":"tool_name","args":{{...}}}}</tool>
-            - For write_file and patch_file with multi-line text, prefer XML style:
-              <tool name="write_file" path="file.py"><content>...</content></tool>
-            - Final answers must look like:
-              <final>your answer</final>
-            - Never invent tool results.
+            {protocol_rules}
             - Keep answers concise and concrete.
             - If the user asks you to create or update a specific file and the path is clear, use write_file or patch_file instead of repeatedly listing files.
             - Before writing tests for existing code, read the implementation first.
@@ -512,8 +537,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             Tools:
             {tool_text}
 
-            Valid response examples:
-            {examples}
+            {examples_section}
 
             {self.workspace.text()}
             """
@@ -956,7 +980,8 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             self.session["memory"], workspace_root=self.root
         )
         self.self_authored_file_freshness.clear()
-        self.session["read_ledger"] = {}; self.read_ledger = ReadLedger(self)
+        self.session["read_ledger"] = {}
+        self.read_ledger = ReadLedger(self)
         if not was_pending:
             self.session_path = self.session_store.save(self.session)
 

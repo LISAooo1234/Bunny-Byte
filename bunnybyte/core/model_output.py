@@ -1,4 +1,4 @@
-"""Parser for BunnyByte's text model protocol."""
+"""Parser for BunnyByte's legacy text model protocol."""
 
 import json
 import re

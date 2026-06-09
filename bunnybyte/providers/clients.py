@@ -1,8 +1,7 @@
 """模型后端适配层。
 
-runtime 只关心一件事：给我一个 prompt，我拿回一段文本。
-不同 provider 在 HTTP 接口、响应结构、是否支持 prompt cache 上都有差异，
-这些差异都在这里被抹平成统一的 complete() 接口。
+runtime 主要关心统一的 complete()/complete_result() 接口；provider 的 HTTP
+细节、响应结构、usage 字段、prompt cache 与原生工具调用都在这里归一化。
 """
 
 import json
@@ -12,6 +11,7 @@ from http.client import RemoteDisconnected
 import urllib.error
 import urllib.request
 
+from .base import ModelResult, ModelToolCall
 from .errors import ProviderError, sanitize_url
 
 OPENAI_COMPATIBLE_USER_AGENT = "bunnybyte/0.1"
@@ -23,6 +23,75 @@ def _normalize_versioned_base_url(base_url):
     if not base.endswith("/v1"):
         base += "/v1"
     return base
+
+
+def _extract_openai_tool_calls(data):
+    calls = []
+    for item in data.get("output", []) or []:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type in {"function_call", "tool_call"}:
+            name = item.get("name") or item.get("function", {}).get("name")
+            raw_args = item.get("arguments")
+            if raw_args is None and isinstance(item.get("function"), dict):
+                raw_args = item["function"].get("arguments")
+            args = _decode_tool_args(raw_args)
+            if name:
+                calls.append(
+                    ModelToolCall(
+                        name=str(name),
+                        args=args,
+                        id=str(item.get("call_id") or item.get("id") or ""),
+                    )
+                )
+            continue
+        for content in item.get("content", []) or []:
+            if not isinstance(content, dict):
+                continue
+            if content.get("type") not in {"function_call", "tool_call"}:
+                continue
+            name = content.get("name") or content.get("function", {}).get("name")
+            raw_args = content.get("arguments")
+            if raw_args is None and isinstance(content.get("function"), dict):
+                raw_args = content["function"].get("arguments")
+            if name:
+                calls.append(
+                    ModelToolCall(
+                        name=str(name),
+                        args=_decode_tool_args(raw_args),
+                        id=str(content.get("call_id") or content.get("id") or ""),
+                    )
+                )
+    choices = data.get("choices", []) or []
+    if choices:
+        message = choices[0].get("message", {}) or {}
+        for call in message.get("tool_calls", []) or []:
+            function = call.get("function", {}) or {}
+            name = function.get("name") or call.get("name")
+            if name:
+                calls.append(
+                    ModelToolCall(
+                        name=str(name),
+                        args=_decode_tool_args(
+                            function.get("arguments") or call.get("arguments")
+                        ),
+                        id=str(call.get("id") or ""),
+                    )
+                )
+    return calls
+
+
+def _decode_tool_args(raw_args):
+    if isinstance(raw_args, dict):
+        return raw_args
+    if raw_args in (None, ""):
+        return {}
+    try:
+        decoded = json.loads(str(raw_args))
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 def _extract_openai_text(data):
@@ -370,6 +439,7 @@ def _stream_anthropic_response(response, on_delta):
     deltas = []
     last_event = {}
     usage = {}
+    content_blocks = {}
     for payload in _iter_sse_payloads(response):
         if not payload or payload == "[DONE]":
             continue
@@ -378,6 +448,9 @@ def _stream_anthropic_response(response, on_delta):
         except json.JSONDecodeError:
             continue
         last_event = event
+        event_type = event.get("type", "")
+        if event_type == "content_block_start" and isinstance(event.get("content_block"), dict):
+            content_blocks[int(event.get("index", len(content_blocks)))] = dict(event["content_block"])
         delta = _extract_sse_delta_text(event)
         if delta:
             deltas.append(delta)
@@ -386,6 +459,8 @@ def _stream_anthropic_response(response, on_delta):
         if isinstance(event_usage, dict):
             usage.update(event_usage)
     response_data = dict(last_event or {})
+    if content_blocks:
+        response_data["content"] = [content_blocks[index] for index in sorted(content_blocks)]
     if usage:
         response_data["usage"] = usage
     return "".join(deltas), response_data
@@ -461,6 +536,9 @@ def _provider_failure(provider, model, base_url, code, message, request_metadata
 
 
 class OpenAICompatibleModelClient:
+    supports_native_tools = True
+    native_tool_protocol = "openai"
+
     def __init__(self, model, base_url, api_key, temperature, timeout):
         self.model = model
         self.base_url = _normalize_versioned_base_url(base_url)
@@ -472,6 +550,30 @@ class OpenAICompatibleModelClient:
         self.supports_prompt_cache = "openai.com" in self.base_url
         self.last_completion_metadata = {}
 
+    def complete_result(
+        self,
+        prompt,
+        max_new_tokens,
+        prompt_cache_key=None,
+        prompt_cache_retention=None,
+        on_delta=None,
+        tools=None,
+    ):
+        text = self.complete(
+            prompt,
+            max_new_tokens,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_retention=prompt_cache_retention,
+            on_delta=on_delta,
+            tools=tools,
+        )
+        metadata = dict(self.last_completion_metadata or {})
+        return ModelResult(
+            text=text,
+            metadata=metadata,
+            tool_calls=list(metadata.get("tool_calls", [])),
+        )
+
     def complete(
         self,
         prompt,
@@ -479,10 +581,9 @@ class OpenAICompatibleModelClient:
         prompt_cache_key=None,
         prompt_cache_retention=None,
         on_delta=None,
+        tools=None,
     ):
         """向 OpenAI-compatible `/responses` 接口发起一次模型调用。
-
-        为什么存在：
         runtime 不应该知道 HTTP 细节、SSE 细节、usage 字段长什么样，
         更不应该自己去判断 prompt cache 参数要不要带。这个函数把这些后端
         细节都包起来，对上层暴露统一的 `complete()` 行为。
@@ -512,6 +613,9 @@ class OpenAICompatibleModelClient:
             ],
             "stream": bool(on_delta),
         }
+        if tools:
+            payload["tools"] = list(tools)
+            payload["tool_choice"] = "auto"
         if max_new_tokens is not None:
             payload["max_output_tokens"] = max_new_tokens
         if self.temperature is not None:
@@ -555,14 +659,16 @@ class OpenAICompatibleModelClient:
                     lambda response: _stream_openai_response(response, on_delta),
                 )
                 if content_type.startswith("text/event-stream"):
+                    tool_calls = _extract_openai_tool_calls(response_data or {})
                     self.last_completion_metadata = {
                         "prompt_cache_supported": self.supports_prompt_cache,
                         "prompt_cache_key": prompt_cache_key,
                         "prompt_cache_retention": prompt_cache_retention,
+                        "tool_calls": tool_calls,
                         **request_metadata,
                         **_extract_usage_cache_details(response_data or {}),
                     }
-                    if body_text:
+                    if body_text or tool_calls:
                         return body_text
                     error = _provider_failure(
                         "openai",
@@ -591,6 +697,7 @@ class OpenAICompatibleModelClient:
         # 这里两种都接住，并尽量统一抽取文本和 usage/cache 元数据。
         if content_type.startswith("text/event-stream") or body_text.lstrip().startswith("data:"):
             text, response_data = _extract_openai_response_from_sse(body_text)
+            tool_calls = _extract_openai_tool_calls(response_data or {})
             if isinstance(response_data, dict) and response_data:
                 # 这些元数据会一路传回 runtime，进入 trace 和 report，
                 # 用来观察 prompt cache 是否真的命中。
@@ -598,10 +705,11 @@ class OpenAICompatibleModelClient:
                     "prompt_cache_supported": self.supports_prompt_cache,
                     "prompt_cache_key": prompt_cache_key,
                     "prompt_cache_retention": prompt_cache_retention,
+                    "tool_calls": tool_calls,
                     **request_metadata,
                     **_extract_usage_cache_details(response_data),
                 }
-            if text:
+            if text or tool_calls:
                 return text
             error = _provider_failure(
                 "openai",
@@ -639,15 +747,17 @@ class OpenAICompatibleModelClient:
             )
             self.last_completion_metadata = error.to_metadata()
             raise error
+        tool_calls = _extract_openai_tool_calls(data)
         self.last_completion_metadata = {
             "prompt_cache_supported": self.supports_prompt_cache,
             "prompt_cache_key": prompt_cache_key,
             "prompt_cache_retention": prompt_cache_retention,
+            "tool_calls": tool_calls,
             **request_metadata,
             **_extract_usage_cache_details(data),
         }
         text = _extract_openai_text(data)
-        if text:
+        if text or tool_calls:
             return text
         error = _provider_failure(
             "openai",
@@ -662,15 +772,37 @@ class OpenAICompatibleModelClient:
 
 
 def _extract_anthropic_text(data):
+    parts = []
     for item in data.get("content", []):
         if isinstance(item, dict) and item.get("type") == "text":
             text = item.get("text")
             if isinstance(text, str) and text:
-                return text
-    return ""
+                parts.append(text)
+    return "".join(parts)
+
+
+def _extract_anthropic_tool_calls(data):
+    calls = []
+    for item in data.get("content", []) or []:
+        if not isinstance(item, dict) or item.get("type") != "tool_use":
+            continue
+        name = item.get("name")
+        if not name:
+            continue
+        raw_args = item.get("input")
+        args = raw_args if isinstance(raw_args, dict) else {}
+        calls.append(
+            ModelToolCall(
+                name=str(name), args=args, id=str(item.get("id") or "")
+            )
+        )
+    return calls
 
 
 class AnthropicCompatibleModelClient:
+    supports_native_tools = True
+    native_tool_protocol = "anthropic"
+
     def __init__(self, model, base_url, api_key, temperature, timeout):
         self.model = model
         self.base_url = _normalize_versioned_base_url(base_url)
@@ -680,6 +812,30 @@ class AnthropicCompatibleModelClient:
         self.supports_prompt_cache = False
         self.last_completion_metadata = {}
 
+    def complete_result(
+        self,
+        prompt,
+        max_new_tokens,
+        prompt_cache_key=None,
+        prompt_cache_retention=None,
+        on_delta=None,
+        tools=None,
+    ):
+        text = self.complete(
+            prompt,
+            max_new_tokens,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_retention=prompt_cache_retention,
+            on_delta=on_delta,
+            tools=tools,
+        )
+        metadata = dict(self.last_completion_metadata or {})
+        return ModelResult(
+            text=text,
+            metadata=metadata,
+            tool_calls=list(metadata.get("tool_calls", [])),
+        )
+
     def complete(
         self,
         prompt,
@@ -687,6 +843,7 @@ class AnthropicCompatibleModelClient:
         prompt_cache_key=None,
         prompt_cache_retention=None,
         on_delta=None,
+        tools=None,
     ):
         # 为了保持统一接口，runtime 仍然会传缓存参数进来；
         # 这里只是显式丢弃，因为当前 Anthropic-compatible 路径没有接缓存复用。
@@ -707,6 +864,9 @@ class AnthropicCompatibleModelClient:
             ],
             "stream": bool(on_delta),
         }
+        if tools:
+            payload["tools"] = list(tools)
+            payload["tool_choice"] = {"type": "auto"}
         if max_new_tokens is not None:
             payload["max_tokens"] = max_new_tokens
         if self.temperature is not None:
@@ -743,7 +903,11 @@ class AnthropicCompatibleModelClient:
                     lambda response: _stream_anthropic_response(response, on_delta),
                 )
                 if content_type.startswith("text/event-stream"):
-                    self.last_completion_metadata = dict(request_metadata)
+                    tool_calls = _extract_anthropic_tool_calls(response_data or {})
+                    self.last_completion_metadata = {
+                        **dict(request_metadata),
+                        "tool_calls": tool_calls,
+                    }
                     usage = (response_data or {}).get("usage")
                     if isinstance(usage, dict):
                         self.last_completion_metadata.update(
@@ -752,7 +916,7 @@ class AnthropicCompatibleModelClient:
                                 "output_tokens": usage.get("output_tokens"),
                             }
                         )
-                    if body_text:
+                    if body_text or tool_calls:
                         return body_text
                     error = _provider_failure(
                         "anthropic",
@@ -802,9 +966,13 @@ class AnthropicCompatibleModelClient:
             )
             self.last_completion_metadata = error.to_metadata()
             raise error
+        tool_calls = _extract_anthropic_tool_calls(data)
         text = _extract_anthropic_text(data)
-        if text:
-            self.last_completion_metadata = dict(request_metadata)
+        if text or tool_calls:
+            self.last_completion_metadata = {
+                **dict(request_metadata),
+                "tool_calls": tool_calls,
+            }
             return text
         error = _provider_failure(
             "anthropic",
