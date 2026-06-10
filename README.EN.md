@@ -30,8 +30,7 @@ recoverable, and auditable workflow:
   Anthropic Messages-compatible endpoints.
 - **Prompt context** assembles runtime rules, repository context, tools, skills,
   working memory, durable memory, and recent history within a budget.
-- **Text protocol tool calls** require the model to emit `<tool>...</tool>` or
-  `<final>...</final>`. Local parsing validates tool calls before execution.
+- **Native tool calling** uses OpenAI Responses / Anthropic Messages provider-native tool protocols whenever available. Bunny Byte executes only structured tool calls returned by the provider. The old `<tool>/<final>` text protocol remains only as a legacy fallback for providers without native tools.
 - **Tools** include file listing, reading, search, shell, file writing, precise
   patches, todos, `ask_user`, subagents, and plan mode.
 - **Approval, sandboxing, and policy** can gate writes, shell commands, and risky
@@ -344,7 +343,7 @@ Common commands:
 | Capability | Description |
 | --- | --- |
 | TUI / REPL / one-shot | Same runtime, different entry points. |
-| Text protocol parsing | Supports `<tool>` and `<final>` blocks, short preambles, multiple tool blocks, and partial recovery. |
+| Native tool calling | Uses OpenAI / Anthropic provider-native tool protocols by default; the legacy text-protocol parser is kept only for non-native providers and old tests. |
 | Tool execution | File listing, reading, search, shell, writing, patching, `ask_user`, todos, and subagents. |
 | Retry correction | Protocol errors are retried as temporary corrections without polluting long-term history. |
 | Plan mode | Read and plan before entering execution. |
