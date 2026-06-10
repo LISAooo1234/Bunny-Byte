@@ -26,6 +26,20 @@ def rendered_text(widget) -> str:
     return getattr(rendered, "plain", str(rendered))
 
 
+def test_tui_runs_long_commands_in_executor(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+
+    agent = build_agent(tmp_path, [])
+    app = BunnyByteTuiApp(agent)
+
+    assert app._command_should_run_in_executor("/compact") is True
+    assert app._command_should_run_in_executor("/dream") is True
+    assert app._command_should_run_in_executor("/review") is True
+    assert app._command_should_run_in_executor("/skill review focus auth") is True
+    assert app._command_should_run_in_executor("/provider") is False
+    assert app._command_should_run_in_executor("/session") is False
+
+
 def test_read_only_tool_cards_are_compact_by_default():
     from bunnybyte.tui.widgets import ToolCard
 
@@ -519,8 +533,9 @@ def test_slash_command_registry_suggests_and_parses_subagent():
 async def test_tui_hides_tool_protocol_from_model_stream_preview():
     from bunnybyte.tui.app import _model_stream_preview
 
-    assert _model_stream_preview("我先查阅一下\n<tool") == ""
-    assert _model_stream_preview("<final>Done</final>") == "Done"
+    assert _model_stream_preview("我先查阅一下\n<tool", legacy=True) == ""
+    assert _model_stream_preview("<final>Done</final>", legacy=True) == "Done"
+    assert _model_stream_preview("<final>Done</final>") == "<final>Done</final>"
 
 
 @pytest.mark.asyncio

@@ -238,10 +238,18 @@ class BunnyByteTuiApp(App):
             event.prevent_default()
 
     def _handle_command(self, text: str) -> None:
-        if text.strip() == "/dream":
+        if self._command_should_run_in_executor(text):
             self._run_command_in_executor(text)
             return
         self._handle_command_result(text, from_thread=False)
+
+    def _command_should_run_in_executor(self, text: str) -> bool:
+        command = str(text or "").strip().split(maxsplit=1)[0].lstrip("/")
+        if command in {"compact", "dream"}:
+            return True
+        if command == "skill":
+            return True
+        return command in (getattr(self.agent, "skills", {}) or {})
 
     def _run_command_in_executor(self, text: str) -> None:
         self.query_one(InputBar).set_busy(True, stoppable=True)
@@ -506,7 +514,12 @@ class BunnyByteTuiApp(App):
         if not delta:
             return
         self._model_stream_content += delta
-        preview = _model_stream_preview(self._model_stream_content)
+        preview = _model_stream_preview(
+            self._model_stream_content,
+            legacy=not bool(
+                getattr(self.agent.model_client, "supports_native_tools", False)
+            ),
+        )
         if not preview:
             return
         if self._model_stream_widget is not None and len(preview) - len(self._model_stream_rendered) < 80 and "\n" not in preview[len(self._model_stream_rendered):]:
@@ -645,8 +658,10 @@ def _retry_signature(content: str) -> str:
     return " ".join(text.split())
 
 
-def _model_stream_preview(content: str) -> str:
+def _model_stream_preview(content: str, *, legacy: bool = False) -> str:
     text = str(content or "")
+    if not legacy:
+        return text
     marker = "<final>"
     if marker in text:
         body = text.split(marker, 1)[1]

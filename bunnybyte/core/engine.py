@@ -25,7 +25,14 @@ CHECKPOINT_NONE_STATUS = "no-checkpoint"
 CHECKPOINT_PARTIAL_STALE_STATUS = "partial-stale"
 CHECKPOINT_WORKSPACE_MISMATCH_STATUS = "workspace-mismatch"
 NON_TERMINAL_FINAL_CUE_PATTERN = re.compile(
-    r"(我先|先.*?(接下来|随后|之后|然后|再)|接下来.*?(会|将|准备|打算)|下一步|继续.*?(做|执行|读取|查看|检查)|马上.*?(做|执行|读取|查看|检查)|now I will|next I|I will|I'll)",
+    r"(?:^|[\n。！？])\s*(?:"
+    r"(?:我(?:接下来|随后|之后|然后|马上)?(?:会|将|准备|打算|先)|"
+    r"接下来我(?:会|将|准备|打算)|"
+    r"下一步我(?:会|将|准备|打算)|"
+    r"继续(?:做|执行|读取|查看|检查)|"
+    r"(?:now|next)\s+i\s+(?:will|am going to)|"
+    r"i(?:'ll|\s+will|\s+am going to))"
+    r")",
     re.IGNORECASE,
 )
 
@@ -574,8 +581,8 @@ class Engine:
     @staticmethod
     def _premature_final_notice(final):
         return (
-            "Your previous <final> answer said you were about to do more work, "
-            "but <final> ends the turn. If work remains, call the appropriate tool now "
-            "instead of narrating the plan. Previous answer: "
+            "Your previous assistant answer said you were about to do more work, "
+            "but a final answer ends the turn. If work remains, call the appropriate "
+            "tool now instead of narrating the plan. Previous answer: "
             f"{clip(final, 500)}"
         )

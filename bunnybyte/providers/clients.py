@@ -440,6 +440,7 @@ def _stream_anthropic_response(response, on_delta):
     last_event = {}
     usage = {}
     content_blocks = {}
+    tool_input_json = {}
     for payload in _iter_sse_payloads(response):
         if not payload or payload == "[DONE]":
             continue
@@ -449,8 +450,17 @@ def _stream_anthropic_response(response, on_delta):
             continue
         last_event = event
         event_type = event.get("type", "")
+        index = int(event.get("index", len(content_blocks)))
         if event_type == "content_block_start" and isinstance(event.get("content_block"), dict):
-            content_blocks[int(event.get("index", len(content_blocks)))] = dict(event["content_block"])
+            content_block = dict(event["content_block"])
+            content_blocks[index] = content_block
+            if content_block.get("type") == "tool_use":
+                tool_input_json.setdefault(index, "")
+        delta_data = event.get("delta")
+        if isinstance(delta_data, dict) and delta_data.get("type") == "input_json_delta":
+            tool_input_json[index] = tool_input_json.get(index, "") + str(
+                delta_data.get("partial_json", "")
+            )
         delta = _extract_sse_delta_text(event)
         if delta:
             deltas.append(delta)
@@ -458,6 +468,13 @@ def _stream_anthropic_response(response, on_delta):
         event_usage = event.get("usage")
         if isinstance(event_usage, dict):
             usage.update(event_usage)
+    for index, partial_json in tool_input_json.items():
+        block = content_blocks.get(index)
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        if isinstance(block.get("input"), dict) and block["input"]:
+            continue
+        block["input"] = _decode_tool_args(partial_json)
     response_data = dict(last_event or {})
     if content_blocks:
         response_data["content"] = [content_blocks[index] for index in sorted(content_blocks)]

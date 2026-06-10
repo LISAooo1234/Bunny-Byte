@@ -27,10 +27,10 @@ def run_tool(agent, name, args):
     try:
         agent.validate_tool(name, args)
     except Exception as exc:
-        example = agent.tool_example(name)
         message = f"error: invalid arguments for {name}: {exc}"
-        if example:
-            message += f"\nexample: {example}"
+        hint = _argument_hint(agent, tool)
+        if hint:
+            message += f"\n{hint}"
         security_event_type = "path_escape" if "path escapes workspace" in str(exc) else ""
         agent._last_tool_result_metadata = {
             "tool_status": "rejected",
@@ -133,6 +133,15 @@ def run_tool(agent, name, args):
         }
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
         return f"error: tool {name} failed: {exc}"
+
+
+def _argument_hint(agent, tool):
+    schema = getattr(tool, "schema", {}) or {}
+    fields = ", ".join(f"{key}: {value}" for key, value in schema.items())
+    if getattr(agent.model_client, "supports_native_tools", False):
+        return f"expected native tool arguments for {tool.name}: {{{fields}}}"
+    example = agent.tool_example(tool.name)
+    return f"example: {example}" if example else ""
 
 
 def _render_tool_result(agent, name, full_result):

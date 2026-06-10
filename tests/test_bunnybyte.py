@@ -1149,7 +1149,44 @@ def test_anthropic_compatible_client_extracts_first_text_block():
     assert result == "<final>ok</final>"
 
 
-def test_anthropic_compatible_client_streams_sse_deltas_when_callback_is_provided():
+def test_anthropic_compatible_client_streams_tool_use_input_json_delta():
+    class FakeResponse:
+        headers = {"Content-Type": "text/event-stream"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            return iter(
+                [
+                    b'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"run_shell","input":{}}}\n\n',
+                    b'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\\"command\\\":\\\"npm"}}\n\n',
+                    b'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" test\\\",\\\"timeout\\\":20}"}}\n\n',
+                    b'data: {"type":"content_block_stop","index":0}\n\n',
+                    b'data: {"type":"message_stop"}\n\n',
+                ]
+            )
+
+    client = AnthropicCompatibleModelClient(
+        model="claude-test",
+        base_url="https://api.anthropic.com",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+
+    with patch("urllib.request.urlopen", return_value=FakeResponse()):
+        result = client.complete_result("hello", 42, on_delta=lambda _delta: None)
+
+    assert result.text == ""
+    assert result.tool_calls[0].name == "run_shell"
+    assert result.tool_calls[0].args == {"command": "npm test", "timeout": 20}
+
+
+
     captured = {}
 
     class FakeResponse:

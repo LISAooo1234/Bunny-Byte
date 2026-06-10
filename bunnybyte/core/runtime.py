@@ -466,17 +466,6 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             risk = "approval required" if tool["risky"] else "safe"
             tool_lines.append(f"- {name}({fields}) [{risk}] {tool['description']}")
         tool_text = "\n".join(tool_lines)
-        examples = "\n".join(
-            [
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":80}}</tool>',
-                '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
-                '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
-                '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
-                '<tool>{"name":"agent","args":{"description":"Inspect auth","prompt":"Find auth entry points","subagent_type":"Explore"}}</tool>',
-                "<final>Done.</final>",
-            ]
-        )
         native_tools_enabled = bool(
             getattr(self.model_client, "supports_native_tools", False)
         )
@@ -490,6 +479,17 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
                 "no text tool-call examples are needed."
             )
         else:
+            legacy_examples = "\n".join(
+                [
+                    '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                    '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":80}}</tool>',
+                    '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
+                    '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
+                    '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
+                    '<tool>{"name":"agent","args":{"description":"Inspect auth","prompt":"Find auth entry points","subagent_type":"Explore"}}</tool>',
+                    "<final>Done.</final>",
+                ]
+            )
             protocol_rules = """\
             - Return exactly one <tool>...</tool> or one <final>...</final>.
             - Tool calls must look like:
@@ -499,7 +499,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             - Final answers must look like:
               <final>your answer</final>
             - Never invent tool results."""
-            examples_section = f"Valid response examples:\n{examples}"
+            examples_section = f"Legacy text-protocol examples:\n{legacy_examples}"
         # prefix 可以理解成 agent 的“工作手册”：
         # 它是谁、工具怎么调用、当前仓库是什么状态，都写在这里。
         text = textwrap.dedent(

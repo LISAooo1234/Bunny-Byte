@@ -313,7 +313,7 @@ def _attach_provider_switching(agent, args):
 
     def provider_switch_factory(provider):
         client, config = _build_model_client_with_config(
-            args, provider=provider, include_cli_overrides=True
+            args, provider=provider, include_cli_overrides=False
         )
         if getattr(args, "_bunnybyte_max_new_tokens_defaulted", False):
             agent.max_new_tokens = default_max_tokens_for_provider(config.name)
@@ -1093,6 +1093,7 @@ def _print_turn_stream(agent, user_message):
     stream_open = False
     stream_buffer = ""
     stream_preview = ""
+    native_stream = bool(getattr(agent.model_client, "supports_native_tools", False))
     for event in agent.engine.run_turn(user_message):
         event_type = str(event.get("type", ""))
         if event_type == "model_requested":
@@ -1102,7 +1103,7 @@ def _print_turn_stream(agent, user_message):
             continue
         if event_type == "model_delta":
             stream_buffer += str(event.get("content", ""))
-            next_preview = _model_stream_preview(stream_buffer)
+            next_preview = _model_stream_preview(stream_buffer, legacy=not native_stream)
             if not next_preview:
                 continue
             if not stream_open:
@@ -1152,8 +1153,10 @@ def _print_turn_stream(agent, user_message):
     return final_answer
 
 
-def _model_stream_preview(content):
+def _model_stream_preview(content, *, legacy=False):
     text = str(content or "")
+    if not legacy:
+        return text
     marker = "<final>"
     if marker in text:
         body = text.split(marker, 1)[1]

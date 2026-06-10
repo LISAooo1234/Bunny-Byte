@@ -296,7 +296,7 @@ def test_setup_command_does_not_overwrite_existing_config_without_force(
     assert "sk-openai" not in text
 
 
-def test_provider_command_applies_cli_overrides_when_switching(tmp_path, monkeypatch):
+def test_provider_command_uses_profile_values_when_switching(tmp_path, monkeypatch):
     from bunnybyte.cli import (
         build_agent as build_cli_agent,
         build_arg_parser,
@@ -375,10 +375,103 @@ def test_provider_command_applies_cli_overrides_when_switching(tmp_path, monkeyp
     assert "| Provider | `deepseek` |" in output
     assert agent.model_client.provider == "deepseek"
     assert agent.model_client.protocol == "anthropic"
-    assert agent.model_client.api_key == "sk-cli-override"
-    assert agent.model_client.base_url == "https://cli.example.test/anthropic"
-    assert agent.model_client.model == "cli-model-override"
+    assert agent.model_client.api_key == "sk-env-deepseek"
+    assert agent.model_client.base_url == "https://project.deepseek.example/anthropic"
+    assert agent.model_client.model == "project-deepseek-model"
 
+
+def test_provider_command_rereads_config_without_cli_overrides_when_switching(
+    tmp_path, monkeypatch
+):
+    from bunnybyte.cli import (
+        build_agent as build_cli_agent,
+        build_arg_parser,
+        handle_repl_command,
+    )
+
+    class DummyOpenAIClient:
+        supports_prompt_cache = False
+
+        def __init__(self, model="", base_url="", api_key="", temperature=None, timeout=0):
+            self.model = model
+            self.base_url = base_url
+            self.api_key = api_key
+            self.temperature = temperature
+            self.timeout = timeout
+            self.last_completion_metadata = {}
+
+    for name in (
+        "BUNNYBYTE_PROVIDER",
+        "BUNNYBYTE_API_KEY",
+        "BUNNYBYTE_MODEL",
+        "BUNNYBYTE_BASE_URL",
+        "BUNNYBYTE_PROTOCOL",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    config_path = tmp_path / ".bunnybyte.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                'provider = "openai"',
+                "",
+                "[providers.openai]",
+                'protocol = "openai"',
+                'api_key = "sk-old"',
+                'base_url = "https://old.example.test"',
+                'model = "old-model"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("bunnybyte.cli.OpenAICompatibleModelClient", DummyOpenAIClient)
+    args = build_arg_parser().parse_args(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-cli-override",
+            "--base-url",
+            "https://cli.example.test/v1",
+            "--model",
+            "cli-model-override",
+            "--approval",
+            "auto",
+        ]
+    )
+    agent = build_cli_agent(args)
+    assert agent.model_client.base_url == "https://cli.example.test/v1"
+
+    config_path.write_text(
+        "\n".join(
+            [
+                'provider = "openai"',
+                "",
+                "[providers.openai]",
+                'protocol = "openai"',
+                'api_key = "sk-new"',
+                'base_url = "https://new.example.test"',
+                'model = "new-model"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    handled, _, output = handle_repl_command(agent, "/provider openai")
+
+    assert handled is True
+    assert "https://new.example.test" in output
+    assert agent.model_client.base_url == "https://new.example.test"
+    assert agent.model_client.api_key == "sk-new"
+    assert agent.model_client.model == "new-model"
 
 def test_model_client_factory_rereads_provider_config_without_stale_client_values(
     tmp_path, monkeypatch
