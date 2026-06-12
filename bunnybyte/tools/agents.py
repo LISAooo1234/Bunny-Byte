@@ -13,17 +13,17 @@ AGENT_TOOL_SPECS = {
             "write_scope": "list[str]=[]",
         },
         "risky": False,
-        "description": "Launch a bounded worker or read-only Explore subagent.",
+        "description": "启动一个有边界的 worker 或只读 Explore 子 agent。",
     },
     "send_message": {
         "schema": {"to": "str", "message": "str"},
         "risky": False,
-        "description": "Continue an existing idle worker by id.",
+        "description": "继续一个已存在且空闲的 worker。",
     },
     "task_stop": {
         "schema": {"task_id": "str"},
         "risky": False,
-        "description": "Stop a worker by id.",
+        "description": "按 id 停止一个 worker。",
     },
 }
 

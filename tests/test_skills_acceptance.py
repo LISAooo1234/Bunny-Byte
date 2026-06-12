@@ -90,7 +90,54 @@ Use target $ARGUMENTS from ${BUNNYBYTE_SKILL_DIR}.
     assert '"event": "skill_invoked"' in events
 
 
-def test_memory_slash_commands_use_kairos_assets(tmp_path):
+def test_new_project_skill_is_available_without_restart(tmp_path):
+    agent = build_agent(tmp_path, [])
+    assert "fresh" not in agent.skills
+
+    skill_dir = tmp_path / ".bunnybyte" / "skills" / "fresh"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: fresh
+description: Runtime-created skill
+user-invocable: true
+disable-model-invocation: true
+---
+Fresh skill says $ARGUMENTS.
+""",
+        encoding="utf-8",
+    )
+
+    handled, should_exit, output = handle_repl_command(agent, "/skill fresh hello")
+
+    assert handled is True
+    assert should_exit is False
+    assert output == "Fresh skill says hello."
+    assert "fresh" in agent.skills
+
+
+def test_skills_command_refreshes_new_project_skill(tmp_path):
+    agent = build_agent(tmp_path, [])
+    skill_dir = tmp_path / ".bunnybyte" / "skills" / "listed"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: listed
+description: Listed after refresh
+---
+Use listed.
+""",
+        encoding="utf-8",
+    )
+
+    handled, should_exit, output = handle_repl_command(agent, "/skills")
+
+    assert handled is True
+    assert should_exit is False
+    assert "`/listed`" in output
+    assert "Listed after refresh" in output
+
+
     agent = build_agent(tmp_path, [])
 
     handled, should_exit, output = handle_repl_command(agent, "/remember I prefer concise reports")

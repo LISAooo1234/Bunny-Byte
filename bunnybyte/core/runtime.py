@@ -554,6 +554,11 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         self.prefix_state = prefix_state
         self.prefix = prefix_state.text
 
+    def refresh_skills(self):
+        self.skills = skillslib.discover_skills(self.root)
+        self.refresh_prefix(force=True)
+        return self.skills
+
     def refresh_prefix(self, force=False):
         previous_hash = getattr(getattr(self, "prefix_state", None), "hash", None)
         previous_workspace_fingerprint = getattr(
@@ -726,14 +731,14 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
     def durable_memory_index_text(self):
         return memorylib.load_memory_index_text(self.memory_dir)
 
-    def remember_durable_note(self, text):
+    def remember_durable_note(self, text, source="slash_command"):
         self.ensure_session_started()
         path = memorylib.append_to_daily_log(self.memory_dir, text)
         if path:
             self.session_event_bus.emit(
                 "memory_note_appended",
                 {
-                    "source": "slash_command",
+                    "source": source,
                     "path": memorylib._agent_relative_path(self, path),
                     "chars": len(str(text).strip()),
                 },

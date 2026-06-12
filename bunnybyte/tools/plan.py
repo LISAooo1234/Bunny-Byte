@@ -4,12 +4,12 @@ PLAN_TOOL_SPECS = {
     "enter_plan_mode": {
         "schema": {"topic": "str", "path": "str?"},
         "risky": False,
-        "description": "Enter plan mode for a named planning topic.",
+        "description": "为指定主题进入计划模式。",
     },
     "exit_plan_mode": {
         "schema": {},
         "risky": False,
-        "description": "Exit plan mode and return to default runtime mode.",
+        "description": "退出计划模式并回到默认运行模式。",
     },
 }
 

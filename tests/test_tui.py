@@ -509,6 +509,7 @@ def test_slash_command_registry_suggests_and_parses_subagent():
     assert suggestions[0].name == "subagent"
     assert resolve_command("sub").name == "subagent"
     assert resolve_command("provider").name == "provider"
+    assert resolve_command("tools").name == "tool"
 
     payload, error = parse_subagent_args("worker --scope README.md,src update docs")
 
@@ -521,12 +522,38 @@ def test_slash_command_registry_suggests_and_parses_subagent():
     assert "skills" in skill_suggestions
     assert "skill" in skill_suggestions
 
+    tool_suggestions = [command.name for command in suggest_commands("/too")]
+    assert "tool" in tool_suggestions
+
     help_text = command_help_text()
-    assert "## Commands" in help_text
-    assert "### Session" in help_text
-    assert "| Command | Description |" in help_text
+    assert "## 命令" in help_text
+    assert "### 会话" in help_text
+    assert "| 命令 | 说明 |" in help_text
     assert "`/resume <id|index|latest>`" in help_text
     assert "`/provider [name]`" in help_text
+    assert "`/tool [name]`" in help_text
+
+
+def test_tool_command_lists_tools_and_details(tmp_path):
+    from bunnybyte.cli import handle_repl_command
+
+    agent = build_agent(tmp_path, [])
+
+    handled, should_exit, output = handle_repl_command(agent, "/tool")
+
+    assert handled is True
+    assert should_exit is False
+    assert "## Tools" in output
+    assert "`read_file`" in output
+    assert "`remember`" in output
+    assert "使用 `/tool <name>`" in output
+
+    handled, _, output = handle_repl_command(agent, "/tool remember")
+    assert handled is True
+    assert "## Tool" in output
+    assert "| 名称 | `remember` |" in output
+    assert "保存一条长期记忆" in output
+    assert "preference" in output
 
 
 @pytest.mark.asyncio

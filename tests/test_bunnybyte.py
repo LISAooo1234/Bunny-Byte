@@ -428,7 +428,53 @@ def test_list_files_hides_internal_agent_state(tmp_path):
     assert "[F] hello.txt" in result
 
 
-def test_repeated_identical_tool_call_is_rejected(tmp_path):
+def test_remember_tool_appends_durable_memory_log(tmp_path):
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool(
+        "remember",
+        {
+            "kind": "preference",
+            "text": "User prefers concise Chinese status updates after code changes.",
+        },
+    )
+
+    assert result.startswith("已保存 user 长期记忆：.bunnybyte/memory/logs/")
+    log_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / ".bunnybyte" / "memory" / "logs").rglob("*.md")
+    )
+    assert "user: User prefers concise Chinese status updates after code changes." in log_text
+    events_text = agent.session_store.event_path(agent.session["id"]).read_text(encoding="utf-8")
+    assert '"event": "memory_note_appended"' in events_text
+    assert '"source": "tool"' in events_text
+
+
+def test_remember_tool_rejects_secret_shaped_memory(tmp_path):
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("remember", {"text": "api_key=sk-secret1234567890"})
+
+    assert result.startswith("error: invalid arguments for remember: memory rejected: secret_shaped")
+
+
+def test_model_can_call_remember_tool(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"remember","args":{"kind":"project","text":"Project uses uv for dependency setup."}}</tool>',
+            "<final>已记录。</final>",
+        ],
+    )
+
+    assert agent.ask("以后记住这个项目使用 uv") == "已记录。"
+    log_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / ".bunnybyte" / "memory" / "logs").rglob("*.md")
+    )
+    assert "project: Project uses uv for dependency setup." in log_text
+
+
     agent = build_agent(tmp_path, [])
     agent.record({"role": "tool", "name": "list_files", "args": {}, "content": "(empty)", "created_at": "1"})
     agent.record({"role": "tool", "name": "list_files", "args": {}, "content": "(empty)", "created_at": "2"})

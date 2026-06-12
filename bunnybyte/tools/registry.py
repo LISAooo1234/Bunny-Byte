@@ -5,6 +5,9 @@
 """
 
 import html
+import importlib
+import inspect
+import pkgutil
 import shutil
 import subprocess
 import textwrap
@@ -12,110 +15,138 @@ from functools import partial
 
 from ..core.workspace import IGNORED_PATH_NAMES
 from .base import RegisteredTool
-from .agents import (
-    AGENT_TOOL_EXAMPLES,
-    AGENT_TOOL_NAMES,
-    AGENT_TOOL_SPECS,
-    tool_agent,
-    tool_send_message,
-    tool_task_stop,
-    validate_agent_tool,
-)
-from .ask_user import (
-    ASK_USER_TOOL_EXAMPLES,
-    ASK_USER_TOOL_SPECS,
-    tool_ask_user,
-    validate_ask_user_tool,
-)
-from .plan import (
-    PLAN_TOOL_EXAMPLES,
-    PLAN_TOOL_SPECS,
-    tool_enter_plan_mode,
-    tool_exit_plan_mode,
-    validate_plan_tool,
-)
-from .todos import (
-    TODO_TOOL_EXAMPLES,
-    TODO_TOOL_SPECS,
-    tool_todo_add,
-    tool_todo_list,
-    tool_todo_update,
-    validate_todo_tool,
-)
 
-BASE_TOOL_SPECS = {
+CORE_TOOL_SPECS = {
     "list_files": {
         "schema": {"path": "str='.'"},
         "risky": False,
-        "description": "List files in the workspace.",
+        "description": "列出工作区内的文件和目录。",
     },
     "read_file": {
         "schema": {"path": "str", "start": "int=1", "end": "int=2000"},
         "risky": False,
-        "description": "Read a UTF-8 file by line range.",
+        "description": "按行号范围读取 UTF-8 文本文件。",
     },
     "search": {
         "schema": {"pattern": "str", "path": "str='.'"},
         "risky": False,
-        "description": "Search the workspace with rg or a simple fallback.",
+        "description": "在工作区中搜索文本，优先使用 rg。",
     },
     "run_shell": {
         "schema": {"command": "str", "timeout": "int=20"},
         "risky": True,
-        "description": "Run a shell command in the repo root.",
+        "description": "在仓库根目录运行 shell 命令。",
     },
     "write_file": {
         "schema": {"path": "str", "content": "str"},
         "risky": True,
-        "description": "Write a text file.",
+        "description": "写入一个文本文件。",
     },
     "patch_file": {
         "schema": {"path": "str", "old_text": "str", "new_text": "str"},
         "risky": True,
-        "description": "Replace one exact text block in a file.",
+        "description": "把文件中唯一匹配的文本块替换为新内容。",
     },
-    **TODO_TOOL_SPECS,
-    **AGENT_TOOL_SPECS,
-    **PLAN_TOOL_SPECS,
-    **ASK_USER_TOOL_SPECS,
 }
 
-TOOL_EXAMPLES = {
+CORE_TOOL_EXAMPLES = {
     "list_files": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
     "read_file": '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":2000}}</tool>',
     "search": '<tool>{"name":"search","args":{"pattern":"binary_search","path":"."}}</tool>',
     "run_shell": '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
     "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
     "patch_file": '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
-    **TODO_TOOL_EXAMPLES,
-    **AGENT_TOOL_EXAMPLES,
-    **PLAN_TOOL_EXAMPLES,
-    **ASK_USER_TOOL_EXAMPLES,
 }
+
+_DYNAMIC_TOOL_CACHE: tuple[dict, dict, dict, list] | None = None
+
+
+def discover_tool_definitions():
+    """动态发现 bunnybyte.tools 包下的工具模块。"""
+    global _DYNAMIC_TOOL_CACHE
+    if _DYNAMIC_TOOL_CACHE is not None:
+        return _DYNAMIC_TOOL_CACHE
+
+    specs = dict(CORE_TOOL_SPECS)
+    examples = dict(CORE_TOOL_EXAMPLES)
+    runners = {name: globals()[f"tool_{name}"] for name in CORE_TOOL_SPECS}
+    validators = [(set(CORE_TOOL_SPECS), validate_core_tool)]
+
+    package_name = __package__ or "bunnybyte.tools"
+    package = importlib.import_module(package_name)
+    for module_info in pkgutil.iter_modules(package.__path__):
+        name = module_info.name
+        if name in {"base", "registry"} or name.startswith("_"):
+            continue
+        module = importlib.import_module(f"{package_name}.{name}")
+        module_specs = {}
+        module_validators = []
+        for attr_name, value in vars(module).items():
+            if attr_name.endswith("_TOOL_SPECS") and isinstance(value, dict):
+                module_specs.update(value)
+            elif attr_name.endswith("_TOOL_EXAMPLES") and isinstance(value, dict):
+                examples.update(value)
+            elif attr_name.startswith("tool_") and callable(value):
+                runners[attr_name.removeprefix("tool_")] = value
+            elif attr_name.startswith("validate_") and attr_name.endswith("_tool") and callable(value):
+                module_validators.append(value)
+        if module_specs:
+            specs.update(module_specs)
+            for validator in module_validators:
+                validators.append((set(module_specs), validator))
+
+    missing = sorted(set(specs) - set(runners))
+    if missing:
+        raise RuntimeError(f"missing tool runners: {', '.join(missing)}")
+    _DYNAMIC_TOOL_CACHE = specs, examples, runners, validators
+    return _DYNAMIC_TOOL_CACHE
 
 
 def build_tool_registry(agent):
-    # 工具不是动态发现的，而是显式注册的。
-    # 这样模型看到的是一个有边界、可审计的动作集合。
-    tools = {
+    specs, _, runners, _ = discover_tool_definitions()
+    return {
         name: RegisteredTool(
             name=name,
             schema=spec["schema"],
             description=spec["description"],
             risky=bool(spec["risky"]),
-            runner=partial(_TOOL_RUNNERS[name], agent),
+            runner=partial(runners[name], agent),
         )
-        for name, spec in BASE_TOOL_SPECS.items()
+        for name, spec in specs.items()
     }
-    return tools
 
 
 def tool_example(name):
-    return TOOL_EXAMPLES.get(name, "")
+    _, examples, _, _ = discover_tool_definitions()
+    return examples.get(name, "")
+
+
+def tool_specs():
+    specs, _, _, _ = discover_tool_definitions()
+    return dict(specs)
 
 
 def validate_tool(agent, name, args):
     args = args or {}
+    _, _, _, validators = discover_tool_definitions()
+    for names, validator in validators:
+        if name not in names:
+            continue
+        _call_validator(validator, agent, name, args)
+        return
+
+
+def _call_validator(validator, agent, name, args):
+    signature = inspect.signature(validator)
+    parameter_count = len(signature.parameters)
+    if parameter_count == 3:
+        return validator(agent, name, args)
+    if parameter_count == 2:
+        return validator(name, args)
+    return validator(args)
+
+
+def validate_core_tool(agent, name, args):
 
     if name == "list_files":
         path = agent.path(args.get("path", "."))
@@ -172,19 +203,6 @@ def validate_tool(agent, name, args):
         count = text.count(old_text)
         if count != 1:
             raise ValueError(f"old_text must occur exactly once, found {count}")
-        return
-
-    if name in AGENT_TOOL_NAMES:
-        validate_agent_tool(agent, name, args)
-        return
-    if name in PLAN_TOOL_SPECS:
-        validate_plan_tool(name, args)
-        return
-    if name in ASK_USER_TOOL_SPECS:
-        validate_ask_user_tool(name, args)
-        return
-    if name.startswith("todo_"):
-        validate_todo_tool(name, args)
         return
 
 
@@ -341,21 +359,3 @@ def tool_patch_file(agent, args):
     path.write_text(text.replace(old_text, str(args["new_text"]), 1), encoding="utf-8")
     return f"patched {path.relative_to(agent.root)}"
 
-
-_TOOL_RUNNERS = {
-    "list_files": tool_list_files,
-    "read_file": tool_read_file,
-    "search": tool_search,
-    "run_shell": tool_run_shell,
-    "write_file": tool_write_file,
-    "patch_file": tool_patch_file,
-    "todo_add": tool_todo_add,
-    "todo_update": tool_todo_update,
-    "todo_list": tool_todo_list,
-    "agent": tool_agent,
-    "send_message": tool_send_message,
-    "task_stop": tool_task_stop,
-    "enter_plan_mode": tool_enter_plan_mode,
-    "exit_plan_mode": tool_exit_plan_mode,
-    "ask_user": tool_ask_user,
-}

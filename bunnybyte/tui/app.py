@@ -103,6 +103,8 @@ class BunnyByteTuiApp(App):
         self.query_one(WelcomeBanner).update_agent(self.agent)
         self.query_one(ProgressPanel).update_agent(self.agent)
         input_bar = self.query_one(InputBar)
+        if hasattr(self.agent, "refresh_skills"):
+            self.agent.refresh_skills()
         input_bar.set_provider_profiles(provider_profiles_for_agent(self.agent))
         input_bar.set_skills(getattr(self.agent, "skills", {}) or {})
         input_bar.focus_input()
@@ -387,6 +389,8 @@ class BunnyByteTuiApp(App):
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(ProgressPanel).update_agent(self.agent)
         input_bar = self.query_one(InputBar)
+        if hasattr(self.agent, "refresh_skills"):
+            self.agent.refresh_skills()
         input_bar.set_provider_profiles(provider_profiles_for_agent(self.agent))
         input_bar.set_skills(getattr(self.agent, "skills", {}) or {})
 

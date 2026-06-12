@@ -4,14 +4,14 @@ TODO_TOOL_SPECS = {
     "todo_add": {
         "schema": {"content": "str", "status": "str='pending'", "priority": "str='normal'", "note": "str=''"},
         "risky": False,
-        "description": "Add an item to the session task ledger.",
+        "description": "向当前会话任务清单添加一项 todo。",
     },
     "todo_update": {
         "schema": {"todo_id": "str", "status": "str?", "content": "str?", "priority": "str?", "note": "str?"},
         "risky": False,
-        "description": "Update an item in the session task ledger.",
+        "description": "更新当前会话任务清单中的一项 todo。",
     },
-    "todo_list": {"schema": {}, "risky": False, "description": "List the session task ledger."},
+    "todo_list": {"schema": {}, "risky": False, "description": "列出当前会话任务清单。"},
 }
 
 TODO_TOOL_EXAMPLES = {

@@ -4,7 +4,7 @@ ASK_USER_TOOL_SPECS = {
     "ask_user": {
         "schema": {"question": "str", "choices": "list[str]=[]"},
         "risky": False,
-        "description": "Ask the interactive user a real blocking clarification question.",
+        "description": "向交互式用户提出一个会阻塞等待回答的澄清问题。",
     },
 }
 

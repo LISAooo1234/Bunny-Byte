@@ -41,6 +41,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("resume", "/resume <id|index|latest>", "按 id、序号、主题或 latest 恢复会话。", "会话", True),
     SlashCommand("session", "/session", "查看当前会话状态。", "会话"),
     SlashCommand("topic", "/topic [name]", "查看或重命名当前会话主题。", "会话"),
+    SlashCommand("tool", "/tool [name]", "展示模型可用工具。", "运行时", False, ("tools",)),
     SlashCommand("skills", "/skills", "列出可用的 BunnyByte 技能。", "技能", False, ("sk",)),
     SlashCommand("skill", "/skill <name> [args]", "加载并运行一个 BunnyByte 技能。", "技能", True),
     SlashCommand("agents", "/agents", "查看子 agent/worker 状态。", "计划", False, ("agent",)),

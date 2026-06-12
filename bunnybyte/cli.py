@@ -665,6 +665,8 @@ def handle_repl_command(agent, user_input):
     if user_input == "/dream":
         return True, False, agent.run_dream()
     if user_input == "/skills":
+        if hasattr(agent, "refresh_skills"):
+            agent.refresh_skills()
         return True, False, skillslib.render_skills_list(agent.skills)
     if user_input == "/plan" or user_input.startswith("/plan "):
         _, _, raw_topic = user_input.partition(" ")
@@ -721,6 +723,8 @@ def handle_repl_command(agent, user_input):
             "Context Usage",
             agent.prompt_metadata("", "")["context_usage"],
         )
+    if command_name == "tool":
+        return True, False, _format_tools(agent, command_args)
     if user_input == "/usage":
         return True, False, _format_usage(agent)
     if command_name == "provider":
@@ -774,14 +778,19 @@ def handle_repl_command(agent, user_input):
         return True, False, "## Session Reset\n\nThe current session was reset."
     command, arguments = skillslib.parse_slash_command(user_input)
     if command == "skill":
+        if hasattr(agent, "refresh_skills"):
+            agent.refresh_skills()
         skill_name, _, skill_arguments = arguments.partition(" ")
         if not skill_name.strip():
             return True, False, _format_usage_message("/skill <name> [args]")
         if skill_name.strip() not in agent.skills:
             return True, False, _format_error(f"skill not found: {skill_name.strip()}")
         return True, False, invoke_skill(agent, skill_name.strip(), skill_arguments.strip())
-    if command and command in agent.skills:
-        return True, False, invoke_skill(agent, command, arguments)
+    if command:
+        if hasattr(agent, "refresh_skills"):
+            agent.refresh_skills()
+        if command in agent.skills:
+            return True, False, invoke_skill(agent, command, arguments)
     return False, False, ""
 
 
@@ -993,6 +1002,48 @@ def _compact_summary(value, limit=96):
 def _markdown_table_cell(value):
     text = str(value or "-").replace("\n", " ")
     return text.replace("|", "\\|")
+
+
+def _format_tools(agent, name=""):
+    requested = str(name or "").strip().lstrip("/")
+    tools = getattr(agent, "tools", {}) or {}
+    if requested:
+        tool = tools.get(requested)
+        if tool is None:
+            return _format_error(f"tool not found: {requested}")
+        example = ""
+        try:
+            from .tools.registry import tool_example
+
+            example = tool_example(requested)
+        except Exception:
+            example = ""
+        rows = [
+            ("名称", tool.name),
+            ("描述", tool.description),
+            ("高风险", "是" if tool.risky else "否"),
+            ("只读", "是" if tool.read_only else "否"),
+            ("参数", json.dumps(tool.schema, ensure_ascii=False, sort_keys=True)),
+        ]
+        if example:
+            rows.append(("示例", example))
+        return _format_key_value_section("Tool", rows)
+
+    lines = [
+        "## Tools",
+        "",
+        "模型当前可调用的工具如下。使用 `/tool <name>` 查看某个工具的参数和示例。",
+        "",
+        "| 工具 | 风险 | 参数 | 描述 |",
+        "| --- | --- | --- | --- |",
+    ]
+    for tool in sorted(tools.values(), key=lambda item: item.name):
+        risk = "高风险" if tool.risky else "安全"
+        schema = ", ".join(f"{key}: {value}" for key, value in tool.schema.items()) or "-"
+        lines.append(
+            f"| `{tool.name}` | {risk} | {_markdown_table_cell(schema)} | {_markdown_table_cell(tool.description)} |"
+        )
+    return "\n".join(lines)
 
 
 def _format_key_value_section(title, rows):
