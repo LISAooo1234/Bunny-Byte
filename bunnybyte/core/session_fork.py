@@ -20,8 +20,8 @@ def fork_runtime_session(runtime, target="latest"):
     """Create and switch to a new session forked from a history event.
 
     The parent session remains append-only. The child gets a truncated history up
-    to the selected message and restores the workspace to the checkpoint that was
-    captured at, or before, that point in the conversation.
+    to the selected message. Forking is intentionally session-only and does not
+    mutate or restore workspace files.
     """
 
     runtime.ensure_session_started()
@@ -33,14 +33,6 @@ def fork_runtime_session(runtime, target="latest"):
     index = _resolve_history_index(history, target)
     target_item = history[index]
     checkpoint = _checkpoint_for_history_index(parent, history, index)
-    restored = False
-    restore_warning = ""
-    if checkpoint:
-        restored = runtime.restore_checkpoint(str(checkpoint.get("checkpoint_id", "")))
-        if not restored:
-            restore_warning = "workspace snapshot unavailable; forked conversation history only"
-    else:
-        restore_warning = "checkpoint unavailable; forked conversation history only"
 
     child_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-fork-" + uuid.uuid4().hex[:6]
     child_history = copy.deepcopy(history[: index + 1])
@@ -58,8 +50,8 @@ def fork_runtime_session(runtime, target="latest"):
         "forked_from_run_id": target_item.get("run_id", ""),
         "forked_from_role": target_item.get("role", ""),
         "forked_from_checkpoint_id": checkpoint.get("checkpoint_id", "") if checkpoint else "",
-        "workspace_restored": restored,
-        "restore_warning": restore_warning,
+        "workspace_restored": False,
+        "restore_warning": "session-only fork; workspace files were left unchanged",
         "created_at": child["created_at"],
     }
     child["memory"] = copy.deepcopy(parent.get("memory") or memorylib.default_memory_state())
@@ -74,7 +66,7 @@ def fork_runtime_session(runtime, target="latest"):
         checkpoints = {"current_id": "", "items": {}}
         child["checkpoints"] = checkpoints
     checkpoints.setdefault("items", {})
-    checkpoints["current_id"] = checkpoint.get("checkpoint_id", "") if checkpoint and restored else ""
+    checkpoints["current_id"] = checkpoint.get("checkpoint_id", "") if checkpoint else ""
 
     _shutdown_workers(runtime)
     runtime.session = child
@@ -88,8 +80,8 @@ def fork_runtime_session(runtime, target="latest"):
             "forked_from_turn_id": child["fork"].get("forked_from_turn_id", ""),
             "forked_from_run_id": child["fork"].get("forked_from_run_id", ""),
             "forked_from_checkpoint_id": child["fork"].get("forked_from_checkpoint_id", ""),
-            "workspace_restored": restored,
-            "restore_warning": restore_warning,
+            "workspace_restored": False,
+            "restore_warning": child["fork"].get("restore_warning", ""),
         },
     )
     runtime.session_path = runtime.session_store.save(runtime.session)
