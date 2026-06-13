@@ -20,6 +20,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("help", "/help", "显示可用命令。", "通用", False, ("h",)),
     SlashCommand("clear", "/clear", "创建一个新的空会话。", "会话"),
     SlashCommand("fork", "/fork [event|turn|#]", "从历史节点创建分支会话。", "会话"),
+    SlashCommand("rollback", "/rollback [event|turn|#]", "回滚到历史节点并创建分支会话。", "会话"),
     SlashCommand("compact", "/compact", "压缩较早的会话历史。", "会话"),
     SlashCommand("context", "/context", "查看当前提示词上下文用量。", "运行时"),
     SlashCommand("dream", "/dream", "整理并固化长期记忆。", "记忆"),

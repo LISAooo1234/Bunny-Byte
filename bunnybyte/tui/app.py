@@ -133,7 +133,11 @@ class BunnyByteTuiApp(App):
             return
         if button_id.startswith("fork-"):
             event.stop()
-            self._fork_from_target(button_id.removeprefix("fork-"))
+            self._branch_from_target("fork", button_id.removeprefix("fork-"))
+            return
+        if button_id.startswith("rollback-"):
+            event.stop()
+            self._branch_from_target("rollback", button_id.removeprefix("rollback-"))
             return
 
     def action_stop_turn(self) -> None:
@@ -313,16 +317,16 @@ class BunnyByteTuiApp(App):
     def _add_assistant_message(self, content: str) -> None:
         self.query_one(ChatLog).add_message("assistant", content)
 
-    def _fork_from_target(self, target: str) -> None:
+    def _branch_from_target(self, command: str, target: str) -> None:
         if self._is_agent_turn_running() or self._is_command_running():
-            self.query_one(ChatLog).add_message("assistant", "当前仍在运行，完成或停止后再创建分支。")
+            self.query_one(ChatLog).add_message("assistant", "当前仍在运行，完成或停止后再操作历史节点。")
             return
-        self._handle_command(f"/fork {target}")
+        self._handle_command(f"/{command} {target}")
 
     def _command_switched_session(
         self, text: str, previous_session_id: str, current_session_id: str
     ) -> bool:
-        if not text.strip().startswith(("/resume", "/fork")):
+        if not text.strip().startswith(("/resume", "/fork", "/rollback")):
             return False
         return bool(current_session_id and current_session_id != previous_session_id)
 
@@ -648,6 +652,8 @@ def _session_switch_message(command_text: str, command_output: str, session_id: 
     command = str(command_text or "").strip()
     if command.startswith("/fork"):
         return command_output or f"已创建分支会话 {session_id}"
+    if command.startswith("/rollback"):
+        return command_output or f"已回滚并创建分支会话 {session_id}"
     return f"已恢复会话 {session_id}"
 
 

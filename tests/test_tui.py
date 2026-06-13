@@ -40,6 +40,7 @@ def test_tui_recognizes_fork_as_session_switching_command(tmp_path):
     app = BunnyByteTuiApp(build_agent(tmp_path, []))
 
     assert app._command_switched_session("/fork latest", "parent", "child") is True
+    assert app._command_switched_session("/rollback latest", "parent", "child") is True
 
 
 def test_tui_runs_long_commands_in_executor(tmp_path):

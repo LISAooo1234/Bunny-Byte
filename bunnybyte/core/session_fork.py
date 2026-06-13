@@ -16,6 +16,16 @@ class SessionForkError(ValueError):
     """Raised when a session cannot be forked from the requested point."""
 
 
+class SessionRollbackError(ValueError):
+    """Raised when a session cannot be rolled back from the requested point."""
+
+
+def rollback_runtime_session(runtime, target="latest"):
+    """Restore files to a checkpoint and switch to a truncated child session."""
+
+    return _branch_runtime_session(runtime, target=target, mode="rollback")
+
+
 def fork_runtime_session(runtime, target="latest"):
     """Create and switch to a new session forked from a history event.
 
@@ -24,6 +34,10 @@ def fork_runtime_session(runtime, target="latest"):
     mutate or restore workspace files.
     """
 
+    return _branch_runtime_session(runtime, target=target, mode="fork")
+
+
+def _branch_runtime_session(runtime, target="latest", mode="fork"):
     runtime.ensure_session_started()
     parent = copy.deepcopy(runtime.session)
     history = list(parent.get("history", []) or [])
@@ -33,8 +47,17 @@ def fork_runtime_session(runtime, target="latest"):
     index = _resolve_history_index(history, target)
     target_item = history[index]
     checkpoint = _checkpoint_for_history_index(parent, history, index)
+    restored = False
+    restore_warning = "session-only fork; workspace files were left unchanged"
+    if mode == "rollback":
+        if not checkpoint:
+            raise SessionRollbackError("selected rollback point has no checkpoint")
+        restored = runtime.restore_checkpoint(str(checkpoint.get("checkpoint_id", "")))
+        if not restored:
+            raise SessionRollbackError("selected rollback point has no restorable file snapshot")
+        restore_warning = ""
 
-    child_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-fork-" + uuid.uuid4().hex[:6]
+    child_id = datetime.now().strftime("%Y%m%d-%H%M%S") + ("-rollback-" if mode == "rollback" else "-fork-") + uuid.uuid4().hex[:6]
     child_history = copy.deepcopy(history[: index + 1])
     child = copy.deepcopy(parent)
     child["id"] = child_id
@@ -50,8 +73,9 @@ def fork_runtime_session(runtime, target="latest"):
         "forked_from_run_id": target_item.get("run_id", ""),
         "forked_from_role": target_item.get("role", ""),
         "forked_from_checkpoint_id": checkpoint.get("checkpoint_id", "") if checkpoint else "",
-        "workspace_restored": False,
-        "restore_warning": "session-only fork; workspace files were left unchanged",
+        "workspace_restored": restored,
+        "restore_warning": restore_warning,
+        "branch_mode": mode,
         "created_at": child["created_at"],
     }
     child["memory"] = copy.deepcopy(parent.get("memory") or memorylib.default_memory_state())
@@ -80,8 +104,9 @@ def fork_runtime_session(runtime, target="latest"):
             "forked_from_turn_id": child["fork"].get("forked_from_turn_id", ""),
             "forked_from_run_id": child["fork"].get("forked_from_run_id", ""),
             "forked_from_checkpoint_id": child["fork"].get("forked_from_checkpoint_id", ""),
-            "workspace_restored": False,
+            "workspace_restored": restored,
             "restore_warning": child["fork"].get("restore_warning", ""),
+            "branch_mode": mode,
         },
     )
     runtime.session_path = runtime.session_store.save(runtime.session)

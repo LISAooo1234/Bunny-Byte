@@ -768,23 +768,24 @@ def handle_repl_command(agent, user_input):
             "New Session",
             [("Session id", session_id)],
         )
-    if command_name == "fork":
+    if command_name in {"fork", "rollback"}:
         target = command_args or "latest"
         try:
-            fork = agent.fork_session(target)
+            result = agent.rollback_session(target) if command_name == "rollback" else agent.fork_session(target)
         except ValueError as exc:
             return True, False, _format_error(exc)
+        title = "Session Rolled Back" if command_name == "rollback" else "Session Forked"
         rows = [
-            ("Session id", fork.get("session_id", "")),
-            ("Parent session", fork.get("parent_session_id", "")),
-            ("Forked from event", fork.get("forked_from_event_id", "") or "-"),
-            ("Forked from turn", fork.get("forked_from_turn_id", "") or "-"),
-            ("Checkpoint", fork.get("forked_from_checkpoint_id", "") or "-"),
-            ("Workspace restored", "yes" if fork.get("workspace_restored") else "no"),
+            ("Session id", result.get("session_id", "")),
+            ("Parent session", result.get("parent_session_id", "")),
+            ("From event", result.get("forked_from_event_id", "") or "-"),
+            ("From turn", result.get("forked_from_turn_id", "") or "-"),
+            ("Checkpoint", result.get("forked_from_checkpoint_id", "") or "-"),
+            ("Workspace restored", "yes" if result.get("workspace_restored") else "no"),
         ]
-        if fork.get("restore_warning"):
-            rows.append(("Note", fork.get("restore_warning")))
-        return True, False, _format_key_value_section("Session Forked", rows)
+        if result.get("restore_warning"):
+            rows.append(("Note", result.get("restore_warning")))
+        return True, False, _format_key_value_section(title, rows)
     if user_input == "/compact":
         return True, False, _format_json_section(
             "Compaction Result",

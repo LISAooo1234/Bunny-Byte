@@ -241,13 +241,44 @@ class AssistantMessage(Static):
     AssistantMessage .message-actions {
         height: auto;
         margin: 1 0 0 0;
+        padding: 0 0 0 0;
     }
-    AssistantMessage .fork-button {
+    AssistantMessage .fork-button, AssistantMessage .rollback-button {
+        min-width: 22;
+        width: 22;
+        height: 3;
+        margin: 0 1 0 0;
+        padding: 0 2;
+        border: round #4dabf7;
+        background: #10243a;
+        color: #d0ebff;
+    }
+    AssistantMessage .rollback-button {
         min-width: 18;
-        height: 1;
-        border: none;
-        background: #1f2a44;
-        color: #a5d8ff;
+        width: 18;
+        border: round #f59f00;
+        background: #2b2112;
+        color: #ffe8a1;
+    }
+    AssistantMessage .fork-button:hover {
+        border: round #74c0fc;
+        background: #123456;
+        color: #ffffff;
+    }
+    AssistantMessage .rollback-button:hover {
+        border: round #ffd43b;
+        background: #3a2a10;
+        color: #ffffff;
+    }
+    AssistantMessage .fork-button:focus {
+        border: heavy #91d5ff;
+        background: #1f4f7a;
+        color: #ffffff;
+    }
+    AssistantMessage .rollback-button:focus {
+        border: heavy #ffe066;
+        background: #5c3d08;
+        color: #ffffff;
     }
     """
 
@@ -261,6 +292,7 @@ class AssistantMessage(Static):
         if self.fork_target:
             yield Horizontal(
                 Button("↳ Fork from here", id="fork-" + self.fork_target, classes="fork-button"),
+                Button("↶ Rollback", id="rollback-" + self.fork_target, classes="rollback-button"),
                 classes="message-actions",
             )
 
