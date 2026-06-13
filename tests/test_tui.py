@@ -26,12 +26,27 @@ def rendered_text(widget) -> str:
     return getattr(rendered, "plain", str(rendered))
 
 
+def test_assistant_message_stores_fork_target():
+    from bunnybyte.tui.widgets import AssistantMessage
+
+    message = AssistantMessage("done", fork_target="event_000123")
+
+    assert message.fork_target == "event_000123"
+
+
+def test_tui_recognizes_fork_as_session_switching_command(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+
+    app = BunnyByteTuiApp(build_agent(tmp_path, []))
+
+    assert app._command_switched_session("/fork latest", "parent", "child") is True
+
+
 def test_tui_runs_long_commands_in_executor(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
 
     agent = build_agent(tmp_path, [])
     app = BunnyByteTuiApp(agent)
-
     assert app._command_should_run_in_executor("/compact") is True
     assert app._command_should_run_in_executor("/dream") is True
     assert app._command_should_run_in_executor("/review") is True

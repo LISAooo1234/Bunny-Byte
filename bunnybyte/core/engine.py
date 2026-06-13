@@ -491,6 +491,7 @@ class Engine:
                 continue
 
             agent.record({"role": "assistant", "content": final, "created_at": now()})
+            final_event_id = str((agent.session.get("history", []) or [{}])[-1].get("event_id", ""))
             if agent.runtime_mode == "plan":
                 agent.exit_plan_mode()
             agent.session_event_bus.emit(
@@ -541,7 +542,7 @@ class Engine:
             yield from self._drain_worker_notification_events()
             agent.current_turn_id = ""
             agent.current_run_id = ""
-            yield {"type": "final", "run_id": task_state.run_id, "content": final}
+            yield {"type": "final", "run_id": task_state.run_id, "content": final, "event_id": final_event_id}
             yield {
                 "type": "turn_finished",
                 "run_id": task_state.run_id,

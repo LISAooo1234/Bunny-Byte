@@ -126,9 +126,15 @@ class BunnyByteTuiApp(App):
         _copy_to_system_clipboard(selection)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "stop-turn":
+        button_id = str(event.button.id or "")
+        if button_id == "stop-turn":
             event.stop()
             self.action_stop_turn()
+            return
+        if button_id.startswith("fork-"):
+            event.stop()
+            self._fork_from_target(button_id.removeprefix("fork-"))
+            return
 
     def action_stop_turn(self) -> None:
         if self._is_agent_turn_running():
@@ -294,7 +300,7 @@ class BunnyByteTuiApp(App):
         if handled:
             current_session_id = str(self.agent.session.get("id", ""))
             if self._command_switched_session(text, previous_session_id, current_session_id):
-                run_ui(self._render_session_history)
+                run_ui(self._render_session_history, _session_switch_message(text, output, current_session_id))
             else:
                 run_ui(self._add_assistant_message, output)
             run_ui(self._refresh_runtime_identity)
@@ -307,27 +313,34 @@ class BunnyByteTuiApp(App):
     def _add_assistant_message(self, content: str) -> None:
         self.query_one(ChatLog).add_message("assistant", content)
 
+    def _fork_from_target(self, target: str) -> None:
+        if self._is_agent_turn_running() or self._is_command_running():
+            self.query_one(ChatLog).add_message("assistant", "当前仍在运行，完成或停止后再创建分支。")
+            return
+        self._handle_command(f"/fork {target}")
+
     def _command_switched_session(
         self, text: str, previous_session_id: str, current_session_id: str
     ) -> bool:
-        if not text.strip().startswith("/resume"):
+        if not text.strip().startswith(("/resume", "/fork")):
             return False
         return bool(current_session_id and current_session_id != previous_session_id)
 
-    def _render_session_history(self) -> None:
+    def _render_session_history(self, notice: str = "") -> None:
         chat = self.query_one(ChatLog)
         chat.clear_messages()
         for item in self.agent.session.get("history", []):
             role = str(item.get("role", ""))
             content = str(item.get("content", ""))
+            fork_target = str(item.get("event_id", "") or item.get("turn_id", ""))
             if role in {"user", "assistant"}:
-                chat.add_message(role, content)
+                chat.add_message(role, content, fork_target=fork_target)
             elif role == "tool":
                 name = str(item.get("name", "tool") or "tool")
                 args = item.get("args") if isinstance(item.get("args"), dict) else {}
                 chat.add_tool_history(name, args, content)
         session_id = str(self.agent.session.get("id", ""))
-        chat.add_message("assistant", f"已恢复会话 {session_id}")
+        chat.add_message("assistant", notice or f"已恢复会话 {session_id}")
 
     def _history_tool_summary(self, item: dict) -> str:
         name = str(item.get("name", "tool") or "tool")
@@ -452,10 +465,11 @@ class BunnyByteTuiApp(App):
             return
         if event_type in {"assistant_preamble", "retry", "runtime_notice", "final", "stop"}:
             content = str(event.get("content", ""))
+            fork_target = str(event.get("event_id", "")) if event_type == "final" else ""
             if event_type == "retry" and content.startswith("Your previous response could not be executed."):
                 self._queue_retry_notice(content)
             else:
-                self._queue_assistant_stream(content)
+                self._queue_assistant_stream(content, fork_target=fork_target)
             return
 
     def _finish_tool_card(self, event: dict) -> None:
@@ -497,7 +511,7 @@ class BunnyByteTuiApp(App):
         self._last_retry_count = 1
         self._last_retry_widget = self.query_one(ChatLog).add_message("assistant", content)
 
-    def _queue_assistant_stream(self, content: str) -> None:
+    def _queue_assistant_stream(self, content: str, fork_target: str = "") -> None:
         content = str(content or "")
         self._last_retry_widget = None
         self._last_retry_content = ""
@@ -509,10 +523,14 @@ class BunnyByteTuiApp(App):
         if self._model_stream_widget is not None:
             widget = self._model_stream_widget
             self._reset_model_stream()
-            widget.update_content(content)
-            self.query_one(ChatLog).scroll_end(animate=False)
+            if fork_target:
+                widget.remove()
+                self.query_one(ChatLog).add_message("assistant", content, fork_target=fork_target)
+            else:
+                widget.update_content(content)
+                self.query_one(ChatLog).scroll_end(animate=False)
             return
-        self.query_one(ChatLog).add_message("assistant", content)
+        self.query_one(ChatLog).add_message("assistant", content, fork_target=fork_target)
 
     def _append_model_stream_delta(self, delta: str) -> None:
         if not delta:
@@ -624,6 +642,13 @@ class BunnyByteTuiApp(App):
             self._ask_user_prompt.remove()
         self._ask_user_prompt = None
         self._ask_user_decision = None
+
+
+def _session_switch_message(command_text: str, command_output: str, session_id: str) -> str:
+    command = str(command_text or "").strip()
+    if command.startswith("/fork"):
+        return command_output or f"已创建分支会话 {session_id}"
+    return f"已恢复会话 {session_id}"
 
 
 def _copy_to_system_clipboard(text: str) -> None:

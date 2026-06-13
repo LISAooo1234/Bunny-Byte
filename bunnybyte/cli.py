@@ -768,6 +768,23 @@ def handle_repl_command(agent, user_input):
             "New Session",
             [("Session id", session_id)],
         )
+    if command_name == "fork":
+        target = command_args or "latest"
+        try:
+            fork = agent.fork_session(target)
+        except ValueError as exc:
+            return True, False, _format_error(exc)
+        rows = [
+            ("Session id", fork.get("session_id", "")),
+            ("Parent session", fork.get("parent_session_id", "")),
+            ("Forked from event", fork.get("forked_from_event_id", "") or "-"),
+            ("Forked from turn", fork.get("forked_from_turn_id", "") or "-"),
+            ("Checkpoint", fork.get("forked_from_checkpoint_id", "") or "-"),
+            ("Workspace restored", "yes" if fork.get("workspace_restored") else "no"),
+        ]
+        if fork.get("restore_warning"):
+            rows.append(("Note", fork.get("restore_warning")))
+        return True, False, _format_key_value_section("Session Forked", rows)
     if user_input == "/compact":
         return True, False, _format_json_section(
             "Compaction Result",

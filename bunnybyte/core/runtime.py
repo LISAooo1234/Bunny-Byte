@@ -31,6 +31,7 @@ from .runtime_checkpoints import RuntimeCheckpointsMixin
 from .runtime_events import build_runtime_event
 from .runtime_secrets import REDACTED_VALUE, RuntimeSecretsMixin
 from .session_events import SessionEventBus
+from .session_fork import fork_runtime_session
 from .session_lifecycle import clear_runtime_session, resume_runtime_session
 from .session_store import SessionStore as SessionStore  # noqa: F401
 from .session_state import SessionStateMixin
@@ -888,6 +889,8 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         return resume_runtime_session(self, session_id)
     def clear_session(self):
         return clear_runtime_session(self)
+    def fork_session(self, target="latest"):
+        return fork_runtime_session(self, target)
     def run_tool(self, name, args):
         self.ensure_session_started()
         return tool_executor.run_tool(self, name, args)

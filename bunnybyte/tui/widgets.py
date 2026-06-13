@@ -214,9 +214,10 @@ class UserMessage(Static):
     }
     """
 
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, fork_target: str = "") -> None:
         super().__init__()
         self.content = content
+        self.fork_target = fork_target
 
     def render(self) -> Text:
         return Text.assemble(
@@ -237,14 +238,31 @@ class AssistantMessage(Static):
         height: auto;
         width: 100%;
     }
+    AssistantMessage .message-actions {
+        height: auto;
+        margin: 1 0 0 0;
+    }
+    AssistantMessage .fork-button {
+        min-width: 18;
+        height: 1;
+        border: none;
+        background: #1f2a44;
+        color: #a5d8ff;
+    }
     """
 
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, fork_target: str = "") -> None:
         super().__init__(markup=False)
         self.content = content
+        self.fork_target = fork_target
 
     def compose(self):
         yield Markdown(self.content)
+        if self.fork_target:
+            yield Horizontal(
+                Button("↳ Fork from here", id="fork-" + self.fork_target, classes="fork-button"),
+                classes="message-actions",
+            )
 
     def update_content(self, content: str) -> None:
         self.content = content
@@ -571,11 +589,11 @@ class ChatLog(VerticalScroll):
     }
     """
 
-    def add_message(self, role: str, content: str, tool_name: str = "") -> Widget:
+    def add_message(self, role: str, content: str, tool_name: str = "", fork_target: str = "") -> Widget:
         if role == "user":
-            widget = UserMessage(content)
+            widget = UserMessage(content, fork_target=fork_target)
         elif role == "assistant":
-            widget = AssistantMessage(content)
+            widget = AssistantMessage(content, fork_target=fork_target)
         elif role == "tool":
             widget = ToolCard(tool_name=tool_name, args_summary=content)
         else:
