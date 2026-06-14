@@ -11,7 +11,7 @@ from .model_stream import complete_model_with_deltas
 from ..providers.base import ModelToolCall
 from .model_errors import finish_model_error
 from .engine_helpers import (
-    execute_tool_payload,
+    execute_tool_payloads,
     finish_limited_run,
     finish_stopped_run,
     maintain_memory_safely,
@@ -64,6 +64,27 @@ def _tool_call_payload(call):
     if isinstance(call, dict):
         return {"name": call.get("name", ""), "args": dict(call.get("args") or {})}
     return {"name": getattr(call, "name", ""), "args": dict(getattr(call, "args", {}) or {})}
+
+
+def _merge_provider_usage_into_context_usage(prompt_metadata, completion_metadata):
+    context_usage = dict(prompt_metadata.get("context_usage") or {})
+    if not context_usage:
+        return
+    provider_input = completion_metadata.get("input_tokens")
+    provider_output = completion_metadata.get("output_tokens")
+    provider_total = completion_metadata.get("total_tokens")
+    if provider_input is None and provider_total is None:
+        return
+    context_usage.update(
+        {
+            "provider_input_tokens": provider_input,
+            "provider_output_tokens": provider_output,
+            "provider_total_tokens": provider_total,
+            "display_tokens": provider_input if provider_input is not None else provider_total,
+            "display_source": "provider",
+        }
+    )
+    prompt_metadata["context_usage"] = context_usage
 
 
 class Engine:
@@ -346,6 +367,7 @@ class Engine:
                 ]
             if trace_completion_metadata:
                 prompt_metadata.update(trace_completion_metadata)
+                _merge_provider_usage_into_context_usage(prompt_metadata, trace_completion_metadata)
             agent.last_completion_metadata = trace_completion_metadata
             agent.last_prompt_metadata = prompt_metadata
             native_tool_calls = result_tool_calls
@@ -416,15 +438,14 @@ class Engine:
 
             if kind in {"tool", "tools"}:
                 tools = [payload] if kind == "tool" else list(payload)
-                for tool_payload in tools:
-                    if tool_steps >= agent.max_steps:
-                        break
-                    yield from execute_tool_payload(
-                        self, task_state, user_message, tool_payload
-                    )
-                    tool_steps += 1
-                    if agent.abort_requested:
-                        break
+                executed = yield from execute_tool_payloads(
+                    self,
+                    task_state,
+                    user_message,
+                    tools,
+                    agent.max_steps - tool_steps,
+                )
+                tool_steps += executed
                 if agent.abort_requested:
                     yield from finish_stopped_run(
                         self,

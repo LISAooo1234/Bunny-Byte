@@ -882,12 +882,21 @@ def _worker_summary(agent):
     return ", ".join(f"{item.get('id')}:{item.get('status')}" for item in items)
 
 
+def _context_usage_display(context_usage):
+    if not context_usage:
+        return "-"
+    used = context_usage.get("total_estimated_tokens")
+    window = context_usage.get("context_window", "-")
+    return f"{used}/{window} estimated" if used is not None else f"-/{window}"
+
+
 def _format_usage(agent):
     metadata = dict(getattr(agent, "last_completion_metadata", {}) or {})
     context_usage = dict(
         (getattr(agent, "last_prompt_metadata", {}) or {}).get("context_usage", {})
         or {}
     )
+    history_usage = dict(context_usage.get("history") or {})
     base_url = str(getattr(agent.model_client, "base_url", "") or "")
     return _format_key_value_section(
         "Usage",
@@ -903,10 +912,14 @@ def _format_usage(agent):
             ("Last provider attempts", metadata.get("provider_attempts", "unavailable")),
             ("Last provider retry count", metadata.get("provider_retry_count", "unavailable")),
             ("Last provider error", metadata.get("provider_error", "unavailable")),
-            (
-                "Context usage",
-                f"{context_usage.get('total_estimated_tokens', '-')}/{context_usage.get('context_window', '-')}",
-            ),
+            ("Context usage", _context_usage_display(context_usage)),
+            ("Provider input tokens", context_usage.get("provider_input_tokens", metadata.get("input_tokens", "unavailable"))),
+            ("Provider output tokens", context_usage.get("provider_output_tokens", metadata.get("output_tokens", "unavailable"))),
+            ("History same-turn compacted", history_usage.get("same_turn_compacted_entries", "-")),
+            ("History older turns compressed", history_usage.get("older_entries_count", "-")),
+            ("History summarized tools", history_usage.get("summarized_tool_count", "-")),
+            ("History duplicate reads collapsed", history_usage.get("collapsed_duplicate_reads", "-")),
+            ("History budget clipped", history_usage.get("budget_clipped", "-")),
         ],
     )
 

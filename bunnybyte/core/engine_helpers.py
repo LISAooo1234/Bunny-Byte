@@ -1,44 +1,56 @@
 """Helper routines for Engine control-loop side effects."""
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 from ..providers.base import complete_model
 from ..providers.errors import ProviderError
 from .workspace import clip, now
 
+MAX_PARALLEL_TOOLS = 4
 
-def execute_tool_payload(engine, task_state, user_message, payload):
-    agent = engine.runtime
-    name = payload.get("name", "")
-    args = payload.get("args", {})
-    task_state.record_tool(name)
-    tool_started_at = time.monotonic()
-    agent.session_event_bus.emit(
-        "tool_started", {"run_id": task_state.run_id, "tool_name": name, "args": args}
+
+@dataclass(frozen=True)
+class ToolExecutionRecord:
+    name: str
+    args: dict
+    result: str
+    metadata: dict
+    duration_ms: int
+
+
+def _execute_tool(agent, name, args, started_at):
+    result, metadata = agent.run_tool_with_metadata(name, args)
+    return ToolExecutionRecord(
+        name=name,
+        args=args,
+        result=result,
+        metadata=metadata,
+        duration_ms=int((time.monotonic() - started_at) * 1000),
     )
-    yield {"type": "tool_call", "run_id": task_state.run_id, "name": name, "args": args}
 
-    tool_result = agent.run_tool(name, args)
-    tool_metadata = dict(agent._last_tool_result_metadata or {})
-    tool_duration_ms = int((time.monotonic() - tool_started_at) * 1000)
+
+def _commit_tool_record(engine, task_state, user_message, record):
+    agent = engine.runtime
     agent.session_event_bus.emit(
         "tool_finished",
         {
             "run_id": task_state.run_id,
-            "tool_name": name,
-            "status": tool_metadata.get("tool_status", ""),
-            "tool_error_code": tool_metadata.get("tool_error_code", ""),
-            "workspace_changed": bool(tool_metadata.get("workspace_changed", False)),
-            "affected_paths": list(tool_metadata.get("affected_paths", [])),
-            "duration_ms": tool_duration_ms,
+            "tool_name": record.name,
+            "status": record.metadata.get("tool_status", ""),
+            "tool_error_code": record.metadata.get("tool_error_code", ""),
+            "workspace_changed": bool(record.metadata.get("workspace_changed", False)),
+            "affected_paths": list(record.metadata.get("affected_paths", [])),
+            "duration_ms": record.duration_ms,
         },
     )
     agent.record(
         {
             "role": "tool",
-            "name": name,
-            "args": args,
-            "content": tool_result,
+            "name": record.name,
+            "args": record.args,
+            "content": record.result,
             "created_at": now(),
         }
     )
@@ -53,14 +65,14 @@ def execute_tool_payload(engine, task_state, user_message, payload):
         task_state,
         "tool_executed",
         {
-            "name": name,
-            "args": args,
-            "result": clip(tool_result, 500),
-            "duration_ms": tool_duration_ms,
-            **tool_metadata,
+            "name": record.name,
+            "args": record.args,
+            "result": clip(record.result, 500),
+            "duration_ms": record.duration_ms,
+            **record.metadata,
         },
     )
-    if tool_metadata.get("workspace_changed") or not tool_metadata.get("read_only", True):
+    if record.metadata.get("workspace_changed") or not record.metadata.get("read_only", True):
         checkpoint = agent.create_checkpoint(
             task_state, user_message, trigger="tool_executed"
         )
@@ -75,15 +87,105 @@ def execute_tool_payload(engine, task_state, user_message, payload):
         agent.emit_trace(
             task_state,
             "checkpoint_skipped",
-            {"trigger": "read_only_tool", "tool_name": name},
+            {"trigger": "read_only_tool", "tool_name": record.name},
         )
     yield {
         "type": "tool_result",
         "run_id": task_state.run_id,
-        "name": name,
-        "content": tool_result,
-        "metadata": tool_metadata,
+        "name": record.name,
+        "content": record.result,
+        "metadata": record.metadata,
     }
+
+
+def execute_tool_payload(engine, task_state, user_message, payload):
+    agent = engine.runtime
+    name = payload.get("name", "")
+    args = payload.get("args", {})
+    task_state.record_tool(name)
+    tool_started_at = time.monotonic()
+    agent.session_event_bus.emit(
+        "tool_started", {"run_id": task_state.run_id, "tool_name": name, "args": args}
+    )
+    yield {"type": "tool_call", "run_id": task_state.run_id, "name": name, "args": args}
+
+    record = _execute_tool(agent, name, args, tool_started_at)
+    yield from _commit_tool_record(engine, task_state, user_message, record)
+
+
+def _tool_payload_name_args(payload):
+    return payload.get("name", ""), payload.get("args", {})
+
+
+def is_parallel_safe_tool(agent, payload):
+    name, _args = _tool_payload_name_args(payload)
+    tool = agent.available_tools().get(name)
+    return bool(tool and not tool.risky and getattr(tool, "parallel_safe", False))
+
+
+def tool_payload_batches(agent, payloads):
+    batches = []
+    current = []
+    for payload in payloads:
+        if is_parallel_safe_tool(agent, payload):
+            current.append(payload)
+            if len(current) >= MAX_PARALLEL_TOOLS:
+                batches.append(current)
+                current = []
+            continue
+        if current:
+            batches.append(current)
+            current = []
+        batches.append([payload])
+    if current:
+        batches.append(current)
+    return batches
+
+
+def execute_tool_payload_batch(engine, task_state, user_message, payloads):
+    payloads = list(payloads)
+    if len(payloads) <= 1:
+        if payloads:
+            yield from execute_tool_payload(engine, task_state, user_message, payloads[0])
+        return
+    agent = engine.runtime
+    started = []
+    for payload in payloads:
+        name, args = _tool_payload_name_args(payload)
+        task_state.record_tool(name)
+        started_at = time.monotonic()
+        started.append((payload, name, args, started_at))
+        agent.session_event_bus.emit(
+            "tool_started", {"run_id": task_state.run_id, "tool_name": name, "args": args}
+        )
+        yield {"type": "tool_call", "run_id": task_state.run_id, "name": name, "args": args}
+
+    records = [None] * len(started)
+    with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_TOOLS, len(started))) as executor:
+        futures = {
+            executor.submit(_execute_tool, agent, name, args, started_at): index
+            for index, (_payload, name, args, started_at) in enumerate(started)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            records[index] = future.result()
+
+    for record in records:
+        yield from _commit_tool_record(engine, task_state, user_message, record)
+
+
+def execute_tool_payloads(engine, task_state, user_message, payloads, remaining_steps):
+    agent = engine.runtime
+    executed = 0
+    pending = list(payloads)[: max(0, int(remaining_steps))]
+    for batch in tool_payload_batches(agent, pending):
+        if agent.abort_requested:
+            break
+        yield from execute_tool_payload_batch(engine, task_state, user_message, batch)
+        executed += len(batch)
+        if agent.abort_requested:
+            break
+    return executed
 
 
 def finish_stopped_run(

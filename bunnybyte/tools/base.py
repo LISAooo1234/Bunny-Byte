@@ -17,6 +17,7 @@ class RegisteredTool:
     description: str
     risky: bool
     runner: Callable[[dict], str]
+    parallel_safe: bool = False
 
     @property
     def read_only(self):

@@ -92,6 +92,7 @@ def test_manual_compact_creates_summary_event_and_shortens_future_history(tmp_pa
 
 def test_prompt_over_budget_triggers_auto_compaction_during_real_turn(tmp_path):
     agent = build_agent(tmp_path, ["<summary>Auto compact summary.</summary>", "<final>done</final>"])
+    agent.model_client.deterministic_scripted = False
     agent.context_manager = ContextManager(
         agent,
         total_budget=100,

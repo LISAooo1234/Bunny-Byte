@@ -12,27 +12,65 @@ from ..features import memory as memorylib, skills as skillslib
 from .context_usage import ContextUsageAnalyzer
 from .turn_history import TurnHistoryBuilder, tail_clip
 
-# Temporary diagnostic mode: keep prompt sections effectively unbounded so read_file
-# results remain visible across turns while investigating repeated-read behavior.
-DEFAULT_TOTAL_BUDGET = 10_000_000
-DEFAULT_SECTION_BUDGETS = {
-    "prefix": 10_000_000,
-    "memory": 10_000_000,
-    "skills": 10_000_000,
-    "relevant_memory": 10_000_000,
-    "history": 10_000_000,
-}
-DEFAULT_SECTION_FLOORS = {
-    "prefix": 10_000_000,
-    "memory": 10_000_000,
-    "skills": 10_000_000,
-    "relevant_memory": 10_000_000,
-    "history": 10_000_000,
-}
-# 当 prompt 超预算时，会优先压缩这些 section。
-DEFAULT_REDUCTION_ORDER = ("relevant_memory", "skills", "history", "memory", "prefix")
 SECTION_ORDER = ("prefix", "memory", "skills", "relevant_memory", "history", "current_request")
 CURRENT_REQUEST_SECTION = "current_request"
+_DEFAULT_SECTION_WEIGHTS = {
+    "prefix": 0.18,
+    "memory": 0.13,
+    "skills": 0.08,
+    "relevant_memory": 0.04,
+    "history": 0.57,
+}
+DEFAULT_CURRENT_REQUEST_RESERVE_RATIO = 0.12
+DEFAULT_CURRENT_REQUEST_RESERVE_MAX = 24_000
+DEFAULT_CURRENT_REQUEST_RESERVE_MIN = 2_000
+_MIN_SECTION_BUDGET = 20
+
+
+def _default_current_request_reserve(total_budget):
+    total_budget = max(0, int(total_budget))
+    desired = max(
+        DEFAULT_CURRENT_REQUEST_RESERVE_MIN,
+        int(total_budget * DEFAULT_CURRENT_REQUEST_RESERVE_RATIO),
+    )
+    reserve = min(DEFAULT_CURRENT_REQUEST_RESERVE_MAX, desired)
+    max_reserve = max(0, total_budget - (_MIN_SECTION_BUDGET * len(_DEFAULT_SECTION_WEIGHTS)))
+    return min(reserve, max_reserve)
+
+
+def default_section_budgets(total_budget):
+    total_budget = max(0, int(total_budget))
+    allocatable = max(
+        _MIN_SECTION_BUDGET * len(_DEFAULT_SECTION_WEIGHTS),
+        total_budget - _default_current_request_reserve(total_budget),
+    )
+    budgets = {}
+    remaining = allocatable
+    for section, weight in _DEFAULT_SECTION_WEIGHTS.items():
+        if section == "history":
+            budgets[section] = remaining
+            continue
+        value = max(_MIN_SECTION_BUDGET, int(allocatable * weight))
+        budgets[section] = value
+        remaining -= value
+    budgets["history"] = max(_MIN_SECTION_BUDGET, remaining)
+    return budgets
+
+
+# Keep the assembled prompt below the default 200k context window with room
+# for provider framing/tool schemas and the model response. When the prompt
+# cannot be reduced under this budget, runtime auto-compaction can trigger.
+DEFAULT_TOTAL_BUDGET = 180_000
+DEFAULT_SECTION_BUDGETS = default_section_budgets(DEFAULT_TOTAL_BUDGET)
+DEFAULT_SECTION_FLOORS = {
+    "prefix": 8_000,
+    "memory": 4_000,
+    "skills": 2_000,
+    "relevant_memory": 1_000,
+    "history": 20_000,
+}
+# 当 prompt 超预算时，会优先压缩这些 section。
+DEFAULT_REDUCTION_ORDER = ("relevant_memory", "skills", "memory", "prefix", "history")
 RELEVANT_MEMORY_LIMIT = 3
 
 
@@ -62,14 +100,40 @@ class ContextManager:
         reduction_order=None,
     ):
         self.agent = agent
+        self._uses_default_section_budgets = True
+        self._total_budget = 0
+        self._section_budgets = {}
         self.total_budget = int(total_budget)
-        self.section_budgets = dict(DEFAULT_SECTION_BUDGETS)
-        if section_budgets:
-            self.section_budgets.update({str(key): int(value) for key, value in section_budgets.items()})
+        self.section_budgets = section_budgets
         self._section_floor_overrides = {str(key): int(value) for key, value in (section_floors or {}).items()}
         self.section_floors = self._compute_section_floors()
         self.reduction_order = tuple(reduction_order or DEFAULT_REDUCTION_ORDER)
         self.history_builder = TurnHistoryBuilder(agent)
+
+    @property
+    def total_budget(self):
+        return self._total_budget
+
+    @total_budget.setter
+    def total_budget(self, value):
+        self._total_budget = int(value)
+        if getattr(self, "_uses_default_section_budgets", False):
+            self._section_budgets = default_section_budgets(self._total_budget)
+
+    @property
+    def section_budgets(self):
+        return dict(self._section_budgets)
+
+    @section_budgets.setter
+    def section_budgets(self, budgets):
+        if budgets is None:
+            self._uses_default_section_budgets = True
+            self._section_budgets = default_section_budgets(self.total_budget)
+            return
+        self._uses_default_section_budgets = False
+        resolved = default_section_budgets(self.total_budget)
+        resolved.update({str(key): int(value) for key, value in budgets.items()})
+        self._section_budgets = resolved
 
     def build(self, user_message):
         """按预算组装一轮完整 prompt。
@@ -140,14 +204,15 @@ class ContextManager:
             )
             return prompt, metadata
 
-        budgets = dict(self.section_budgets)
+        budgets = dict(self._section_budgets)
         rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes)
         prompt = self._assemble_prompt(rendered)
         reduction_log = []
 
         # 如果 prompt 超预算，就按固定顺序不断压缩。
         # 这里的顺序体现了平台偏好：
-        # 先牺牲 relevant_memory，再牺牲 history，然后才动 memory 和 prefix。
+        # 先牺牲相关笔记和技能说明，再牺牲工作记忆与稳定前缀；
+        # history 已经先过了一层微压缩/摘要化，所以尽量放到最后再硬裁。
         # 最新用户请求永远不裁剪，因为那是本轮最重要的输入。
         while len(prompt) > self.total_budget:
             overflow = len(prompt) - self.total_budget
@@ -224,16 +289,12 @@ class ContextManager:
 
     def _compute_section_floors(self):
         floors = {
-            section: max(20, int(budget) // 4)
-            for section, budget in self.section_budgets.items()
+            section: min(
+                int(DEFAULT_SECTION_FLOORS.get(section, max(_MIN_SECTION_BUDGET, int(budget) // 4))),
+                max(_MIN_SECTION_BUDGET, int(budget) // 4),
+            )
+            for section, budget in self._section_budgets.items()
         }
-        # Relevant memory is already capped to a tiny number of retrieved notes and
-        # clipped per-note inside its own renderer. Do not shrink this section a
-        # second time during global budget reduction, otherwise every selected
-        # note can collapse to a one-character bullet and become useless even
-        # though metadata says it was selected.
-        if "relevant_memory" in self.section_budgets:
-            floors["relevant_memory"] = int(self.section_budgets["relevant_memory"])
         floors.update(self._section_floor_overrides)
         return floors
 
@@ -319,6 +380,9 @@ class ContextManager:
                     "collapsed_duplicate_reads": 0,
                     "reused_file_summary_count": 0,
                     "summarized_tool_count": 0,
+                    "same_turn_compacted_entries": 0,
+                    "same_turn_compacted_tools": 0,
+                    "same_turn_compacted_notifications": 0,
                     "rendered_turns": 0,
                 },
             )
@@ -382,6 +446,10 @@ class ContextManager:
                 "collapsed_duplicate_reads": int(rendered["history"].details.get("collapsed_duplicate_reads", 0)),
                 "reused_file_summary_count": int(rendered["history"].details.get("reused_file_summary_count", 0)),
                 "summarized_tool_count": int(rendered["history"].details.get("summarized_tool_count", 0)),
+                "same_turn_compacted_entries": int(rendered["history"].details.get("same_turn_compacted_entries", 0)),
+                "same_turn_compacted_tools": int(rendered["history"].details.get("same_turn_compacted_tools", 0)),
+                "same_turn_compacted_notifications": int(rendered["history"].details.get("same_turn_compacted_notifications", 0)),
+                "budget_clipped": bool(rendered["history"].details.get("budget_clipped", False)),
                 "rendered_turns": int(rendered["history"].details.get("rendered_turns", 0)),
             },
             "skills": self._skills_metadata(),

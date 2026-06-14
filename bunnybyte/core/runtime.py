@@ -9,6 +9,7 @@ import json
 import os
 import re
 import textwrap
+import threading
 import uuid
 import hashlib
 from dataclasses import dataclass
@@ -244,6 +245,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         self.last_dream_changed_files = []
         self._memory_maintenance_thread = None
         self._last_tool_result_metadata = {}
+        self._tool_execution_lock = threading.RLock()
         self._last_prefix_refresh = {
             "workspace_changed": False,
             "prefix_changed": False,
@@ -517,6 +519,8 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
             - New files should be complete and runnable, including obvious imports.
             - Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.
             - Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or agent with args={{}}.
+            - When you need several independent read-only facts, request multiple read-only tools in the same response so they can run in parallel. Good parallel candidates include read_file, list_files, and search.
+            - Do not batch tools that depend on each other's results. Do not batch write_file, patch_file, run_shell, agent, approval-requiring, or workspace-mutating tools with other tools; request those one at a time in the required order.
             - Use agent for bounded subagents. Explore is read-only; worker writes must stay inside write_scope.
             - Use send_message to continue an existing worker instead of spawning a fresh worker with missing context.
             - Default to the next concrete action, not a discussion of possible next steps.
@@ -675,7 +679,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         self.resume_state = self.evaluate_resume_state()
         prompt, metadata = self.context_manager.build(user_message)
         if (
-            metadata.get("prompt_over_budget")
+            (metadata.get("prompt_over_budget") or metadata.get("budget_reductions"))
             and len(self.session.get("history", [])) > 4
             and not getattr(self.model_client, "deterministic_scripted", False)
         ):
@@ -893,9 +897,16 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         return fork_runtime_session(self, target)
     def rollback_session(self, target="latest"):
         return rollback_runtime_session(self, target)
-    def run_tool(self, name, args):
+    def run_tool_with_metadata(self, name, args):
         self.ensure_session_started()
-        return tool_executor.run_tool(self, name, args)
+        with self._tool_execution_lock:
+            result = tool_executor.run_tool(self, name, args)
+            metadata = dict(self._last_tool_result_metadata or {})
+        return result, metadata
+
+    def run_tool(self, name, args):
+        result, _metadata = self.run_tool_with_metadata(name, args)
+        return result
     def repeated_tool_call(self, name, args):
         return is_repeated_tool_call(self.session["history"], name, args, self.read_ledger)
 

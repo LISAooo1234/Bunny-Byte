@@ -461,6 +461,18 @@ def test_read_file_tool_output_gets_clean_preview_without_metadata():
     assert "read_file_meta" not in output
 
 
+def test_read_file_tool_output_no_longer_limits_preview_to_120_lines():
+    from bunnybyte.tui.widgets import _format_tool_output
+
+    body = "\n".join(f"{index:>4}: line {index}" for index in range(1, 151))
+    raw = f'# long.txt\n{body}\n<read_file_meta path="long.txt" start="1" end="150" returned_lines="150" total_lines="150" eof="true" />'
+
+    output = _format_tool_output(raw, "read_file")
+
+    assert " 150: line 150" in output
+    assert "more lines" not in output
+
+
 def test_status_bar_reads_context_usage_governance_fields():
     from bunnybyte.tui.widgets import StatusBar
 
@@ -474,7 +486,21 @@ def test_status_bar_reads_context_usage_governance_fields():
         }
     )
 
-    assert "context 1234/200000" in rendered_text(status)
+    assert "context 1234/200000 est" in rendered_text(status)
+    assert "░" in rendered_text(status)
+
+    status.update_context_usage(
+        {
+            "display_tokens": 1200,
+            "display_source": "provider",
+            "total_estimated_tokens": 1234,
+            "context_window": 200000,
+        }
+    )
+
+    text = rendered_text(status)
+    assert "context 1234/200000 est" in text
+    assert "provider" not in text
 
 
 def test_cli_plan_mode_and_session_commands_expose_runtime_state(tmp_path):

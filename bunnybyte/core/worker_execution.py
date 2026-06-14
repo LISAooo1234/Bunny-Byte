@@ -7,6 +7,13 @@ from .worker_notifications import render_worker_notification
 from .workspace import clip, now
 
 
+def _result_preview(text):
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return clip(" | ".join(lines[:3]), 320)
+
+
 def run_worker(manager, task, prompt, action):
     item = manager._get_item(task.id)
     with manager._lock:
@@ -31,6 +38,7 @@ def run_worker(manager, task, prompt, action):
             {
                 "status": status,
                 "result": clip(result, 2000),
+                "result_preview": _result_preview(result),
                 "tool_steps": int(getattr(task_state, "tool_steps", 0) or 0),
                 "attempts": int(getattr(task_state, "attempts", 0) or 0),
                 **collect_worker_artifacts(manager.runtime.root, task.runtime, task_state),

@@ -20,16 +20,23 @@ def build_agent(tmp_path, outputs=None, **kwargs):
 def test_usage_command_reports_provider_model_and_last_usage(tmp_path):
     from bunnybyte.cli import handle_repl_command
 
-    agent = build_agent(tmp_path, ["<final>Done.</final>"])
+    agent = build_agent(tmp_path, [])
+    from bunnybyte.providers.base import ModelResult
+
+    agent.model_client.outputs.append(
+        ModelResult(
+            text="<final>Done.</final>",
+            metadata={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cached_tokens": 3,
+                "provider_attempts": 2,
+                "provider_retry_count": 1,
+            },
+        )
+    )
     agent.model_client.model = "gpt-test"
     agent.model_client.base_url = "https://example.com/v1"
-    agent.model_client.last_completion_metadata = {
-        "input_tokens": 10,
-        "output_tokens": 5,
-        "cached_tokens": 3,
-        "provider_attempts": 2,
-        "provider_retry_count": 1,
-    }
     agent.ask("hello")
 
     handled, _, output = handle_repl_command(agent, "/usage")
@@ -41,6 +48,39 @@ def test_usage_command_reports_provider_model_and_last_usage(tmp_path):
     assert "| Last input tokens | `10` |" in output
     assert "| Last output tokens | `5` |" in output
     assert "| Last cached tokens | `3` |" in output
+    assert "| Context usage |" in output
+    assert "estimated" in output
+    assert "| Provider input tokens | `10` |" in output
+    assert "| Provider output tokens | `5` |" in output
+
+
+def test_usage_command_exposes_history_compression_counts(tmp_path):
+    from bunnybyte.cli import handle_repl_command
+
+    agent = build_agent(tmp_path, ["<final>Done.</final>"])
+    agent.record({"role": "user", "content": "older user message " * 20})
+    agent.record({"role": "assistant", "content": "older assistant message " * 20})
+    agent.record({"role": "user", "content": "middle user message " * 20})
+    agent.record({"role": "assistant", "content": "middle assistant message " * 20})
+    agent.record({"role": "user", "content": "recent user message"})
+    agent.ask("hello")
+
+    handled, _, output = handle_repl_command(agent, "/usage")
+
+    assert handled is True
+    assert "| History older turns compressed |" in output
+    assert "| History same-turn compacted |" in output
+    assert "| History summarized tools |" in output
+    assert "| History duplicate reads collapsed |" in output
+    assert "| History budget clipped |" in output
+
+
+def test_weighted_context_estimator_counts_cjk_more_conservatively():
+    from bunnybyte.core.context_usage import estimate_tokens
+
+    assert estimate_tokens("abcd" * 4) == 4
+    assert estimate_tokens("中文测试") == 4
+    assert estimate_tokens("中文abcd") == 3
 
 
 def test_model_command_updates_current_runtime_only(tmp_path):

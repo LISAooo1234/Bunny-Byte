@@ -54,6 +54,37 @@ def format_tool_args(name: str, args: dict | None) -> str:
     return json.dumps(args, ensure_ascii=False, sort_keys=True)
 
 
+def _context_bar(used, budget, width=12) -> str:
+    try:
+        used_value = max(0, int(used or 0))
+        budget_value = max(1, int(budget or 0))
+    except (TypeError, ValueError):
+        return ""
+    ratio = min(1.0, used_value / budget_value)
+    filled = int(round(ratio * width))
+    return "█" * filled + "░" * (width - filled)
+
+
+def _format_context_usage_text(usage: dict | None, *, include_bar: bool = True) -> str:
+    usage = usage or {}
+    used = usage.get("total_estimated_tokens") or usage.get("used_tokens") or usage.get("estimated_tokens") or usage.get("total_tokens")
+    budget = usage.get("budget") or usage.get("max_tokens") or usage.get("context_window")
+    if not used:
+        return "context -"
+    bar = _context_bar(used, budget) if include_bar and budget else ""
+    percent = ""
+    if budget:
+        try:
+            percent = f" {int((int(used) / max(1, int(budget))) * 100)}%"
+        except (TypeError, ValueError):
+            percent = ""
+    if budget:
+        body = f"context {used}/{budget} est{percent}"
+    else:
+        body = f"context {used} est"
+    return f"{body} {bar}" if bar else body
+
+
 class WelcomeBanner(Static):
     DEFAULT_CSS = f"""
     WelcomeBanner {{
@@ -96,15 +127,7 @@ class WelcomeBanner(Static):
         self.refresh()
 
     def update_context_usage(self, usage: dict | None) -> None:
-        usage = usage or {}
-        used = usage.get("total_estimated_tokens") or usage.get("used_tokens") or usage.get("estimated_tokens") or usage.get("total_tokens")
-        budget = usage.get("budget") or usage.get("max_tokens") or usage.get("context_window")
-        if used and budget:
-            self.context_text = f"context {used}/{budget}"
-        elif used:
-            self.context_text = f"context {used}"
-        else:
-            self.context_text = "context -"
+        self.context_text = _format_context_usage_text(usage, include_bar=True)
         self.refresh()
 
     def set_activity(self, busy: bool, detail: str = "") -> None:
@@ -730,24 +753,7 @@ class StatusBar(Static):
         self._render_status()
 
     def update_context_usage(self, usage: dict | None) -> None:
-        usage = usage or {}
-        used = (
-            usage.get("total_estimated_tokens")
-            or usage.get("used_tokens")
-            or usage.get("estimated_tokens")
-            or usage.get("total_tokens")
-        )
-        budget = (
-            usage.get("budget")
-            or usage.get("max_tokens")
-            or usage.get("context_window")
-        )
-        if used and budget:
-            self.context_text = f"context {used}/{budget}"
-        elif used:
-            self.context_text = f"context {used}"
-        else:
-            self.context_text = "context -"
+        self.context_text = _format_context_usage_text(usage, include_bar=True)
         self._render_status()
 
     def _render_status(self) -> None:
@@ -1090,10 +1096,12 @@ def _session_display_label(agent, limit: int = 32) -> str:
 
 def _clip(text: str, limit: int = 1200) -> str:
     text = str(text or "")
+    if limit is None or limit <= 0:
+        return text
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-def _format_tool_output(text: str, tool_name: str = "", limit: int = 1200) -> str:
+def _format_tool_output(text: str, tool_name: str = "", limit: int | None = None) -> str:
     clipped = _clip(text, limit=limit).strip()
     if not clipped:
         return ""
@@ -1121,9 +1129,7 @@ def _format_read_file_output(text: str) -> str:
     if not lines:
         return "```text\n" + text.replace("```", "`​``") + "\n```"
     title = f"### {Path(path).name}" if path else "### File preview"
-    preview = "\n".join(lines[:120]).replace("```", "`​``")
-    if len(lines) > 120:
-        preview += f"\n... {len(lines) - 120} more lines"
+    preview = "\n".join(lines).replace("```", "`​``")
     return f"{title}\n\n```text\n{preview}\n```"
 
 

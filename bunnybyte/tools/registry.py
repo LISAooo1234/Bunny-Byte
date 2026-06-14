@@ -20,16 +20,19 @@ CORE_TOOL_SPECS = {
     "list_files": {
         "schema": {"path": "str='.'"},
         "risky": False,
+        "parallel_safe": True,
         "description": "列出工作区内的文件和目录。",
     },
     "read_file": {
         "schema": {"path": "str", "start": "int=1", "end": "int=2000"},
         "risky": False,
+        "parallel_safe": True,
         "description": "按行号范围读取 UTF-8 文本文件。",
     },
     "search": {
         "schema": {"pattern": "str", "path": "str='.'"},
         "risky": False,
+        "parallel_safe": True,
         "description": "在工作区中搜索文本，优先使用 rg。",
     },
     "run_shell": {
@@ -111,6 +114,7 @@ def build_tool_registry(agent):
             description=spec["description"],
             risky=bool(spec["risky"]),
             runner=partial(runners[name], agent),
+            parallel_safe=bool(spec.get("parallel_safe", False)),
         )
         for name, spec in specs.items()
     }

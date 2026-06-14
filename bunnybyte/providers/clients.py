@@ -229,6 +229,23 @@ def _extract_usage_cache_details(data):
     }
 
 
+def _extract_anthropic_usage_details(data):
+    usage = data.get("usage") or {}
+    input_tokens = usage.get("input_tokens")
+    output_tokens = usage.get("output_tokens")
+    total_tokens = usage.get("total_tokens")
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        try:
+            total_tokens = int(input_tokens) + int(output_tokens)
+        except (TypeError, ValueError):
+            total_tokens = None
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
 def _request_with_retries(provider, model, base_url, request, timeout, retry_budget=2):
     retry_count = 0
     attempts = int(retry_budget) + 1
@@ -924,15 +941,8 @@ class AnthropicCompatibleModelClient:
                     self.last_completion_metadata = {
                         **dict(request_metadata),
                         "tool_calls": tool_calls,
+                        **_extract_anthropic_usage_details(response_data or {}),
                     }
-                    usage = (response_data or {}).get("usage")
-                    if isinstance(usage, dict):
-                        self.last_completion_metadata.update(
-                            {
-                                "input_tokens": usage.get("input_tokens"),
-                                "output_tokens": usage.get("output_tokens"),
-                            }
-                        )
                     if body_text or tool_calls:
                         return body_text
                     error = _provider_failure(
@@ -989,6 +999,7 @@ class AnthropicCompatibleModelClient:
             self.last_completion_metadata = {
                 **dict(request_metadata),
                 "tool_calls": tool_calls,
+                **_extract_anthropic_usage_details(data),
             }
             return text
         error = _provider_failure(

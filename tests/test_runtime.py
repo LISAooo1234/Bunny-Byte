@@ -57,6 +57,20 @@ def test_engine_drives_real_session_and_persists_event_timeline(tmp_path):
     ]
 
 
+def test_runtime_default_section_caps_reduce_prefix_before_auto_compact(tmp_path):
+    agent = build_agent(tmp_path, ["<summary>old history summarized</summary>"])
+    agent.prefix = "PREFIX " + ("A" * 210_000)
+    for index in range(5):
+        agent.record({"role": "user", "content": f"history-{index}", "created_at": f"2026-04-07T10:0{index}:00+00:00"})
+
+    _prompt, metadata = agent._build_prompt_and_metadata("trigger auto compact")
+
+    assert metadata.get("auto_compacted") is not True
+    assert metadata["prompt_over_budget"] is False
+    assert metadata["sections"]["prefix"]["rendered_chars"] == agent.context_manager.section_budgets["prefix"]
+    assert not agent.session.get("compactions")
+
+
 def test_engine_wraps_real_tools_with_session_events(tmp_path):
     agent = build_agent(
         tmp_path,
@@ -78,6 +92,108 @@ def test_engine_wraps_real_tools_with_session_events(tmp_path):
     assert tool_finished["tool_name"] == "write_file"
     assert tool_finished["status"] == "ok"
     assert tool_finished["workspace_changed"] is True
+
+
+def test_worker_notifications_use_result_preview_instead_of_full_result():
+    from bunnybyte.core.worker_notifications import render_worker_notification
+
+    payload = render_worker_notification(
+        {
+            "id": "agent_1",
+            "description": "scan auth module",
+            "status": "completed",
+            "result_preview": "found stale token refresh path and missing retry guard",
+            "tool_steps": 5,
+            "attempts": 2,
+            "duration_ms": 3210,
+            "report_path": ".bunnybyte/runs/run_worker/report.json",
+            "trace_path": ".bunnybyte/runs/run_worker/trace.jsonl",
+            "session_event_path": ".bunnybyte/sessions/worker.events.jsonl",
+            "tool_error_codes": ["tool_failed"],
+        }
+    )
+
+    assert "<result_preview>found stale token refresh path and missing retry guard</result_preview>" in payload
+    assert "<result>" not in payload
+    assert "<report_path>.bunnybyte/runs/run_worker/report.json</report_path>" in payload
+    assert "<tool_error_codes>tool_failed</tool_error_codes>" in payload
+
+
+def test_runtime_prefix_instructs_model_to_batch_independent_read_only_tools(tmp_path):
+    agent = build_agent(tmp_path, [])
+
+    prompt = agent.prompt("inspect files")
+
+    assert "request multiple read-only tools in the same response" in prompt
+    assert "read_file, list_files, and search" in prompt
+    assert "Do not batch write_file, patch_file, run_shell, agent" in prompt
+
+
+def test_engine_executes_parallel_safe_tools_in_one_batch_and_preserves_order(tmp_path):
+    (tmp_path / "a.txt").write_text("alpha\n", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("beta\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            '[{"name":"read_file","args":{"path":"a.txt"}}, {"name":"read_file","args":{"path":"b.txt"}}]',
+            "<final>Done.</final>",
+        ],
+        max_steps=4,
+    )
+
+    answer = agent.ask("read both")
+
+    assert answer == "Done."
+    tool_history = [item for item in agent.session["history"] if item.get("role") == "tool"]
+    assert [item["args"]["path"] for item in tool_history] == ["a.txt", "b.txt"]
+    assert agent.current_task_state.tool_steps == 2
+    events = read_session_events(agent)
+    started = [event for event in events if event["event"] == "tool_started"]
+    finished = [event for event in events if event["event"] == "tool_finished"]
+    assert [event["tool_name"] for event in started[:2]] == ["read_file", "read_file"]
+    assert [event["tool_name"] for event in finished[:2]] == ["read_file", "read_file"]
+
+
+def test_parallel_batch_keeps_risky_tools_serial_between_read_batches(tmp_path):
+    (tmp_path / "a.txt").write_text("alpha\n", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("beta\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            '[{"name":"read_file","args":{"path":"a.txt"}}, {"name":"write_file","args":{"path":"out.txt","content":"ok\\n"}}, {"name":"read_file","args":{"path":"b.txt"}}]',
+            "<final>Done.</final>",
+        ],
+        max_steps=5,
+    )
+
+    answer = agent.ask("read write read")
+
+    assert answer == "Done."
+    assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "ok\n"
+    tool_history = [item for item in agent.session["history"] if item.get("role") == "tool"]
+    assert [item["name"] for item in tool_history] == ["read_file", "write_file", "read_file"]
+    assert [item["args"].get("path") for item in tool_history] == ["a.txt", "out.txt", "b.txt"]
+
+
+def test_parallel_safe_tool_errors_do_not_cancel_batch(tmp_path):
+    (tmp_path / "a.txt").write_text("alpha\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            '[{"name":"read_file","args":{"path":"a.txt"}}, {"name":"read_file","args":{"path":"missing.txt"}}]',
+            "<final>Done.</final>",
+        ],
+        max_steps=4,
+    )
+
+    answer = agent.ask("read existing and missing")
+
+    assert answer == "Done."
+    tool_history = [item for item in agent.session["history"] if item.get("role") == "tool"]
+    assert len(tool_history) == 2
+    assert "alpha" in tool_history[0]["content"]
+    assert "error:" in tool_history[1]["content"]
+    assert agent.current_task_state.tool_steps == 2
 
 
 def test_plan_mode_allows_only_the_active_plan_artifact_until_plan_is_written(tmp_path):

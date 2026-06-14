@@ -1,6 +1,11 @@
 from bunnybyte.testing import ScriptedModelClient
 from bunnybyte import BunnyByte, SessionStore, WorkspaceContext
-from bunnybyte.core.context_manager import ContextManager
+from bunnybyte.core.context_manager import (
+    ContextManager,
+    DEFAULT_SECTION_BUDGETS,
+    DEFAULT_SECTION_FLOORS,
+    DEFAULT_TOTAL_BUDGET,
+)
 
 
 def build_workspace(tmp_path):
@@ -21,6 +26,61 @@ def build_agent(tmp_path, outputs, **kwargs):
     )
 
 
+def render_read_file_result(path, marker, total_lines=140):
+    body = "\n".join(
+        f"{number:>4}: {marker} line {number}"
+        for number in range(1, total_lines + 1)
+    )
+    return (
+        f"# {path}\n{body}\n"
+        f'<read_file_meta path="{path}" start="1" end="{total_lines}" '
+        f'returned_lines="{total_lines}" total_lines="{total_lines}" eof="true" />'
+    )
+
+
+def test_context_manager_default_budget_is_auto_compact_threshold():
+    assert DEFAULT_TOTAL_BUDGET == 180_000
+
+
+def test_context_manager_default_section_budgets_leave_current_request_headroom(tmp_path):
+    manager = ContextManager(build_agent(tmp_path, []))
+
+    assert manager.section_budgets == DEFAULT_SECTION_BUDGETS
+    assert sum(manager.section_budgets.values()) < DEFAULT_TOTAL_BUDGET
+    assert manager.section_budgets["history"] > manager.section_budgets["prefix"] > manager.section_budgets["relevant_memory"]
+
+
+def test_context_manager_section_floors_use_configured_defaults_and_scale_down_for_small_caps(tmp_path):
+    default_manager = ContextManager(build_agent(tmp_path, []))
+    assert default_manager.section_floors == {
+        section: min(
+            DEFAULT_SECTION_FLOORS[section],
+            max(20, default_manager.section_budgets[section] // 4),
+        )
+        for section in DEFAULT_SECTION_FLOORS
+    }
+
+    scaled_manager = ContextManager(
+        build_agent(tmp_path, []),
+        total_budget=900,
+        section_budgets={
+            "prefix": 120,
+            "memory": 120,
+            "skills": 60,
+            "relevant_memory": 80,
+            "history": 260,
+        },
+    )
+
+    assert scaled_manager.section_floors == {
+        "prefix": 30,
+        "memory": 30,
+        "skills": 20,
+        "relevant_memory": 20,
+        "history": 65,
+    }
+
+
 def test_context_manager_assembles_sections_in_expected_order(tmp_path):
     agent = build_agent(tmp_path, [])
     agent.memory.append_note("deploy key is red", tags=("deploy",), created_at="2026-04-07T10:00:00+00:00")
@@ -36,6 +96,35 @@ def test_context_manager_assembles_sections_in_expected_order(tmp_path):
     assert prompt.index("Transcript:") < prompt.index("Current user request:")
     assert prompt.rstrip().endswith("Current user request:\nWhere is the deploy key?")
     assert metadata["section_order"] == ["prefix", "memory", "skills", "relevant_memory", "history", "current_request"]
+
+
+def test_context_manager_does_not_compress_older_turns_when_within_budget(tmp_path):
+    agent = build_agent(tmp_path, [])
+    old_content = "OLD-CONTEXT " + ("D" * 260)
+    old_tool_content = "TOOL-CONTENT " + ("T" * 260)
+    agent.record({"role": "user", "content": old_content, "created_at": "2026-04-07T09:59:00+00:00"})
+    agent.record(
+        {
+            "role": "tool",
+            "name": "read_file",
+            "args": {"path": "old.txt", "start": 1, "end": 5},
+            "content": old_tool_content,
+            "created_at": "2026-04-07T09:59:30+00:00",
+        }
+    )
+    for minute in range(1, 8):
+        role = "assistant" if minute % 2 == 1 else "user"
+        agent.record({"role": role, "content": f"recent-{minute}", "created_at": f"2026-04-07T10:0{minute}:00+00:00"})
+
+    prompt, metadata = ContextManager(agent).build("keep full history")
+
+    assert old_content in prompt
+    assert old_tool_content in prompt
+    assert metadata["history"]["raw_chars"] == metadata["history"]["rendered_chars"]
+    assert metadata["history"]["older_entries_count"] == 0
+    assert metadata["history"]["summarized_tool_count"] == 0
+    assert metadata["history"]["collapsed_duplicate_reads"] == 0
+    assert metadata["history"]["budget_clipped"] is False
 
 
 def test_context_manager_reduces_relevant_memory_before_history_and_preserves_newer_context(tmp_path):
@@ -169,7 +258,17 @@ def test_context_manager_collapses_older_duplicate_reads_into_one_summary_line(t
             }
         )
 
-    prompt, metadata = ContextManager(agent).build("check the file")
+    prompt, metadata = ContextManager(
+        agent,
+        total_budget=900,
+        section_budgets={
+            "prefix": 120,
+            "memory": 120,
+            "skills": 60,
+            "relevant_memory": 80,
+            "history": 260,
+        },
+    ).build("check the file")
     transcript = prompt.split("\n\nTranscript:\n", 1)[1].split("\n\nCurrent user request:", 1)[0]
 
     assert transcript.count("[tool:read_file]") == 0
@@ -201,13 +300,119 @@ def test_context_manager_summarizes_older_tool_output_into_one_line(tmp_path):
             }
         )
 
-    prompt, metadata = ContextManager(agent).build("check failures")
+    prompt, metadata = ContextManager(
+        agent,
+        total_budget=900,
+        section_budgets={
+            "prefix": 120,
+            "memory": 120,
+            "skills": 60,
+            "relevant_memory": 80,
+            "history": 260,
+        },
+    ).build("check failures")
     transcript = prompt.split("\n\nTranscript:\n", 1)[1].split("\n\nCurrent user request:", 1)[0]
 
     assert 'pytest -q -> FAIL test_one | FAIL test_two | FAIL test_three' in transcript
     assert "FAIL test_four" not in transcript
     assert metadata["history"]["summarized_tool_count"] == 1
     assert metadata["history"]["reused_file_summary_count"] == 0
+
+
+def test_context_manager_microcompacts_large_current_turn_before_budget_cliff(tmp_path):
+    agent = build_agent(tmp_path, [])
+    agent.current_turn_id = "task_000001"
+    agent.record({"role": "user", "content": "inspect the repository", "created_at": "2026-04-07T09:00:00+00:00"})
+    for index in range(1, 9):
+        agent.record(
+            {
+                "role": "tool",
+                "name": "read_file",
+                "args": {"path": f"file_{index}.py", "start": 1, "end": 140},
+                "content": render_read_file_result(f"file_{index}.py", f"MARKER-{index}"),
+                "created_at": f"2026-04-07T09:{index:02d}:00+00:00",
+            }
+        )
+    agent.record({"role": "assistant", "content": "still checking dependencies", "created_at": "2026-04-07T09:10:00+00:00"})
+
+    prompt, metadata = ContextManager(
+        agent,
+        total_budget=40_000,
+        section_budgets={
+            "prefix": 120,
+            "memory": 120,
+            "skills": 60,
+            "relevant_memory": 80,
+            "history": 20_000,
+        },
+    ).build("continue")
+    transcript = prompt.split("\n\nTranscript:\n", 1)[1].split("\n\nCurrent user request:", 1)[0]
+
+    assert metadata["history"]["older_entries_count"] == 0
+    assert metadata["history"]["same_turn_compacted_entries"] >= 4
+    assert metadata["history"]["same_turn_compacted_tools"] >= 4
+    assert metadata["history"]["budget_clipped"] is False
+    assert "MARKER-1 line 1" not in transcript
+    assert "file_1.py lines 1-140 of 140 complete" in transcript
+    assert "MARKER-8 line 1" in transcript
+
+
+def test_context_manager_microcompacts_worker_notifications_in_current_turn(tmp_path):
+    from bunnybyte.core.worker_notifications import render_worker_notification
+
+    agent = build_agent(tmp_path, [])
+    agent.current_turn_id = "task_000002"
+    agent.record({"role": "user", "content": "audit auth flow", "created_at": "2026-04-07T09:00:00+00:00"})
+    agent.record(
+        {
+            "role": "user",
+            "content": render_worker_notification(
+                {
+                    "id": "agent_1",
+                    "description": "scan auth module",
+                    "status": "completed",
+                    "result_preview": "reviewed auth flow and found stale token refresh path",
+                    "tool_steps": 5,
+                    "attempts": 2,
+                    "duration_ms": 3210,
+                    "report_path": ".bunnybyte/runs/run_worker/report.json",
+                    "trace_path": ".bunnybyte/runs/run_worker/trace.jsonl",
+                    "session_event_path": ".bunnybyte/sessions/worker.events.jsonl",
+                    "tool_error_codes": [],
+                }
+            ),
+            "created_at": "2026-04-07T09:01:00+00:00",
+        }
+    )
+    for index in range(1, 7):
+        agent.record(
+            {
+                "role": "tool",
+                "name": "read_file",
+                "args": {"path": f"auth_{index}.py", "start": 1, "end": 140},
+                "content": render_read_file_result(f"auth_{index}.py", f"AUTH-{index}"),
+                "created_at": f"2026-04-07T09:{index + 1:02d}:00+00:00",
+            }
+        )
+    agent.record({"role": "assistant", "content": "done inspecting", "created_at": "2026-04-07T09:09:00+00:00"})
+
+    prompt, metadata = ContextManager(
+        agent,
+        total_budget=32_000,
+        section_budgets={
+            "prefix": 120,
+            "memory": 120,
+            "skills": 60,
+            "relevant_memory": 80,
+            "history": 16_000,
+        },
+    ).build("continue")
+    transcript = prompt.split("\n\nTranscript:\n", 1)[1].split("\n\nCurrent user request:", 1)[0]
+
+    assert "worker agent_1 completed" in transcript
+    assert "reviewed auth flow and found stale token refresh path" in transcript
+    assert "<task-notification>" not in transcript
+    assert metadata["history"]["same_turn_compacted_notifications"] == 1
 
 
 def test_context_manager_relevant_memory_can_mix_durable_notes(tmp_path):
