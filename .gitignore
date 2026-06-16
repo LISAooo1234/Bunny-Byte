@@ -45,6 +45,7 @@ readme_intro_locked/
 docs/**
 !docs/
 !docs/configuration.md
+!docs/architecture.md
 !docs/memory.md
 !docs/skills.md
 !docs/sandbox.md
