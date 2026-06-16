@@ -4,12 +4,12 @@
 
 [中文](README.md) | [English](README.EN.md)
 
-**A local-first, auditable terminal coding agent with memory**
+**A terminal coding agent for local repositories**
 
-Bunny Byte runs inside your repository, connects to OpenAI-compatible,
-Anthropic-compatible, or DeepSeek model providers, and uses controlled tools to
-read code, search, run commands, edit files, and keep sessions, event streams,
-traces, reports, and long-term memory on your machine.
+Bunny Byte provides TUI / REPL / CLI interfaces with controlled tool use,
+session recovery, task planning, long-term memory, and local run artifacts.  
+The goal is not only to connect a model to a terminal, but to make a local
+agent controllable, recoverable, and observable.
 
 </div>
 
@@ -17,396 +17,241 @@ traces, reports, and long-term memory on your machine.
   <img src="assets/screenshots/bunnybyte-tui-intro.png" alt="Bunny Byte TUI intro screen" width="960">
 </p>
 
----
-
-## What Is Bunny Byte?
-
-Bunny Byte is a terminal coding agent for local repositories. It does not hand a
-model raw shell access. Instead, each run is structured as an observable,
-recoverable, and auditable workflow:
-
-- **Provider profiles** choose the model source, while `protocol` controls the
-  request format. Bunny Byte supports OpenAI Responses API and
-  Anthropic Messages-compatible endpoints.
-- **Prompt context** assembles runtime rules, repository context, tools, skills,
-  working memory, durable memory, and recent history within a budget.
-- **Native tool calling** uses OpenAI Responses / Anthropic Messages provider-native tool protocols whenever available. Bunny Byte executes only structured tool calls returned by the provider. The old `<tool>/<final>` text protocol remains only as a legacy fallback for providers without native tools.
-- **Tools** include file listing, reading, search, shell, file writing, precise
-  patches, todos, `ask_user`, subagents, and plan mode.
-- **Approval, sandboxing, and policy** can gate writes, shell commands, and risky
-  actions. `run_shell` can use a bubblewrap sandbox when available.
-- **Subagents** support read-only exploration and scoped worker tasks without
-  mixing their internal sessions into normal history.
-- **Run evidence** stores session JSON, event JSONL, run traces, task state,
-  reports, and checkpoints.
-- **Memory and auto-dream** keep working memory for the current task, daily logs
-  for observations, and durable topics for long-term project knowledge.
-
-Bunny Byte aims to be as transparent as a local engineering tool and as useful
-as a coding agent that can keep working across sessions.
-
 > BunnyByte is AI and can make mistakes. Please double-check responses.
+
+## Overview
+
+Bunny Byte runs inside a local repository and uses controlled tools for code
+search, command execution, file editing, task decomposition, and context
+management. Session data, events, traces, checkpoints, reports, and memory are
+stored locally for recovery, review, and debugging.
+
+## Core Capabilities
+
+| Capability | Summary |
+| --- | --- |
+| Model integration | Supports the OpenAI Responses API and Anthropic-style interfaces; `provider` selects configuration and `protocol` selects the request format. |
+| Tool calling | Uses provider-native tool calling when available and keeps a fallback path for legacy backends. |
+| Session lifecycle | Supports `/history`, `/resume`, `/fork`, `/rollback`, and `/compact`. |
+| Task orchestration | Includes plan mode, todo ledger, `ask_user`, and `Explore` / `worker` subagents. |
+| Memory | Includes working memory, daily logs, durable topics, `/remember`, and `/dream`. |
+| Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
+| Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
 
 ## Interface
 
-The TUI and the line-based REPL use the same runtime. In the TUI, you can see
-model status, tool calls, tool results, worker notifications, slash-command
-completion, session progress, and context usage.
+### Tool execution and task flow
 
 <p align="center">
-  <strong>Tools and subagents</strong><br>
-  <img src="assets/screenshots/bunnybyte-tui-tools.png" alt="Bunny Byte TUI tools and subagents" width="960">
+  <img src="assets/screenshots/bunnybyte-tui-tools.png" alt="Bunny Byte TUI tool execution" width="960">
 </p>
+
+The same interface shows model output, tool calls, command results, and
+sub-task state.
+
+### Planning and memory state
 
 <p align="center">
-  <strong>Skills, help, and command completion</strong><br>
-  <img src="assets/screenshots/bunnybyte-tui-skills-help.png" alt="Bunny Byte TUI skills, help, and command completion" width="960">
+  <img src="assets/screenshots/bunnybyte-tui-memory-skills.png" alt="Bunny Byte TUI planning and memory" width="960">
 </p>
 
-<p align="center">
-  <strong>Memory and durable topics</strong><br>
-  <img src="assets/screenshots/bunnybyte-tui-memory-skills.png" alt="Bunny Byte TUI memory and skills" width="960">
-</p>
+Plan mode can display todo progress, subagent state, and memory-related context
+at the same time.
 
-<p align="center">
-  <strong>Slash-command workspace</strong><br>
-  <img src="assets/screenshots/bunnybyte-tui-latest.png" alt="Bunny Byte TUI slash-command completion" width="960">
-</p>
+## Architecture
 
-## Install
+```mermaid
+flowchart TB
+    U["User"] --> UI["TUI / REPL / CLI"]
+    UI --> E["Runtime Engine"]
+    E --> C["Context Manager"]
+    C --> P["Prompt Assembly"]
+    E --> M["Model Client"]
+    M --> PV["OpenAI-compatible / Anthropic-compatible Providers"]
+    E --> T["Tool Registry"]
+    T --> W["Workspace / Git / Files"]
+    E --> S["Session Store"]
+    E --> R["Run Store"]
+    S --> SE["session.json / events.jsonl"]
+    R --> RE["trace / task_state / report / checkpoints"]
+```
 
-Requirements: Python 3.10+, git, and at least one model provider key.
+See the full version in [Architecture](docs/architecture.md).
 
-### One-Line GitHub Install
+<details>
+<summary>Expand architecture preview</summary>
+
+```text
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│                              ENTRY LAYER (入口层)                                    │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
+│  │  bunny   │  │bunnybyte │  │   bb     │  │bunnybyte │  │  bunny "one-shot"    │ │
+│  │  (TUI)   │  │  (TUI)   │  │  (TUI)   │  │  --repl  │  │  --resume latest     │ │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────────┬───────────┘ │
+│       └──────────────┴─────────────┴─────────────┘                │              │
+│                              │                                     │              │
+│                     bunnybyte.cli:main()                            │              │
+│                     argparse → runtime.init →                      │              │
+│                     TUI / REPL / one-shot 分支                      │              │
+└──────────────────────────────────┬─────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│                              CORE RUNTIME (核心运行时)                               │
+│                                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│  │                          BunnyByte (core/runtime.py)                         │   │
+│  │                                                                              │   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐ │   │
+│  │  │ SessionState │  │ WorkspaceCtx │  │  Permission  │  │  Tool Profiles   │ │   │
+│  │  │   Mixin      │  │  (git snapshot│  │   Checker    │  │  (default/plan/  │ │   │
+│  │  │              │  │   +docs)     │  │              │  │   readonly/worker)│ │   │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────────┘ │   │
+│  │                                                                              │   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐ │   │
+│  │  │  CompactMgr  │  │ ContextMgr   │  │  PlanMode    │  │   WorkerManager  │ │   │
+│  │  │  (history    │  │  (prompt     │  │  Controller  │  │   (subagent      │ │   │
+│  │  │   compaction)│  │   assembly)  │  │              │  │    lifecycle)    │ │   │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────────┘ │   │
+│  │                                                                              │   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐ │   │
+│  │  │  ReadLedger  │  │  TodoLedger  │  │  RunStore    │  │  SessionEventBus │ │   │
+│  │  │  (file read  │  │  (task todo  │  │  (evidence   │  │  (event stream   │ │   │
+│  │  │   dedup)     │  │   tracking)  │  │   persistence)│  │   persistence)  │ │   │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────────┘ │   │
+│  │                                                                              │   │
+│  │  ┌──────────────────────────────────────────────────────────────────────┐   │   │
+│  │  │                    Engine (core/engine.py)                            │   │   │
+│  │  │                                                                       │   │   │
+│  │  │   run_turn() ─── 生成器，每次 yield 一个事件                           │   │   │
+│  │  │                                                                       │   │   │
+│  │  │   ┌──────────────────────────────────────────────────────────────┐   │   │   │
+│  │  │   │                  TURN CONTROL LOOP                           │   │   │   │
+│  │  │   │                                                              │   │   │   │
+│  │  │   │   1. ContextManager 组装 prompt                              │   │   │   │
+│  │  │   │   2. Provider Client 发起请求 (流式)                          │   │   │   │
+│  │  │   │   3. 解析返回 (原生 tool call / 文本 <tool>/<final>)          │   │   │   │
+│  │  │   │   4. ToolExecutor 执行工具 (含 policy + permission 检查)      │   │   │   │
+│  │  │   │   5. 结果追加到 history，循环直到 <final> 或达到步数上限      │   │   │   │
+│  │  │   │                                                              │   │   │   │
+│  │  │   └──────────────────────────────────────────────────────────────┘   │   │   │
+│  │  └──────────────────────────────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│                              INFRASTRUCTURE (基础设施层)                             │
+│                                                                                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
+│  │  Providers   │  │    Tools     │  │   Memory     │  │      Skills          │   │
+│  │  (API适配)   │  │  (工具系统)   │  │  (记忆系统)   │  │     (技能系统)        │   │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
+│  │   Sandbox    │  │  Evaluation  │  │   Testing    │  │    Evidence          │   │
+│  │  (安全隔离)   │  │  (评估系统)   │  │  (脚本化测试) │  │   (审计证据)          │   │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+</details>
+
+Rough code mapping:
+
+- [`bunnybyte/tui/`](bunnybyte/tui/): Textual terminal interface
+- [`bunnybyte/core/`](bunnybyte/core/): runtime, engine, context, session, checkpoints, workers
+- [`bunnybyte/tools/`](bunnybyte/tools/): tool registry, schemas, execution entrypoints
+- [`bunnybyte/features/`](bunnybyte/features/): memory, skills, sandbox
+- [`bunnybyte/providers/`](bunnybyte/providers/): model provider clients
+- [`bunnybyte/evaluation/`](bunnybyte/evaluation/): evaluation and run evidence
+
+## Quick Start
+
+Requirements: `Python 3.10+`, `git`, and at least one usable model provider
+key.
+
+### Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/LISAooo1234/Bunny-Byte/main/install.sh | bash
 ```
 
-The installer clones Bunny Byte into `~/.bunnybyte-agent`, creates an isolated
-virtual environment, and writes global launchers into `~/.local/bin`:
-
-```bash
-bunny
-bunnybyte
-```
-
-After installation, you do not need to enter the project directory or run `uv`.
-Open any repository and start Bunny Byte directly:
+Then initialize provider settings:
 
 ```bash
 bunny setup
 bunny
 ```
 
-If your shell cannot find `bunny`, add `~/.local/bin` to `PATH` and restart the
-terminal:
-
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-### pipx Install
-
-If you prefer managing global Python CLIs with `pipx`, install directly from
-GitHub:
-
-```bash
-pipx install git+https://github.com/LISAooo1234/Bunny-Byte.git
-bunny
-```
-
-### Source Checkout
+### Source setup
 
 ```bash
 git clone https://github.com/LISAooo1234/Bunny-Byte.git
 cd Bunny-Byte
-pip install -e ".[dev]"
-```
-
-For development with uv:
-
-```bash
 uv sync --dev
 uv run bunny
 ```
 
-Available commands after installation:
-
-```bash
-bunny          # recommended global command
-bunnybyte      # full command name
-bb             # short alias
-bunnybyte-tui  # start the TUI directly
-bbtui          # short TUI alias
-```
-
-## Configure A Provider
-
-Bunny Byte resolves a **provider profile** before startup. The profile name
-selects a provider configuration; `protocol` decides the HTTP request format.
-
-| Field | Purpose |
-| --- | --- |
-| `protocol` | Request protocol. Supported values: `openai`, `anthropic`. |
-| `api_key` | API key sent to the provider. |
-| `base_url` | Provider endpoint. |
-| `model` | Model name for the run. |
-
-### Beginner-Friendly Global Setup
-
-After installing, run:
-
-```bash
-bunny setup
-```
-
-It guides you through choosing a provider, entering an API key, and saving a
-global config here:
-
-```text
-~/.config/bunnybyte/config.toml
-```
-
-You only need to do this once. After that, open any repository and run:
+Available entrypoints:
 
 ```bash
 bunny
+bunnybyte
+bb
+bunnybyte-tui
+bbtui
 ```
 
-You can also create the global config non-interactively:
+## Common Commands
+
+### CLI
 
 ```bash
-bunny setup --provider deepseek --api-key sk-...
-```
-
-Inspect the current global config:
-
-```bash
-bunny config show
-bunny config path
-```
-
-### Global Config File
-
-`bunny setup` writes a file like this:
-
-```toml
-provider = "deepseek"
-
-[providers.deepseek]
-protocol = "anthropic"
-api_key = "sk-..."
-base_url = "https://api.deepseek.com/anthropic"
-model = "deepseek-v4-pro"
-```
-
-`provider = "deepseek"` only selects the profile. `protocol = "anthropic"` is
-what makes Bunny Byte use an Anthropic-compatible Messages API.
-
-Configuration priority:
-
-```text
-CLI arguments > environment variables > project .bunnybyte.toml > global ~/.config/bunnybyte/config.toml > code defaults
-```
-
-Most users only need the global config. Project `.bunnybyte.toml` is an optional
-override for repositories that need a different provider or model.
-
-### Project Override (Optional)
-
-If one repository needs separate settings, add a project `.bunnybyte.toml`:
-
-```bash
-cp .bunnybyte.toml.example .bunnybyte.toml
-$EDITOR .bunnybyte.toml
-```
-
-`.bunnybyte.toml` is ignored by git by default. Do not commit real keys.
-
-```toml
-provider = "openai"
-
-[providers.openai]
-protocol = "openai"
-api_key = "sk-..."
-base_url = "https://api.openai.com/v1"
-model = "gpt-5.4"
-
-[providers.anthropic]
-protocol = "anthropic"
-api_key = "sk-ant-..."
-base_url = "https://api.anthropic.com"
-model = "claude-sonnet-4-6"
-```
-
-### OpenAI-Compatible Relays
-
-`protocol = "openai"` currently uses the OpenAI Responses API at
-`/v1/responses`. If a third-party relay only supports legacy
-`/v1/chat/completions`, you may see empty responses or incompatible formats.
-Confirm that the relay supports the Responses API and use the exact model name
-listed by the relay.
-
-### Environment Variables
-
-```bash
-export BUNNYBYTE_PROVIDER=deepseek
-export DEEPSEEK_API_KEY=sk-...
-export DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic
-export DEEPSEEK_MODEL=deepseek-v4-pro
-
 bunny
+bunny --resume latest
+bunny --repl
+bunny "Fix the first failing test in the current repository"
 ```
 
-Common variables:
+### TUI Slash Commands
 
-| Provider | Variables |
-| --- | --- |
-| DeepSeek | `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL` |
-| OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` |
-| Anthropic-compatible | `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` |
-| Generic overrides | `BUNNYBYTE_API_KEY`, `BUNNYBYTE_BASE_URL`, `BUNNYBYTE_MODEL` |
+- `/help`
+- `/history`
+- `/resume latest`
+- `/fork <event|turn|#>`
+- `/rollback <event|turn|#>`
+- `/plan <topic>`
+- `/plan-exit`
+- `/skills`
+- `/tool [name]`
+- `/memory`
+- `/working-memory`
+- `/dream`
 
-More details: [docs/configuration.md](docs/configuration.md).
-
-## Start And Common Options
-
-```bash
-bunny                                  # Textual TUI by default
-bunny --repl                           # line-based terminal REPL
-bunny "find the root cause of failing tests"  # one-shot task
-bunny --resume latest                  # resume the latest normal session
-bunny --cwd /path/to/repo              # choose a workspace
-```
-
-Common runtime flags:
-
-```bash
-bunny --provider deepseek --model deepseek-v4-flash
-bunny --approval ask                   # ask before shell and file writes
-bunny --approval auto                  # auto-approve normal actions
-bunny --approval never                 # non-interactive mode
-bunny --sandbox best_effort            # try to isolate shell commands
-bunny --no-auto-dream                  # disable background memory consolidation
-bunny --max-steps 80                   # allow more model/tool iterations
-bunny --max-new-tokens 32000           # optional output token cap per step
-```
-
-`--max-new-tokens` is unset by default. Bunny Byte does not send
-`max_tokens` / `max_output_tokens` unless you explicitly pass this option.
-
-## Daily Use
-
-Inside the TUI or REPL, type natural-language requests or slash commands:
-
-```text
-> /help
-> /skills
-> find the root cause of failing tests
-> /plan refactor provider config loading
-> /review
-> /test tests/test_config.py
-> /remember this project uses DeepSeek's Anthropic-compatible endpoint
-> /dream
-```
-
-Common commands:
-
-| Command | Purpose |
-| --- | --- |
-| `/help` | Show built-in commands. |
-| `/skills` | List available skills. |
-| `/skill <name> [args]` | Run a Bunny Byte skill. |
-| `/session` | Show the current session, event stream, and run paths. |
-| `/history` | List normal sessions. Worker and dream sessions are hidden by default. |
-| `/resume latest` | Resume the latest normal session. |
-| `/context` | Show prompt context usage. |
-| `/usage` | Show provider, model, and token metadata. |
-| `/memory` | Show the durable memory index. |
-| `/working-memory` | Show current-session working memory. |
-| `/remember <text>` | Save a durable note into the daily log. |
-| `/dream` | Consolidate daily logs into durable memory topics. |
-| `/plan <topic>` | Enter plan mode. |
-| `/plan-exit` | Exit plan mode. |
-| `/agents` | Show subagent and worker status. |
-| `/subagent explore <task>` | Start a read-only Explore subtask. |
-| `/model <name>` | Temporarily switch model in the current session. |
-| `/provider <name>` | Temporarily switch provider profile in the current session. |
-| `/compact` | Compact older conversation history. |
-| `/clear` | Start a new empty session. |
-| `/exit` | Exit Bunny Byte. |
-
-## Core Capabilities
-
-| Capability | Description |
-| --- | --- |
-| TUI / REPL / one-shot | Same runtime, different entry points. |
-| Native tool calling | Uses OpenAI / Anthropic provider-native tool protocols by default; the legacy text-protocol parser is kept only for non-native providers and old tests. |
-| Tool execution | File listing, reading, search, shell, writing, patching, `ask_user`, todos, and subagents. |
-| Retry correction | Protocol errors are retried as temporary corrections without polluting long-term history. |
-| Plan mode | Read and plan before entering execution. |
-| Subagents | Read-only Explore tasks and scoped worker tasks. |
-| Skills | Built-in `/review`, `/test`, `/commit`, `/simplify`, plus user and project skills. |
-| Memory | Working memory, daily logs, durable topics, and auto-dream. |
-| Evidence | Session JSON, event streams, run traces, task state, reports, and checkpoints. |
-| Sandbox | Optional isolation for `run_shell`. |
-
-## Local Files
-
-| Data | Path |
-| --- | --- |
-| Global config | `~/.config/bunnybyte/config.toml` |
-| Project override config | `.bunnybyte.toml` |
-| Session history | `.bunnybyte/sessions/<id>.json` |
-| Event stream | `.bunnybyte/sessions/<id>.events.jsonl` |
-| Run evidence | `.bunnybyte/runs/<run_id>/` |
-| Memory index | `.bunnybyte/memory/MEMORY.md` |
-| Daily logs | `.bunnybyte/memory/logs/YYYY/MM/YYYY-MM-DD.md` |
-| Durable topics | `.bunnybyte/memory/topics/*.md` |
-| User skills | `~/.bunnybyte/skills/<name>/SKILL.md` |
-| Project skills | `skills/<name>/SKILL.md` or `.bunnybyte/skills/<name>/SKILL.md` |
-| Plan files | `.bunnybyte/plans/*.md` |
-
-## Project Layout
+## Repository Layout
 
 ```text
 bunnybyte/
-├── cli.py                 # CLI args, startup modes, REPL commands
-├── commands/              # slash-command registry and parsing
-├── config/                # provider profiles, TOML, env parsing
-├── core/                  # runtime, engine, sessions, workers, context, evidence
-├── features/              # memory, skills, sandbox
-├── providers/             # OpenAI-compatible / Anthropic-compatible clients
-├── tools/                 # tool registry and concrete tools
-├── tui/                   # Textual TUI
-└── evaluation/            # run evidence, metrics, evaluation helpers
+├── core/        # runtime, engine, context, session, checkpoints, workers
+├── tools/       # built-in tools and registration
+├── tui/         # Textual terminal interface
+├── features/    # memory, skills, sandbox
+├── providers/   # model provider clients
+└── evaluation/  # evaluation and run artifacts
+
+docs/
+├── configuration.md
+├── skills.md
+├── memory.md
+└── sandbox.md
+
+tests/           # runtime / safety / TUI / acceptance / regression tests
 ```
 
-## Tests
+## Documentation
 
-```bash
-pip install -e ".[dev]"
-pytest tests/ -q
-
-# Or with uv
-uv sync --dev
-uv run pytest tests/ -q
-
-# Real provider smoke tests require a key
-BUNNYBYTE_LIVE_SMOKE=1 pytest tests/test_release_smoke.py -q
-```
-
-## Docs
-
-| Entry | Contents |
-| --- | --- |
-| [Configuration](docs/configuration.md) | Global provider setup, project overrides, environment variables, and sandbox config. |
-| [Layered memory + auto-dream](docs/memory.md) | Working memory, daily logs, durable topics, and background consolidation. |
-| [Skills](docs/skills.md) | `SKILL.md` layout, built-in skills, and custom workflows. |
-| [Sandbox](docs/sandbox.md) | `run_shell` isolation modes, backend selection, and filesystem boundaries. |
-
-## License
-
-MIT
+- [Configuration](docs/configuration.md)
+- [Architecture](docs/architecture.md)
+- [Skills](docs/skills.md)
+- [Memory](docs/memory.md)
+- [Sandbox](docs/sandbox.md)

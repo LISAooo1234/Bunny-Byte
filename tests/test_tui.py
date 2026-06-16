@@ -233,6 +233,71 @@ def test_cli_accepts_explicit_tui_flag():
     assert args.cwd == "/tmp/workspace"
 
 
+def test_prepare_tui_terminal_environment_clears_no_color_in_capable_terminal(monkeypatch):
+    import os
+
+    from bunnybyte.cli import prepare_tui_terminal_environment
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("COLORTERM", raising=False)
+    monkeypatch.delenv("BUNNYBYTE_RESPECT_NO_COLOR", raising=False)
+    monkeypatch.setattr(
+        "bunnybyte.cli.sys.stdin", type("Stdin", (), {"isatty": lambda self: True})()
+    )
+    monkeypatch.setattr(
+        "bunnybyte.cli.sys.stdout", type("Stdout", (), {"isatty": lambda self: True})()
+    )
+
+    prepare_tui_terminal_environment()
+
+    assert "NO_COLOR" not in os.environ
+    assert os.environ["TERM"] == "xterm-256color"
+
+
+def test_prepare_tui_terminal_environment_keeps_dumb_terminal_untouched(monkeypatch):
+    import os
+
+    from bunnybyte.cli import prepare_tui_terminal_environment
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
+    monkeypatch.delenv("COLORTERM", raising=False)
+    monkeypatch.delenv("BUNNYBYTE_RESPECT_NO_COLOR", raising=False)
+    monkeypatch.setattr(
+        "bunnybyte.cli.sys.stdin", type("Stdin", (), {"isatty": lambda self: True})()
+    )
+    monkeypatch.setattr(
+        "bunnybyte.cli.sys.stdout", type("Stdout", (), {"isatty": lambda self: True})()
+    )
+
+    prepare_tui_terminal_environment()
+
+    assert os.environ["NO_COLOR"] == "1"
+    assert os.environ["TERM"] == "dumb"
+    assert "COLORTERM" not in os.environ
+
+
+def test_prepare_tui_terminal_environment_respects_explicit_no_color_opt_out(monkeypatch):
+    import os
+
+    from bunnybyte.cli import prepare_tui_terminal_environment
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("BUNNYBYTE_RESPECT_NO_COLOR", "1")
+    monkeypatch.setattr(
+        "bunnybyte.cli.sys.stdin", type("Stdin", (), {"isatty": lambda self: True})()
+    )
+    monkeypatch.setattr(
+        "bunnybyte.cli.sys.stdout", type("Stdout", (), {"isatty": lambda self: True})()
+    )
+
+    prepare_tui_terminal_environment()
+
+    assert os.environ["NO_COLOR"] == "1"
+
+
 def test_cli_build_agent_defers_new_session_until_first_request(tmp_path, monkeypatch):
     import json
 

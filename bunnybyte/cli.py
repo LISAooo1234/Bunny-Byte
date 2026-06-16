@@ -74,6 +74,27 @@ HELP_DETAILS = (
 DEFAULT_OPENAI_MODEL = PROVIDER_DEFAULTS["openai"]["model"]
 DEFAULT_OPENAI_BASE_URL = PROVIDER_DEFAULTS["openai"]["base_url"]
 SECRET_ENV_NAMES_VAR = "BUNNYBYTE_SECRET_ENV_NAMES"
+RESPECT_NO_COLOR_VAR = "BUNNYBYTE_RESPECT_NO_COLOR"
+
+
+def _env_flag(name):
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def prepare_tui_terminal_environment():
+    """Remove accidental no-color hints when the terminal already supports color."""
+
+    if _env_flag(RESPECT_NO_COLOR_VAR):
+        return
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    term = os.environ.get("TERM", "").strip().lower()
+    if term in {"", "dumb", "unknown"}:
+        return
+    os.environ.pop("NO_COLOR", None)
 
 
 def _configured_secret_names(args):
@@ -1283,6 +1304,7 @@ def main(argv=None):
 
     mode = interaction_mode(args)
     if mode == "tui":
+        prepare_tui_terminal_environment()
         from .tui.app import BunnyByteTuiApp
 
         BunnyByteTuiApp(agent).run()
