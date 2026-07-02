@@ -1,5 +1,3 @@
-"""Tool execution guardrail used by BunnyByte runtime."""
-
 import re
 
 from .read_ledger import read_stub_metadata, render_read_file_result
@@ -13,16 +11,7 @@ INLINE_TOOL_OUTPUT_LIMIT = 1000
 def run_tool(agent, name, args):
     tool = agent.tools.get(name)
     if tool is None:
-        agent._last_tool_result_metadata = {
-            "tool_status": "rejected",
-            "tool_error_code": "unknown_tool",
-            "security_event_type": "",
-            "risk_level": "high",
-            "read_only": False,
-            "affected_paths": [],
-            "workspace_changed": False,
-            "diff_summary": [],
-        }
+        agent._last_tool_result_metadata = _tool_metadata(None, "rejected", "unknown_tool")
         return f"error: unknown tool '{name}'"
     try:
         agent.validate_tool(name, args)
@@ -32,16 +21,9 @@ def run_tool(agent, name, args):
         if hint:
             message += f"\n{hint}"
         security_event_type = "path_escape" if "path escapes workspace" in str(exc) else ""
-        agent._last_tool_result_metadata = {
-            "tool_status": "rejected",
-            "tool_error_code": "invalid_arguments",
-            "security_event_type": security_event_type,
-            "risk_level": "high" if tool.risky else "low",
-            "read_only": tool.read_only,
-            "affected_paths": [],
-            "workspace_changed": False,
-            "diff_summary": [],
-        }
+        agent._last_tool_result_metadata = _tool_metadata(
+            tool, "rejected", "invalid_arguments", security_event_type=security_event_type
+        )
         return message
     if agent.repeated_tool_call(name, args):
         ledger = getattr(agent, "read_ledger", None)
@@ -53,30 +35,16 @@ def run_tool(agent, name, args):
     decision = agent.permission_checker.check(tool, args)
     _emit_permission_decision(agent, tool, args, decision)
     if not decision.allowed:
-        agent._last_tool_result_metadata = {
-            "tool_status": "rejected",
-            "tool_error_code": decision.reason,
-            "security_event_type": decision.security_event_type,
-            "risk_level": "high" if tool.risky else "low",
-            "read_only": tool.read_only,
-            "affected_paths": [],
-            "workspace_changed": False,
-            "diff_summary": [],
-        }
+        agent._last_tool_result_metadata = _tool_metadata(
+            tool, "rejected", decision.reason, security_event_type=decision.security_event_type
+        )
         return _permission_error(agent, tool, decision)
     policy = ToolPolicyChecker(agent).check(tool, args)
     _emit_tool_policy_decision(agent, tool, args, policy)
     if not policy.allowed:
-        agent._last_tool_result_metadata = {
-            "tool_status": "rejected",
-            "tool_error_code": policy.reason,
-            "security_event_type": "tool_policy",
-            "risk_level": "high" if tool.risky else "low",
-            "read_only": tool.read_only,
-            "affected_paths": [],
-            "workspace_changed": False,
-            "diff_summary": [],
-        }
+        agent._last_tool_result_metadata = _tool_metadata(
+            tool, "rejected", policy.reason, security_event_type="tool_policy"
+        )
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
         return policy.message
     before_snapshot = agent.capture_workspace_snapshot() if tool.risky else {}
@@ -101,18 +69,16 @@ def run_tool(agent, name, args):
         if name == "read_file" and getattr(agent, "read_ledger", None) is not None:
             agent.read_ledger.record_read(args, result)
         agent.update_memory_after_tool(name, args, result)
-        agent._last_tool_result_metadata = {
-            "tool_status": tool_status,
-            "tool_error_code": tool_error_code,
-            "security_event_type": "",
-            "risk_level": "high" if tool.risky else "low",
-            "read_only": tool.read_only,
-            "affected_paths": affected_paths,
-            "workspace_changed": workspace_changed,
-            "workspace_fingerprint": agent.workspace.fingerprint(),
-            "diff_summary": diff_summary,
-            "full_output_artifact": full_output_artifact,
-        }
+        agent._last_tool_result_metadata = _tool_metadata(
+            tool,
+            tool_status,
+            tool_error_code,
+            affected_paths=affected_paths,
+            workspace_changed=workspace_changed,
+            workspace_fingerprint=agent.workspace.fingerprint(),
+            diff_summary=diff_summary,
+            full_output_artifact=full_output_artifact,
+        )
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
         return result
     except Exception as exc:
@@ -120,17 +86,16 @@ def run_tool(agent, name, args):
         affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
         workspace_changed = bool(affected_paths)
         security_event_type = "path_escape" if "path escapes workspace" in str(exc) else ""
-        agent._last_tool_result_metadata = {
-            "tool_status": "partial_success" if workspace_changed else "error",
-            "tool_error_code": "tool_partial_success" if workspace_changed else "tool_failed",
-            "security_event_type": security_event_type,
-            "risk_level": "high" if tool.risky else "low",
-            "read_only": tool.read_only,
-            "affected_paths": affected_paths,
-            "workspace_changed": workspace_changed,
-            "workspace_fingerprint": agent.workspace.fingerprint(),
-            "diff_summary": diff_summary,
-        }
+        agent._last_tool_result_metadata = _tool_metadata(
+            tool,
+            "partial_success" if workspace_changed else "error",
+            "tool_partial_success" if workspace_changed else "tool_failed",
+            security_event_type=security_event_type,
+            affected_paths=affected_paths,
+            workspace_changed=workspace_changed,
+            workspace_fingerprint=agent.workspace.fingerprint(),
+            diff_summary=diff_summary,
+        )
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
         return f"error: tool {name} failed: {exc}"
 
@@ -142,6 +107,27 @@ def _argument_hint(agent, tool):
         return f"expected native tool arguments for {tool.name}: {{{fields}}}"
     example = agent.tool_example(tool.name)
     return f"example: {example}" if example else ""
+
+
+def _tool_metadata(
+    tool, status, error_code, *, security_event_type="", affected_paths=None, workspace_changed=False,
+    workspace_fingerprint="", diff_summary=None, full_output_artifact="",
+):
+    metadata = {
+        "tool_status": status,
+        "tool_error_code": error_code,
+        "security_event_type": security_event_type,
+        "risk_level": "high" if tool is None or tool.risky else "low",
+        "read_only": False if tool is None else tool.read_only,
+        "affected_paths": list(affected_paths or []),
+        "workspace_changed": bool(workspace_changed),
+        "diff_summary": list(diff_summary or []),
+    }
+    if workspace_fingerprint:
+        metadata["workspace_fingerprint"] = workspace_fingerprint
+    if full_output_artifact:
+        metadata["full_output_artifact"] = full_output_artifact
+    return metadata
 
 
 def _render_tool_result(agent, name, full_result):

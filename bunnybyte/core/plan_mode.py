@@ -43,9 +43,7 @@ class PlanModeManager:
             "plan_path": plan_path,
         }
         self.runtime.set_tool_profile("plan")
-        self.runtime.session_path = self.runtime.session_store.save(
-            self.runtime.session
-        )
+        self.runtime.session_path = self.runtime.session_store.save(self.runtime.session)
         self.runtime.refresh_prefix(force=True)
         self.runtime.session_event_bus.emit(
             "runtime_mode_changed",
@@ -60,9 +58,7 @@ class PlanModeManager:
         previous = dict(self.state)
         self.runtime.session["runtime_mode"] = {"mode": "default"}
         self.runtime.set_tool_profile("default")
-        self.runtime.session_path = self.runtime.session_store.save(
-            self.runtime.session
-        )
+        self.runtime.session_path = self.runtime.session_store.save(self.runtime.session)
         self.runtime.refresh_prefix(force=True)
         self.runtime.session_event_bus.emit(
             "runtime_mode_changed",
@@ -108,6 +104,7 @@ _PLAN_DIR_MARKER = "/.bunnybyte/plans/"
 
 def _plan_path(topic, path=None, *, workspace_root=None, artifact_root=None):
     artifact_prefix = _artifact_prefix(workspace_root, artifact_root)
+    prefix = f"{artifact_prefix}.bunnybyte/plans/"
     if path:
         value = str(path).strip()
         # 模型有时给绝对路径，如 /workspace/repo/.bunnybyte/plans/foo；自动把它相对化。
@@ -115,18 +112,12 @@ def _plan_path(topic, path=None, *, workspace_root=None, artifact_root=None):
             value = value[value.index(_PLAN_DIR_MARKER) + 1 :]
         if value.startswith("./"):
             value = value[2:]
-        if artifact_prefix and value.startswith(f"{artifact_prefix}.bunnybyte/plans/"):
+        if artifact_prefix and value.startswith(prefix):
             value = value[len(artifact_prefix) :]
     else:
         value = f"{artifact_prefix}.bunnybyte/plans/{_slug(topic)}-plan.md"
-    if (
-        not value.startswith(f"{artifact_prefix}.bunnybyte/plans/")
-        or value.endswith("/")
-        or ".." in value.split("/")
-    ):
-        raise ValueError(
-            f"plan path must stay under {artifact_prefix}.bunnybyte/plans/"
-        )
+    if not value.startswith(prefix) or value.endswith("/") or ".." in value.split("/"):
+        raise ValueError(f"plan path must stay under {prefix}")
     return value
 
 

@@ -4,7 +4,7 @@ from bunnybyte import BunnyByte, SessionStore, WorkspaceContext
 from bunnybyte.testing import ScriptedModelClient
 
 
-def build_agent(tmp_path, outputs, approval_policy="auto"):
+def build_agent(tmp_path, outputs, approval_policy="auto", **kwargs):
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     workspace = WorkspaceContext.build(tmp_path)
     return BunnyByte(
@@ -12,6 +12,7 @@ def build_agent(tmp_path, outputs, approval_policy="auto"):
         workspace=workspace,
         session_store=SessionStore(tmp_path / ".bunnybyte" / "sessions"),
         approval_policy=approval_policy,
+        **kwargs,
     )
 
 
@@ -316,9 +317,20 @@ def test_cli_build_agent_defers_new_session_until_first_request(tmp_path, monkey
             return "<final>Done.</final>"
 
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    empty_config = tmp_path / "empty-config.toml"
+    empty_config.write_text("", encoding="utf-8")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setattr("bunnybyte.cli.OpenAICompatibleModelClient", DummyModelClient)
-    args = build_arg_parser().parse_args(["--cwd", str(tmp_path), "--approval", "auto"])
+    args = build_arg_parser().parse_args(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--config",
+            str(empty_config),
+            "--approval",
+            "auto",
+        ]
+    )
 
     agent = build_agent(args)
 
@@ -461,7 +473,7 @@ def test_welcome_banner_shows_runtime_hints_and_activity(tmp_path):
 
     banner.update_agent(agent)
     ready_text = rendered_text(banner)
-    assert "status ready" in ready_text
+    assert "status 就绪" in ready_text
     assert "provider openai" in ready_text
     assert "model gpt-test" in ready_text
     assert "context -" in ready_text
@@ -888,7 +900,7 @@ async def test_tui_help_command_uses_existing_repl_commands(tmp_path):
         await pilot.pause(delay=0.1)
 
         text = "\n".join(assistant_contents(app))
-        assert "## Commands" in text
+        assert "## 命令" in text
         assert "/memory" in text
 
 
@@ -962,7 +974,7 @@ async def test_tui_enter_executes_selected_slash_suggestion(tmp_path):
 
         assert bar.input.value == ""
         text = "\n".join(assistant_contents(app))
-        assert "## Commands" in text
+        assert "## 命令" in text
         assert "/help" in text
 
 
@@ -1007,7 +1019,7 @@ async def test_tui_resume_command_renders_loaded_session_history(tmp_path):
 
         text = "\n".join(assistant_contents(app))
         assert "Previous answer." in text
-        assert f"resumed session {first_id}" in text
+        assert f"已恢复会话 {first_id}" in text
         assert any("previous question" in child.content for child in app.query(UserMessage))
         assert second.session["id"] == first_id
 
@@ -1066,7 +1078,7 @@ async def test_retry_notices_are_coalesced(tmp_path):
 
         messages = list(app.query(AssistantMessage))
         assert len(messages) == 1
-        assert "repeated 2 times" in messages[0].content
+        assert "（重复 2 次）" in messages[0].content
 
 
 @pytest.mark.asyncio
@@ -1091,7 +1103,7 @@ async def test_retry_notices_with_different_previews_are_coalesced_by_problem(tm
 
         messages = list(app.query(AssistantMessage))
         assert len(messages) == 1
-        assert "repeated 2 times" in messages[0].content
+        assert "（重复 2 次）" in messages[0].content
         assert "'{\"name\":\"agent\",...'" in messages[0].content
 
 
@@ -1208,7 +1220,7 @@ async def test_tui_stop_button_aborts_running_agent_turn(tmp_path):
             self.release = threading.Event()
             self.abort_called = False
 
-        def complete(self, messages, tools=None, **kwargs):
+        def complete(self, messages, max_new_tokens=None, **kwargs):
             self.started.set()
             self.release.wait(timeout=2)
             return "<final>late</final>"
@@ -1255,7 +1267,7 @@ async def test_tui_stop_button_sets_stopping_state_while_agent_turn_is_still_run
             self.started = threading.Event()
             self.abort_called = False
 
-        def complete(self, messages, tools=None, **kwargs):
+        def complete(self, messages, max_new_tokens=None, **kwargs):
             self.started.set()
             threading.Event().wait(timeout=1)
             return "<final>late</final>"
@@ -1417,3 +1429,58 @@ async def test_tui_ask_user_prompt_returns_selected_choice(tmp_path):
         await pilot.pause(delay=0.5)
 
         assert "User chose yes." in "\n".join(assistant_contents(app))
+
+
+@pytest.mark.asyncio
+async def test_tui_prompts_memory_scope_for_new_session(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import AskUserPrompt
+
+    agent = build_agent(tmp_path, [], lazy_session=True)
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        await pilot.pause(delay=0.2)
+
+        prompt = app.query_one(AskUserPrompt)
+        assert "长期记忆范围" in rendered_text(prompt)
+
+        await pilot.press("escape")
+        await pilot.pause(delay=0.1)
+
+
+@pytest.mark.asyncio
+async def test_tui_memory_scope_prompt_can_select_saved_session(tmp_path):
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import MemoryScopeSessionPrompt
+
+    agent = build_agent(tmp_path, [], lazy_session=True)
+    agent.session_store.save(
+        {
+            "id": "prior-session",
+            "created_at": "2026-06-20T00:00:00+00:00",
+            "topic": "Prior TUI work",
+            "workspace_root": str(tmp_path),
+            "history": [{"role": "user", "content": "tui notes"}],
+        }
+    )
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        await pilot.pause(delay=0.2)
+        await pilot.press("right")
+        await pilot.press("enter")
+        await pilot.pause(delay=0.2)
+
+        prompt = app.query_one(MemoryScopeSessionPrompt)
+        assert "prior-session" in rendered_text(prompt)
+
+        await pilot.press("tab")
+        assert "[✓]" in rendered_text(prompt)
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+
+    assert agent.session["memory_scope"] == {
+        "mode": "selected",
+        "session_ids": ["prior-session"],
+    }

@@ -26,6 +26,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("dream", "/dream", "整理并固化长期记忆。", "记忆"),
     SlashCommand("history", "/history", "列出已保存的会话。", "会话"),
     SlashCommand("memory", "/memory", "查看长期记忆索引。", "记忆"),
+    SlashCommand("memory-scope", "/memory-scope [off|project|all|selected <session...>]", "查看或设置跨 session 记忆范围。", "记忆"),
     SlashCommand("mode", "/mode", "查看当前运行模式。", "运行时"),
     SlashCommand(
         "model", "/model [name]", "查看或切换当前模型。", "运行时"
@@ -39,6 +40,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("plan", "/plan <topic>", "进入计划模式。", "计划", True),
     SlashCommand("plan-exit", "/plan-exit", "退出计划模式。", "计划"),
     SlashCommand("remember", "/remember <text>", "保存一条长期记忆。", "记忆", True),
+    SlashCommand("recall", "/recall <query>", "从当前会话 transcript 召回旧片段。", "会话", True),
     SlashCommand("reset", "/reset", "重置当前会话的记忆和历史。", "会话"),
     SlashCommand("resume", "/resume <id|index|latest>", "按 id、序号、主题或 latest 恢复会话。", "会话", True),
     SlashCommand("session", "/session", "查看当前会话状态。", "会话"),
@@ -46,6 +48,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("tool", "/tool [name]", "展示模型可用工具。", "运行时", False, ("tools",)),
     SlashCommand("skills", "/skills", "列出可用的 BunnyByte 技能。", "技能", False, ("sk",)),
     SlashCommand("skill", "/skill <name> [args]", "加载并运行一个 BunnyByte 技能。", "技能", True),
+    SlashCommand("skill-evolution", "/skill-evolution [curator|approve|reject]", "查看自进化 skill proposal 与维护状态。", "技能"),
     SlashCommand("agents", "/agents", "查看子 agent/worker 状态。", "计划", False, ("agent",)),
     SlashCommand(
         "subagent",

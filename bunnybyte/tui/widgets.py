@@ -570,6 +570,74 @@ class AskUserPrompt(Static):
             self.refresh()
 
 
+class MemoryScopeSessionPrompt(Static):
+    DEFAULT_CSS = """
+    MemoryScopeSessionPrompt {
+        height: auto;
+        margin: 0 0 1 0;
+        padding: 1 2;
+        background: #171d2a;
+        color: #e7f5ff;
+        border: round #748ffc;
+    }
+    """
+
+    def __init__(self, question: str, choices: list[dict]) -> None:
+        super().__init__()
+        self.question = question
+        self.choices = list(choices or [])
+        self.selected_index = 0
+        self.selected_ids: set[str] = set()
+
+    @property
+    def selected_session_ids(self) -> list[str]:
+        ids = []
+        for choice in self.choices:
+            session_id = str(choice.get("id", "")).strip()
+            if session_id in self.selected_ids:
+                ids.append(session_id)
+        return ids
+
+    def render(self) -> Text:
+        parts = [Text(self.question + "\n", style="bold #e7f5ff")]
+        if not self.choices:
+            parts.append(Text("没有可选择的已保存 session", style="#91a7ff"))
+            return Text.assemble(*parts)
+        for index, choice in enumerate(self.choices):
+            session_id = str(choice.get("id", "")).strip()
+            label = str(choice.get("label", session_id) or session_id)
+            cursor = ">" if index == self.selected_index else " "
+            checked = "✓" if session_id in self.selected_ids else " "
+            style = "bold #bac8ff" if index == self.selected_index else "#91a7ff"
+            parts.append(Text(f"{cursor} [{checked}] {label}\n", style=style))
+        parts.append(
+            Text("Up/Down 移动，Tab/Space 勾选，Enter 确认，Esc 取消", style="#91a7ff")
+        )
+        return Text.assemble(*parts)
+
+    def select_next(self) -> None:
+        if self.choices:
+            self.selected_index = min(len(self.choices) - 1, self.selected_index + 1)
+            self.refresh()
+
+    def select_previous(self) -> None:
+        if self.choices:
+            self.selected_index = max(0, self.selected_index - 1)
+            self.refresh()
+
+    def toggle_current(self) -> None:
+        if not self.choices:
+            return
+        session_id = str(self.choices[self.selected_index].get("id", "")).strip()
+        if not session_id:
+            return
+        if session_id in self.selected_ids:
+            self.selected_ids.remove(session_id)
+        else:
+            self.selected_ids.add(session_id)
+        self.refresh()
+
+
 class ProgressPanel(Static):
     DEFAULT_CSS = """
     ProgressPanel {

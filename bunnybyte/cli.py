@@ -40,7 +40,12 @@ from .features import skills as skillslib
 from .features.skills_runtime import invoke_skill
 from .providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
 from .providers.errors import sanitize_url
+from .core.memory_scope import (
+    mark_memory_scope_startup_prompted,
+    should_prompt_memory_scope_startup,
+)
 from .core.runtime import BunnyByte, SessionStore
+from .core.transcript_recall import render_cli_recall
 from .core.workspace import WorkspaceContext, clip, middle
 
 DEFAULT_SECRET_ENV_NAMES = (
@@ -75,6 +80,12 @@ DEFAULT_OPENAI_MODEL = PROVIDER_DEFAULTS["openai"]["model"]
 DEFAULT_OPENAI_BASE_URL = PROVIDER_DEFAULTS["openai"]["base_url"]
 SECRET_ENV_NAMES_VAR = "BUNNYBYTE_SECRET_ENV_NAMES"
 RESPECT_NO_COLOR_VAR = "BUNNYBYTE_RESPECT_NO_COLOR"
+MEMORY_SCOPE_STARTUP_OPTIONS = (
+    ("project", "当前项目（默认）", "使用当前项目长期记忆，不召回其它 transcript。"),
+    ("selected", "选择 session", "从你选中的已保存 session 召回片段。"),
+    ("all", "全部项目历史", "使用长期记忆，并从最近项目 session 召回片段。"),
+    ("off", "关闭记忆", "本 session 不注入长期记忆或跨 session 片段。"),
+)
 
 
 def _env_flag(name):
@@ -675,6 +686,8 @@ def handle_repl_command(agent, user_input):
         return True, False, HELP_DETAILS
     if user_input == "/memory":
         return True, False, agent.memory_command_text()
+    if command_name == "memory-scope":
+        return True, False, _handle_memory_scope_command(agent, command_args)
     if user_input == "/working-memory":
         return True, False, agent.memory_text()
     if user_input.startswith("/remember"):
@@ -689,6 +702,8 @@ def handle_repl_command(agent, user_input):
         if hasattr(agent, "refresh_skills"):
             agent.refresh_skills()
         return True, False, skillslib.render_skills_list(agent.skills)
+    if command_name == "skill-evolution":
+        return True, False, _handle_skill_evolution_command(agent, command_args)
     if user_input == "/plan" or user_input.startswith("/plan "):
         _, _, raw_topic = user_input.partition(" ")
         topic = raw_topic.strip()
@@ -773,6 +788,10 @@ def handle_repl_command(agent, user_input):
         return True, False, _format_model(agent)
     if user_input == "/history":
         return True, False, _format_history(agent)
+    if command_name == "recall":
+        if not command_args:
+            return True, False, _format_usage_message("/recall <query>")
+        return True, False, render_cli_recall(agent.recall_transcript(command_args))
     if user_input.startswith("/resume "):
         _, _, target = user_input.partition(" ")
         session_id = _resolve_session_id(agent, target.strip())
@@ -833,6 +852,104 @@ def handle_repl_command(agent, user_input):
     return False, False, ""
 
 
+def _handle_memory_scope_command(agent, command_args):
+    args = str(command_args or "").strip()
+    if not args:
+        return agent.memory_scope_text()
+    parts = args.split()
+    mode = parts[0].strip().lower()
+    if mode == "global":
+        mode = "all"
+    session_ids = []
+    if mode == "selected":
+        for target in parts[1:]:
+            session_id = _resolve_memory_scope_session_id(agent, target)
+            if not session_id:
+                return _format_error(f"session not found: {target}")
+            session_ids.append(session_id)
+    elif len(parts) > 1:
+        return _format_usage_message("/memory-scope off|project|all|selected <session...>")
+    try:
+        agent.set_memory_scope(mode, session_ids=session_ids)
+    except ValueError as exc:
+        return _format_error(exc)
+    return agent.memory_scope_text()
+
+
+def _handle_skill_evolution_command(agent, command_args):
+    raw_args = str(command_args or "").strip()
+    args = raw_args.lower()
+    manager = getattr(agent, "skill_evolution", None)
+    if manager is None:
+        return _format_error("skill evolution is not available")
+    parts = raw_args.split()
+    if parts and parts[0].lower() in {"approve", "reject"}:
+        if len(parts) < 3:
+            return _format_usage_message("/skill-evolution approve|reject <maintenance_id> <action_number> [reason]")
+        action = parts[0].lower()
+        maintenance_id = parts[1]
+        action_number = parts[2]
+        try:
+            if action == "approve":
+                result = manager.approve_maintenance_action(maintenance_id, action_number)
+            else:
+                result = manager.reject_maintenance_action(
+                    maintenance_id,
+                    action_number,
+                    reason=" ".join(parts[3:]),
+                )
+        except ValueError as exc:
+            return _format_error(exc)
+        return _format_key_value_section(
+            "Skill Evolution",
+            [
+                ("Action", result.get("action", "-")),
+                ("Skill", result.get("skill", ", ".join(result.get("skills", [])) or "-")),
+                ("Status", result.get("status", "-")),
+                ("Archive path", result.get("archive_path", "-")),
+            ],
+        )
+    if args in {"curator", "curator run", "run-curator"}:
+        result = manager.maybe_run_curator(force=True)
+        report = result.get("report", {}) if isinstance(result, dict) else {}
+        if not report:
+            return _format_error("curator did not produce a report")
+        lines = [
+            "## Skill Curator",
+            "",
+            f"- maintenance_id: `{report.get('maintenance_id', '-')}`",
+            f"- actions: `{len(report.get('actions', []))}`",
+            "",
+        ]
+        if report.get("actions"):
+            lines.extend(["| Action | Skill(s) | Status | Reason |", "| --- | --- | --- | --- |"])
+            for action in report.get("actions", []):
+                skills = action.get("skill") or ", ".join(action.get("skills", []))
+                lines.append(
+                    f"| {action.get('action', '-')} | `{_markdown_table_cell(skills)}` | "
+                    f"{_markdown_table_cell(action.get('status', '-'))} | "
+                    f"{_markdown_table_cell(action.get('reason', '-'))} |"
+                )
+        return "\n".join(lines)
+    if args:
+        return _format_usage_message("/skill-evolution [curator|approve <maintenance_id> <action_number>|reject <maintenance_id> <action_number>]")
+    return manager.render_status()
+
+
+def _resolve_memory_scope_session_id(agent, target):
+    current_id = str(agent.session.get("id", ""))
+    if str(target).isdigit():
+        rows = [row for row in agent.session_store.list_sessions() if str(row.get("id", "")) != current_id]
+        index = int(target)
+        if 1 <= index <= len(rows):
+            return rows[index - 1]["id"]
+        return ""
+    session_id = _resolve_session_id(agent, target)
+    if session_id == current_id:
+        return ""
+    return session_id
+
+
 def _format_mode_status(agent):
     rows = [("Runtime mode", agent.runtime_mode)]
     plan_path = getattr(agent.plan_mode, "plan_path", "")
@@ -868,6 +985,7 @@ def _format_session_status(agent):
             ("Session id", agent.session.get("id", "")),
             ("Session status", status),
             ("Session topic", agent.session_topic),
+            ("Memory scope", agent.session.get("memory_scope", {}).get("mode", "project")),
             ("Session path", session_path),
             ("Events path", agent.session_event_bus.path),
             ("Runtime mode", agent.runtime_mode),
@@ -1178,6 +1296,75 @@ def _cli_ask_user(question, choices):
     return input(question + " ").strip()
 
 
+def _prompt_startup_memory_scope(agent):
+    if not should_prompt_memory_scope_startup(agent):
+        return
+    mark_memory_scope_startup_prompted(agent)
+    print("\n为这个新 session 选择长期记忆范围：")
+    for index, (_, label, description) in enumerate(MEMORY_SCOPE_STARTUP_OPTIONS, start=1):
+        print(f"{index}. {label} - {description}")
+    answer = input("选择 [1]: ").strip()
+    mode = _startup_memory_scope_mode(answer)
+    if mode in {"", "project"}:
+        print("已使用默认记忆范围：project")
+        return
+    if mode == "selected":
+        session_ids = _prompt_startup_memory_scope_sessions(agent)
+        if not session_ids:
+            print("未选择 session，已保留默认记忆范围：project")
+            return
+        agent.set_memory_scope("selected", session_ids=session_ids)
+        print(agent.memory_scope_text())
+        return
+    agent.set_memory_scope(mode)
+    print(agent.memory_scope_text())
+
+
+def _startup_memory_scope_mode(answer):
+    value = str(answer or "").strip().lower()
+    if not value:
+        return "project"
+    if value.isdigit():
+        index = int(value)
+        if 1 <= index <= len(MEMORY_SCOPE_STARTUP_OPTIONS):
+            return MEMORY_SCOPE_STARTUP_OPTIONS[index - 1][0]
+    for mode, label, _ in MEMORY_SCOPE_STARTUP_OPTIONS:
+        if value == mode or value == label.lower():
+            return mode
+    print("未识别的选择，已使用默认记忆范围：project")
+    return "project"
+
+
+def _prompt_startup_memory_scope_sessions(agent):
+    current_id = str(agent.session.get("id", ""))
+    rows = [
+        row
+        for row in agent.session_store.list_sessions()
+        if str(row.get("id", "")) != current_id
+    ]
+    if not rows:
+        print("没有已保存 session 可选。")
+        return []
+    print("\n可作为召回点的 session：")
+    for index, row in enumerate(rows, start=1):
+        topic = str(row.get("topic", "") or "Untitled")
+        session_id = str(row.get("id", ""))
+        updated = str(row.get("updated_at", "") or "-")
+        print(f"{index}. {topic}  {session_id}  {updated}")
+    raw = input("输入 session 序号/ID/主题关键词，可多个空格分隔: ").strip()
+    if not raw:
+        return []
+    session_ids = []
+    for target in raw.split():
+        session_id = _resolve_memory_scope_session_id(agent, target)
+        if not session_id:
+            print(f"session not found: {target}")
+            return []
+        if session_id not in session_ids:
+            session_ids.append(session_id)
+    return session_ids
+
+
 def _stream_print(text, *, chunk_size=12, delay=0.012):
     text = str(text or "")
     if not text:
@@ -1335,6 +1522,9 @@ def main(argv=None):
                 print(str(exc), file=sys.stderr)
                 return 1
         return 0
+
+    if sys.stdin.isatty():
+        _prompt_startup_memory_scope(agent)
 
     while True:
         # 交互模式：每次读取一条用户输入，交给同一个 agent，

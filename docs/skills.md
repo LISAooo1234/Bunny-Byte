@@ -93,3 +93,25 @@ paths: src/**/*.py, !src/legacy/**
 - `/skills` 列出所有可用 skill 和加载来源
 - skill 执行时，事件流里会有 `skill_invoked` / `skill_finished`
 - 用 `disable-model-invocation: true` 配合 `bunnybyte --tui` 可以在不发请求的情况下预览 skill 展开后的 prompt
+- `/skill-evolution` 查看自进化 proposal / curator 状态
+
+## 自进化
+
+BunnyByte 的自进化机制借鉴 Hermes 的 closed learning loop，但不让后台模型直接把一次对话写成 skill。
+成功 turn 结束后，`SkillEvolutionManager` 会先做后台 gate：只在主 session、真实后台模型可用、且满足多轮或复杂工具流信号时触发。
+
+通过 gate 后会 fork 一个只读 proposal agent，查看本 turn 的 history 片段，判断用户意图是否完成，以及这次完成是否能沉淀为可复用流程。proposal 必须带证据字段：
+
+- `evidence.why`：为什么值得沉淀
+- `evidence.key_history`：关键信息来自哪些对话片段
+- `evidence.reusable_steps`：可复用步骤
+- `evidence.source_event_ids`：来源 event，便于审计
+- `evidence.confidence`：置信度
+
+proposal 还必须写清 skill 的 `description`、`when_to_use`、`not_when_to_use`、`steps` 和 `verification`。缺字段、置信度低、名字太像一次性 bug/PR/临时任务，都会被 quality gate 拒绝。
+
+proposal 通过质量检查后，会 fork 第二个只读 review agent。review agent 结合已有 skill landscape 和 evidence 输出 `accept` / `reject` / `revise`、必要性分数、风险和修改建议。只有 `accept` 且分数过线才会 promotion 到 `.bunnybyte/skills/<name>/SKILL.md`；如果目标 skill 已存在，不覆盖，转人工 review。
+
+`skill_curator` 是 7 天级别的兜底维护机制：扫描项目内所有 skill。低使用率且长期未使用的 agent-created skill 会生成 `delete` maintenance action，状态是 `pending_user_approval`，不会直接删除；手写 project skill 只生成 `low_usage_review` 建议，不自动处理。用户执行 `/skill-evolution approve <maintenance_id> <action_number>` 后也只是把 agent-created skill 移入 `.bunnybyte/skills/.archive/`，保留可恢复性。重叠 skill 会生成 `merge_review` action，提示考虑合并成 umbrella skill。
+
+每次 promotion 或 curator 运行后，BunnyByte 会刷新 `.bunnybyte/skill-evolution/SKILL_TREE.md`。这个索引按来源分组列出 skill 的 `description`、`when_to_use` 和 `not_when_to_use`；索引存在时，主 prompt 会提示模型在平铺 skill 列表不够明确时先读取该索引，再决定加载哪个 skill。

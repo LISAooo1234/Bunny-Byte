@@ -6,20 +6,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from ..features import memory as memorylib, skills as skillslib
-from .context_usage import ContextUsageAnalyzer
+from .context_support import (
+    SectionRender,
+    build_context_metadata,
+    per_note_budget,
+    render_sections_without_reduction,
+)
+from .memory_scope import durable_memory_enabled, retrieve_scoped_session_snippets
+from .transcript_recall import prompt_visible_event_ids, render_prompt_recall, retrieve_transcript_snippets
 from .turn_history import TurnHistoryBuilder, tail_clip
 
-SECTION_ORDER = ("prefix", "memory", "skills", "relevant_memory", "history", "current_request")
+SECTION_ORDER = ("prefix", "memory", "skills", "relevant_memory", "transcript_recall", "history", "current_request")
 CURRENT_REQUEST_SECTION = "current_request"
 _DEFAULT_SECTION_WEIGHTS = {
     "prefix": 0.18,
     "memory": 0.13,
     "skills": 0.08,
     "relevant_memory": 0.04,
-    "history": 0.57,
+    "transcript_recall": 0.04,
+    "history": 0.53,
 }
 DEFAULT_CURRENT_REQUEST_RESERVE_RATIO = 0.12
 DEFAULT_CURRENT_REQUEST_RESERVE_MAX = 24_000
@@ -57,9 +63,6 @@ def default_section_budgets(total_budget):
     return budgets
 
 
-# Keep the assembled prompt below the default 200k context window with room
-# for provider framing/tool schemas and the model response. When the prompt
-# cannot be reduced under this budget, runtime auto-compaction can trigger.
 DEFAULT_TOTAL_BUDGET = 180_000
 DEFAULT_SECTION_BUDGETS = default_section_budgets(DEFAULT_TOTAL_BUDGET)
 DEFAULT_SECTION_FLOORS = {
@@ -67,30 +70,20 @@ DEFAULT_SECTION_FLOORS = {
     "memory": 4_000,
     "skills": 2_000,
     "relevant_memory": 1_000,
+    "transcript_recall": 800,
     "history": 20_000,
 }
 # 当 prompt 超预算时，会优先压缩这些 section。
-DEFAULT_REDUCTION_ORDER = ("relevant_memory", "skills", "memory", "prefix", "history")
+DEFAULT_REDUCTION_ORDER = ("transcript_recall", "relevant_memory", "skills", "memory", "prefix", "history")
 RELEVANT_MEMORY_LIMIT = 3
-
-
-@dataclass
-class SectionRender:
-    raw: str
-    budget: int
-    rendered: str
-    details: dict | None = None
-
-    @property
-    def raw_chars(self):
-        return len(self.raw)
-
-    @property
-    def rendered_chars(self):
-        return len(self.rendered)
+TRANSCRIPT_RECALL_LIMIT = 4
 
 
 class ContextManager:
+    SECTION_ORDER = SECTION_ORDER
+    CURRENT_REQUEST_SECTION = CURRENT_REQUEST_SECTION
+    RELEVANT_MEMORY_LIMIT = RELEVANT_MEMORY_LIMIT
+
     def __init__(
         self,
         agent,
@@ -160,12 +153,19 @@ class ContextManager:
         self.section_floors = self._compute_section_floors()
         memory_enabled = True
         relevant_memory_enabled = True
+        transcript_recall_enabled = True
         context_reduction_enabled = True
         if hasattr(self.agent, "feature_enabled"):
             memory_enabled = self.agent.feature_enabled("memory")
             relevant_memory_enabled = self.agent.feature_enabled("relevant_memory")
+            transcript_recall_enabled = self.agent.feature_enabled("transcript_recall")
             context_reduction_enabled = self.agent.feature_enabled("context_reduction")
+        durable_enabled = durable_memory_enabled(getattr(self.agent, "session", {}))
         memory_text = "Memory:\n- disabled" if not memory_enabled else str(self.agent.memory_text())
+        if memory_enabled and not durable_enabled:
+            memory_lines = [line for line in memory_text.splitlines() if not line.startswith("- durable_topics:")]
+            memory_lines.append("- durable_topics: disabled by memory_scope")
+            memory_text = "\n".join(memory_lines)
         section_texts = {
             "prefix": str(getattr(self.agent, "prefix", "")),
             "memory": memory_text,
@@ -184,14 +184,38 @@ class ContextManager:
             checkpoint_text = str(self.agent.render_checkpoint_text() or "").strip()
         if checkpoint_text:
             section_texts["memory"] += "\n\n" + checkpoint_text
-        if memory_enabled and hasattr(self.agent, "memory_dir"):
+        if memory_enabled and durable_enabled and hasattr(self.agent, "memory_dir"):
             section_texts["memory"] += "\n\n" + memorylib.build_memory_system_section(self.agent.memory_dir)
         selected_notes = []
-        if memory_enabled and relevant_memory_enabled and hasattr(self.agent, "memory") and hasattr(self.agent.memory, "retrieval_candidates"):
+        if (
+            memory_enabled
+            and relevant_memory_enabled
+            and durable_enabled
+            and hasattr(self.agent, "memory")
+            and hasattr(self.agent.memory, "retrieval_candidates")
+        ):
             selected_notes = self.agent.memory.retrieval_candidates(user_message, limit=RELEVANT_MEMORY_LIMIT)
+        selected_recall = []
+        if transcript_recall_enabled:
+            selected_recall = retrieve_transcript_snippets(
+                user_message,
+                getattr(self.agent, "session", {}).get("history", []),
+                visible_event_ids=prompt_visible_event_ids(self.agent),
+                turn_index=getattr(self.agent, "session", {}).get("turn_index", {}),
+                limit=TRANSCRIPT_RECALL_LIMIT,
+                char_budget=int(self._section_budgets.get("transcript_recall", 0) or 0),
+            )
+            selected_recall.extend(
+                retrieve_scoped_session_snippets(
+                    self.agent,
+                    user_message,
+                    limit=TRANSCRIPT_RECALL_LIMIT,
+                    char_budget=int(self._section_budgets.get("transcript_recall", 0) or 0),
+                )
+            )
 
         if not context_reduction_enabled:
-            rendered = self._render_sections_without_reduction(section_texts, selected_notes=selected_notes)
+            rendered = self._render_sections_without_reduction(section_texts, selected_notes=selected_notes, selected_recall=selected_recall)
             prompt = self._assemble_prompt(rendered)
             metadata = self._metadata(
                 prompt=prompt,
@@ -199,21 +223,17 @@ class ContextManager:
                 budgets={section: render.budget for section, render in rendered.items() if section != CURRENT_REQUEST_SECTION},
                 reduction_log=[],
                 selected_notes=selected_notes,
+                selected_recall=selected_recall,
                 user_message=user_message,
                 section_texts=section_texts,
             )
             return prompt, metadata
 
         budgets = dict(self._section_budgets)
-        rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes)
+        rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes, selected_recall=selected_recall)
         prompt = self._assemble_prompt(rendered)
         reduction_log = []
 
-        # 如果 prompt 超预算，就按固定顺序不断压缩。
-        # 这里的顺序体现了平台偏好：
-        # 先牺牲相关笔记和技能说明，再牺牲工作记忆与稳定前缀；
-        # history 已经先过了一层微压缩/摘要化，所以尽量放到最后再硬裁。
-        # 最新用户请求永远不裁剪，因为那是本轮最重要的输入。
         while len(prompt) > self.total_budget:
             overflow = len(prompt) - self.total_budget
             reduced = False
@@ -234,7 +254,7 @@ class ContextManager:
                     }
                 )
                 budgets[section] = new_budget
-                rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes)
+                rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes, selected_recall=selected_recall)
                 prompt = self._assemble_prompt(rendered)
                 reduced = True
                 break
@@ -247,45 +267,21 @@ class ContextManager:
             budgets=budgets,
             reduction_log=reduction_log,
             selected_notes=selected_notes,
+            selected_recall=selected_recall,
             user_message=user_message,
             section_texts=section_texts,
         )
         return prompt, metadata
 
-    def _render_sections_without_reduction(self, section_texts, selected_notes=None):
-        selected_notes = selected_notes or []
-        relevant_lines = ["Relevant memory:"]
-        if selected_notes:
-            relevant_lines.extend(f"- {note['text']}" for note in selected_notes)
-        else:
-            relevant_lines.append("- none")
-        relevant_raw = "\n".join(relevant_lines)
-        history = list(getattr(self.agent, "session", {}).get("history", []))
-        history_raw = self.history_builder.raw_text(history)
-        return {
-            "prefix": SectionRender(raw=section_texts["prefix"], budget=len(section_texts["prefix"]), rendered=section_texts["prefix"], details={}),
-            "memory": SectionRender(raw=section_texts["memory"], budget=len(section_texts["memory"]), rendered=section_texts["memory"], details={}),
-            "skills": SectionRender(raw=section_texts["skills"], budget=len(section_texts["skills"]), rendered=section_texts["skills"], details={}),
-            "relevant_memory": SectionRender(
-                raw=relevant_raw,
-                budget=len(relevant_raw),
-                rendered=relevant_raw,
-                details={
-                    "selected_notes": [note["text"] for note in selected_notes],
-                    "rendered_notes": [note["text"] for note in selected_notes],
-                    "selected_count": len(selected_notes),
-                    "rendered_count": len(selected_notes),
-                    "note_budget": 0,
-                },
-            ),
-            "history": SectionRender(raw=history_raw, budget=len(history_raw), rendered=history_raw, details={"rendered_entries": []}),
-            CURRENT_REQUEST_SECTION: SectionRender(
-                raw=section_texts[CURRENT_REQUEST_SECTION],
-                budget=0,
-                rendered=section_texts[CURRENT_REQUEST_SECTION],
-                details={},
-            ),
-        }
+    def _render_sections_without_reduction(self, section_texts, selected_notes=None, selected_recall=None):
+        return render_sections_without_reduction(
+            self.agent,
+            self.history_builder,
+            section_texts,
+            selected_notes=selected_notes,
+            selected_recall=selected_recall,
+            current_request_section=CURRENT_REQUEST_SECTION,
+        )
 
     def _compute_section_floors(self):
         floors = {
@@ -298,7 +294,7 @@ class ContextManager:
         floors.update(self._section_floor_overrides)
         return floors
 
-    def _render_sections(self, section_texts, budgets, selected_notes=None):
+    def _render_sections(self, section_texts, budgets, selected_notes=None, selected_recall=None):
         rendered = {}
         for section in SECTION_ORDER:
             budget = budgets.get(section)
@@ -307,6 +303,8 @@ class ContextManager:
                 rendered[section] = SectionRender(raw=raw, budget=0, rendered=raw, details={})
             elif section == "relevant_memory":
                 rendered[section] = self._render_relevant_memory(selected_notes or [], int(budget or 0))
+            elif section == "transcript_recall":
+                rendered[section] = self._render_transcript_recall(selected_recall or [], int(budget or 0))
             elif section == "history":
                 rendered[section] = self._render_history_section(int(budget or 0))
             else:
@@ -314,6 +312,16 @@ class ContextManager:
                 rendered_text = tail_clip(raw, int(budget)) if budget is not None else raw
                 rendered[section] = SectionRender(raw=raw, budget=int(budget) if budget is not None else 0, rendered=rendered_text, details={})
         return rendered
+
+    def _render_transcript_recall(self, selected_recall, budget):
+        raw = render_prompt_recall(selected_recall, budget=max(budget, 1_000))
+        rendered = render_prompt_recall(selected_recall, budget=budget)
+        return SectionRender(
+            raw=raw,
+            budget=budget,
+            rendered=rendered,
+            details={"selected_snippets": selected_recall, "rendered_count": len(selected_recall)},
+        )
 
     def _render_relevant_memory(self, selected_notes, budget):
         header = "Relevant memory:"
@@ -335,15 +343,15 @@ class ContextManager:
                 },
             )
 
-        per_note_budget = self._per_note_budget(budget, len(note_texts), header)
+        note_budget = per_note_budget(budget, len(note_texts), header)
         rendered_notes = []
         while True:
             # 让每条 note 平分这一段的预算，避免一条超长笔记把其他笔记都挤掉。
-            rendered_notes = [tail_clip(text, per_note_budget) for text in note_texts]
+            rendered_notes = [tail_clip(text, note_budget) for text in note_texts]
             rendered = "\n".join([header] + [f"- {text}" for text in rendered_notes])
-            if len(rendered) <= budget or per_note_budget <= 1:
+            if len(rendered) <= budget or note_budget <= 1:
                 break
-            per_note_budget -= 1
+            note_budget -= 1
 
         return SectionRender(
             raw=raw,
@@ -354,16 +362,9 @@ class ContextManager:
                 "rendered_notes": rendered_notes,
                 "selected_count": len(note_texts),
                 "rendered_count": len(rendered_notes),
-                "note_budget": per_note_budget,
+                "note_budget": note_budget,
             },
         )
-
-    def _per_note_budget(self, budget, note_count, header):
-        if note_count <= 0:
-            return 0
-        overhead = len(header) + 3 * note_count
-        usable = max(0, budget - overhead)
-        return max(1, usable // note_count)
 
     def _render_history_section(self, budget):
         history = self.history_builder.prompt_history()
@@ -397,76 +398,17 @@ class ContextManager:
         )
 
     def _assemble_prompt(self, rendered):
-        # 顺序是刻意设计的：稳定规则放前面，最新请求放最后。
         return "\n\n".join(rendered[section].rendered for section in SECTION_ORDER).strip()
 
-    def _metadata(self, prompt, rendered, budgets, reduction_log, selected_notes, user_message, section_texts):
-        section_metadata = {}
-        for section in SECTION_ORDER[:-1]:
-            section_metadata[section] = {
-                "raw_chars": rendered[section].raw_chars,
-                "budget_chars": int(budgets.get(section, 0)),
-                "rendered_chars": rendered[section].rendered_chars,
-            }
-        section_metadata[CURRENT_REQUEST_SECTION] = {
-            "raw_chars": len(section_texts[CURRENT_REQUEST_SECTION]),
-            "budget_chars": None,
-            "rendered_chars": len(rendered[CURRENT_REQUEST_SECTION].rendered),
-        }
-        return {
-            "prompt_chars": len(prompt),
-            "prompt_budget_chars": self.total_budget,
-            "prompt_over_budget": len(prompt) > self.total_budget,
-            "section_order": list(SECTION_ORDER),
-            "section_budgets": {
-                section: (None if section == CURRENT_REQUEST_SECTION else int(budgets.get(section, 0)))
-                for section in SECTION_ORDER
-            },
-            "sections": section_metadata,
-            "budget_reductions": reduction_log,
-            "reduction_order": list(self.reduction_order),
-            "relevant_memory": {
-                "limit": RELEVANT_MEMORY_LIMIT,
-                "selected_count": len(selected_notes),
-                "selected_notes": [note["text"] for note in selected_notes],
-                "selected_sources": [str(note.get("source", "")).strip() for note in selected_notes],
-                "selected_kinds": [str(note.get("kind", "episodic")).strip() or "episodic" for note in selected_notes],
-                "selected_durable_count": sum(
-                    1 for note in selected_notes if (str(note.get("kind", "episodic")).strip() or "episodic") == "durable"
-                ),
-                "raw_chars": rendered["relevant_memory"].raw_chars,
-                "rendered_chars": rendered["relevant_memory"].rendered_chars,
-                "rendered_notes": list(rendered["relevant_memory"].details.get("rendered_notes", [])),
-                "rendered_count": int(rendered["relevant_memory"].details.get("rendered_count", 0)),
-            },
-            "history": {
-                "raw_chars": rendered["history"].raw_chars,
-                "rendered_chars": rendered["history"].rendered_chars,
-                "older_entries_count": int(rendered["history"].details.get("older_entries_count", 0)),
-                "collapsed_duplicate_reads": int(rendered["history"].details.get("collapsed_duplicate_reads", 0)),
-                "reused_file_summary_count": int(rendered["history"].details.get("reused_file_summary_count", 0)),
-                "summarized_tool_count": int(rendered["history"].details.get("summarized_tool_count", 0)),
-                "same_turn_compacted_entries": int(rendered["history"].details.get("same_turn_compacted_entries", 0)),
-                "same_turn_compacted_tools": int(rendered["history"].details.get("same_turn_compacted_tools", 0)),
-                "same_turn_compacted_notifications": int(rendered["history"].details.get("same_turn_compacted_notifications", 0)),
-                "budget_clipped": bool(rendered["history"].details.get("budget_clipped", False)),
-                "rendered_turns": int(rendered["history"].details.get("rendered_turns", 0)),
-            },
-            "skills": self._skills_metadata(),
-            "current_request": {
-                "text": user_message,
-                "raw_chars": len(user_message),
-                "rendered_chars": len(user_message),
-                "section_chars": len(rendered[CURRENT_REQUEST_SECTION].rendered),
-            },
-            "context_usage": ContextUsageAnalyzer(self.agent).analyze(rendered),
-        }
-
-    def _skills_metadata(self):
-        skills = getattr(self.agent, "skills", {})
-        items = [skill.metadata() for skill in skillslib.list_skills(skills, user_invocable_only=False)]
-        return {
-            "available_count": len(items),
-            "user_invocable_count": sum(1 for item in items if item["user_invocable"]),
-            "items": items,
-        }
+    def _metadata(self, prompt, rendered, budgets, reduction_log, selected_notes, selected_recall, user_message, section_texts):
+        return build_context_metadata(
+            self,
+            prompt,
+            rendered,
+            budgets,
+            reduction_log,
+            selected_notes,
+            selected_recall,
+            user_message,
+            section_texts,
+        )

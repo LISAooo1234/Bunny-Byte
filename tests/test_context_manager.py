@@ -77,6 +77,7 @@ def test_context_manager_section_floors_use_configured_defaults_and_scale_down_f
         "memory": 30,
         "skills": 20,
         "relevant_memory": 20,
+        "transcript_recall": 20,
         "history": 65,
     }
 
@@ -92,10 +93,19 @@ def test_context_manager_assembles_sections_in_expected_order(tmp_path):
     assert prompt.index("You are BunnyByte") < prompt.index("Memory:")
     assert prompt.index("Memory:") < prompt.index("Available skills:")
     assert prompt.index("Available skills:") < prompt.index("Relevant memory:")
-    assert prompt.index("Relevant memory:") < prompt.index("Transcript:")
+    assert prompt.index("Relevant memory:") < prompt.index("Recovered transcript snippets:")
+    assert prompt.index("Recovered transcript snippets:") < prompt.index("Transcript:")
     assert prompt.index("Transcript:") < prompt.index("Current user request:")
     assert prompt.rstrip().endswith("Current user request:\nWhere is the deploy key?")
-    assert metadata["section_order"] == ["prefix", "memory", "skills", "relevant_memory", "history", "current_request"]
+    assert metadata["section_order"] == [
+        "prefix",
+        "memory",
+        "skills",
+        "relevant_memory",
+        "transcript_recall",
+        "history",
+        "current_request",
+    ]
 
 
 def test_context_manager_does_not_compress_older_turns_when_within_budget(tmp_path):
@@ -197,7 +207,7 @@ def test_context_manager_renders_top_three_episodic_notes_per_note_under_budget(
     assert metadata["relevant_memory"]["rendered_notes"][0].startswith("gamma episodi")
     assert metadata["relevant_memory"]["rendered_notes"][1].startswith("alpha episodi")
     assert metadata["relevant_memory"]["rendered_notes"][2].startswith("beta episodi")
-    relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
+    relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nRecovered transcript snippets:", 1)[0]
     assert len([line for line in relevant_section.splitlines() if line.startswith("- ")]) == 3
     assert "alpha episodi" in relevant_section
     assert "beta episodic" in relevant_section
@@ -440,7 +450,7 @@ def test_context_manager_relevant_memory_can_mix_durable_notes(tmp_path):
     agent = build_agent(tmp_path, [])
 
     prompt, metadata = ContextManager(agent).build("What conventions should I follow?")
-    relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
+    relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nRecovered transcript snippets:", 1)[0]
 
     assert "Use constrained tools instead of guessing." in relevant_section
     assert any("Use constrained tools instead of guessing." in item for item in metadata["relevant_memory"]["selected_notes"])

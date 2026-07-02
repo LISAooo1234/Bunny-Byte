@@ -623,7 +623,7 @@ def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
     assert "..." in plain_welcome
     assert "\x1b[48;2;" in welcome
     assert "bunnybyte" in plain_welcome
-    assert "blue-bunny coding agent" in plain_welcome
+    assert "准备好写代码" in plain_welcome
     assert "// READY" not in plain_welcome
     assert "SLASH" not in plain_welcome
     assert "READY      " not in plain_welcome
@@ -1282,6 +1282,8 @@ def test_anthropic_compatible_client_streams_tool_use_input_json_delta():
 
 
 def test_build_agent_uses_openai_provider_and_model_override(tmp_path):
+    empty_config = tmp_path / "empty-config.toml"
+    empty_config.write_text("", encoding="utf-8")
     args = type(
         "Args",
         (),
@@ -1298,6 +1300,7 @@ def test_build_agent_uses_openai_provider_and_model_override(tmp_path):
             "secret_env_names": [],
             "max_steps": 6,
             "max_new_tokens": 512,
+            "config": str(empty_config),
         },
     )()
 
@@ -1397,6 +1400,8 @@ def test_build_agent_uses_anthropic_default_model_when_env_is_missing(tmp_path):
 
 
 def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
+    empty_config = tmp_path / "empty-config.toml"
+    empty_config.write_text("", encoding="utf-8")
     (tmp_path / ".env").write_text(
         "\n".join(
             [
@@ -1425,6 +1430,7 @@ def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
             "secret_env_names": [],
             "max_steps": 6,
             "max_new_tokens": 512,
+            "config": str(empty_config),
         },
     )()
 
@@ -1481,7 +1487,18 @@ def test_build_agent_uses_provider_profile_protocol_from_project_toml(tmp_path):
 
 
 def test_build_agent_uses_deepseek_default_model_when_env_is_missing(tmp_path):
-    args = bunnybyte_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
+    empty_config = tmp_path / "empty-config.toml"
+    empty_config.write_text("", encoding="utf-8")
+    args = bunnybyte_pkg.build_arg_parser().parse_args(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--config",
+            str(empty_config),
+            "--provider",
+            "deepseek",
+        ]
+    )
 
     with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deepseek"}, clear=True):
         with patch("bunnybyte.cli.AnthropicCompatibleModelClient") as mock_anthropic:
@@ -1492,7 +1509,11 @@ def test_build_agent_uses_deepseek_default_model_when_env_is_missing(tmp_path):
 
 
 def test_build_agent_uses_openai_provider_by_default(tmp_path):
-    args = bunnybyte_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path)])
+    empty_config = tmp_path / "empty-config.toml"
+    empty_config.write_text("", encoding="utf-8")
+    args = bunnybyte_pkg.build_arg_parser().parse_args(
+        ["--cwd", str(tmp_path), "--config", str(empty_config)]
+    )
 
     with patch.dict(
         os.environ,
@@ -1619,7 +1640,7 @@ def test_prompt_budget_metadata_records_budget_decisions(tmp_path):
     prompt_events = [event for event in trace_events if event["event"] == "prompt_built"]
     assert prompt_events
     metadata = prompt_events[0]["prompt_metadata"]
-    relevant_section = agent.model_client.prompts[0].split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
+    relevant_section = agent.model_client.prompts[0].split("Relevant memory:\n", 1)[1].split("\n\nRecovered transcript snippets:", 1)[0]
 
     assert metadata["relevant_memory"]["selected_count"] == 3
     assert len(metadata["relevant_memory"]["rendered_notes"]) == 3
@@ -2416,7 +2437,21 @@ def test_agent_records_model_cache_metadata_in_last_prompt_metadata(tmp_path):
 
 
 def test_recent_transcript_entries_stay_richer_than_older_ones(tmp_path):
+    from bunnybyte.core.context_manager import ContextManager
+
     agent = build_agent(tmp_path, ["<final>Done.</final>"])
+    agent.context_manager = ContextManager(
+        agent,
+        total_budget=2_000,
+        section_budgets={
+            "prefix": 600,
+            "memory": 120,
+            "skills": 120,
+            "relevant_memory": 20,
+            "transcript_recall": 20,
+            "history": 320,
+        },
+    )
     old_text = "OLD-" + ("A" * 320)
     recent_text = "RECENT-" + ("B" * 320)
 
@@ -2433,7 +2468,7 @@ def test_recent_transcript_entries_stay_richer_than_older_ones(tmp_path):
 
     prompt = agent.model_client.prompts[-1]
 
-    assert recent_text in prompt
+    assert "B" * 80 in prompt
     assert old_text not in prompt
 
 

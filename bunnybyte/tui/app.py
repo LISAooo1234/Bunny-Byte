@@ -15,12 +15,17 @@ from textual.widgets import Button
 
 from ..commands.slash import resolve_command
 from ..cli import HELP_DETAILS, handle_repl_command, provider_profiles_for_agent
+from ..core.memory_scope import (
+    mark_memory_scope_startup_prompted,
+    should_prompt_memory_scope_startup,
+)
 from ..core.workspace import clip
 from .widgets import (
     AskUserPrompt,
     ChatLog,
     ConfirmPrompt,
     InputBar,
+    MemoryScopeSessionPrompt,
     ProgressPanel,
     StatusBar,
     ThinkingIndicator,
@@ -36,6 +41,13 @@ Screen {
     background: #0f1117;
 }
 """
+
+MEMORY_SCOPE_STARTUP_CHOICES = (
+    ("project", "当前项目（默认）"),
+    ("selected", "选择 session"),
+    ("all", "全部项目历史"),
+    ("off", "关闭记忆"),
+)
 
 
 class BunnyByteTuiApp(App):
@@ -70,6 +82,9 @@ class BunnyByteTuiApp(App):
         self._confirm_decision: tuple[threading.Event, dict] | None = None
         self._ask_user_prompt: AskUserPrompt | None = None
         self._ask_user_decision: tuple[threading.Event, dict] | None = None
+        self._memory_session_prompt: MemoryScopeSessionPrompt | None = None
+        self._memory_session_decision: tuple[threading.Event, dict] | None = None
+        self._memory_scope_startup_task: asyncio.Task | None = None
         self._assistant_stream_task: asyncio.Task | None = None
         self._agent_task_handle: asyncio.Task | None = None
         self._command_task_handle: asyncio.Task | None = None
@@ -109,11 +124,19 @@ class BunnyByteTuiApp(App):
         input_bar.set_skills(getattr(self.agent, "skills", {}) or {})
         input_bar.focus_input()
         self.set_interval(0.5, self._drain_idle_worker_notifications)
+        if should_prompt_memory_scope_startup(self.agent):
+            self._memory_scope_startup_task = asyncio.create_task(
+                self._memory_scope_startup_prompt_task()
+            )
 
     def on_unmount(self) -> None:
         if self._previous_approve is not None:
             self.agent.approve = self._previous_approve
         self.agent.ask_user_callback = self._previous_ask_user
+        if self._memory_scope_startup_task is not None:
+            self._memory_scope_startup_task.cancel()
+        self._resolve_ask_user("")
+        self._resolve_memory_session_scope([])
 
     def action_clear_screen(self) -> None:
         self.query_one(ChatLog).clear_messages()
@@ -168,6 +191,11 @@ class BunnyByteTuiApp(App):
         return self._command_task_handle is not None and not self._command_task_handle.done()
 
     def action_submit_input(self) -> None:
+        if self._memory_session_prompt is not None:
+            self._resolve_memory_session_scope(
+                self._memory_session_prompt.selected_session_ids
+            )
+            return
         if self._ask_user_prompt is not None:
             self._resolve_ask_user(self._ask_user_prompt.selected_choice)
             return
@@ -201,6 +229,25 @@ class BunnyByteTuiApp(App):
         self._run_agent(text)
 
     def on_key(self, event: Key) -> None:
+        if self._memory_session_prompt is not None:
+            if event.key in {"down", "right"}:
+                self._memory_session_prompt.select_next()
+                event.prevent_default()
+            elif event.key in {"up", "left"}:
+                self._memory_session_prompt.select_previous()
+                event.prevent_default()
+            elif event.key in {"space", "tab"}:
+                self._memory_session_prompt.toggle_current()
+                event.prevent_default()
+            elif event.key == "enter":
+                self._resolve_memory_session_scope(
+                    self._memory_session_prompt.selected_session_ids
+                )
+                event.prevent_default()
+            elif event.key == "escape":
+                self._resolve_memory_session_scope([])
+                event.prevent_default()
+            return
         if self._ask_user_prompt is not None:
             if event.key in {"right", "down"}:
                 self._ask_user_prompt.select_next()
@@ -422,6 +469,107 @@ class BunnyByteTuiApp(App):
                 self.call_from_thread(self._handle_runtime_event, dict(event))
             except RuntimeError:
                 return
+
+    async def _memory_scope_startup_prompt_task(self) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self._run_memory_scope_startup_prompt)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.query_one(ChatLog).add_message("assistant", f"[错误] {exc}")
+        finally:
+            self._memory_scope_startup_task = None
+
+    def _run_memory_scope_startup_prompt(self) -> None:
+        mark_memory_scope_startup_prompted(self.agent)
+        choice = self._ask_user_callback(
+            "为这个新 session 选择长期记忆范围",
+            [label for _, label in MEMORY_SCOPE_STARTUP_CHOICES],
+        )
+        mode = _memory_scope_mode_from_choice(choice)
+        if not mode:
+            self._post_memory_scope_notice("已保留默认记忆范围：project。")
+            return
+        if mode == "project":
+            self._post_memory_scope_notice("已使用默认记忆范围：project。")
+            return
+        if mode == "selected":
+            selected_ids = self._prompt_for_memory_scope_sessions()
+            if not selected_ids:
+                self._post_memory_scope_notice("未选择 session，已保留默认记忆范围：project。")
+                return
+            self.agent.set_memory_scope("selected", session_ids=selected_ids)
+        else:
+            self.agent.set_memory_scope(mode)
+        self._post_memory_scope_notice(self.agent.memory_scope_text())
+
+    def _prompt_for_memory_scope_sessions(self) -> list[str]:
+        choices = self._memory_scope_session_choices()
+        if not choices:
+            self._post_memory_scope_notice("没有已保存 session 可选，已保留默认记忆范围：project。")
+            return []
+        event = threading.Event()
+        decision = {"session_ids": []}
+        try:
+            self.call_from_thread(
+                self._show_memory_session_prompt,
+                "选择要作为长期记忆召回点的 session",
+                choices,
+                event,
+                decision,
+            )
+        except RuntimeError:
+            return []
+        event.wait()
+        return [str(item) for item in decision.get("session_ids", []) if str(item)]
+
+    def _memory_scope_session_choices(self, limit: int = 8) -> list[dict]:
+        current_id = str(self.agent.session.get("id", ""))
+        choices = []
+        for row in self.agent.session_store.list_sessions():
+            session_id = str(row.get("id", "")).strip()
+            if not session_id or session_id == current_id:
+                continue
+            topic = clip(str(row.get("topic", "") or "Untitled"), 36)
+            updated = str(row.get("updated_at", "") or "-")
+            label = f"{topic} · {session_id} · {updated}"
+            choices.append({"id": session_id, "label": label})
+            if len(choices) >= limit:
+                break
+        return choices
+
+    def _show_memory_session_prompt(
+        self,
+        question: str,
+        choices: list[dict],
+        event: threading.Event,
+        decision: dict,
+    ) -> None:
+        prompt = MemoryScopeSessionPrompt(question, choices)
+        self._memory_session_prompt = prompt
+        self._memory_session_decision = (event, decision)
+        chat = self.query_one(ChatLog)
+        chat.mount(prompt)
+        chat.call_after_refresh(chat.scroll_end, animate=False)
+
+    def _resolve_memory_session_scope(self, session_ids: list[str]) -> None:
+        if self._memory_session_decision is None:
+            return
+        event, decision = self._memory_session_decision
+        decision["session_ids"] = list(session_ids or [])
+        event.set()
+        if self._memory_session_prompt is not None:
+            self._memory_session_prompt.remove()
+        self._memory_session_prompt = None
+        self._memory_session_decision = None
+
+    def _post_memory_scope_notice(self, content: str) -> None:
+        try:
+            self.call_from_thread(self._add_assistant_message, content)
+            self.call_from_thread(self._refresh_runtime_identity)
+        except RuntimeError:
+            return
 
     def _handle_runtime_event(self, event: dict) -> None:
         event_type = str(event.get("type", ""))
@@ -655,6 +803,14 @@ def _session_switch_message(command_text: str, command_output: str, session_id: 
     if command.startswith("/rollback"):
         return command_output or f"已回滚并创建分支会话 {session_id}"
     return f"已恢复会话 {session_id}"
+
+
+def _memory_scope_mode_from_choice(choice: str) -> str:
+    value = str(choice or "").strip()
+    for mode, label in MEMORY_SCOPE_STARTUP_CHOICES:
+        if value == label or value.lower() == mode:
+            return mode
+    return ""
 
 
 def _copy_to_system_clipboard(text: str) -> None:

@@ -84,11 +84,37 @@ Consolidation complete. Wrote 2 topic updates, refreshed index.
 
 模型也可以手动 `read_file .bunnybyte/memory/topics/<name>.md` 读完整 topic。
 
+### Memory scope
+
+每个 session 都有独立的 `memory_scope`，用于控制跨 session 记忆边界，避免全局长期记忆污染当前任务。
+新开交互式 session 时，CLI/TUI 会先提示选择本次范围；one-shot、管道输入、resume 旧 session 不会弹出提示。
+
+| 模式 | durable topics | 跨 session transcript recall | 适用场景 |
+|------|----------------|-------------------------------|----------|
+| `project` | 开启 | 关闭 | 默认模式，只使用当前项目整理后的长期记忆 |
+| `selected` | 关闭 | 只搜索用户指定 session | 只想复用某几个历史任务的上下文 |
+| `all` / `global` | 开启 | 搜索当前项目最近 session | 需要广泛恢复项目上下文 |
+| `off` | 关闭 | 关闭 | 敏感任务或全新任务 |
+
+示例：
+
+```text
+> /memory-scope
+> /memory-scope off
+> /memory-scope project
+> /memory-scope selected 1 3
+> /memory-scope selected 20260627-150022-6eb411
+> /memory-scope all
+```
+
+`selected` 的参数可以是 `/history` 里的序号、session id、`latest`，或唯一匹配的 topic 片段。跨 session 召回会在 prompt 的 `Recovered transcript snippets` 中带上来源 session id 和 topic，便于审计。
+
 ## 用户可见命令
 
 | 命令 | 说明 |
 |------|------|
 | `/memory` | 显示 MEMORY.md 索引 |
+| `/memory-scope` | 查看或设置当前 session 的跨 session 记忆范围 |
 | `/working-memory` | 显示当前 session 的工作记忆 |
 | `/remember <text>` | 追加一条到 daily log |
 | `/dream` | 立即整合 daily log → topic |

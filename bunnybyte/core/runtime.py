@@ -7,7 +7,6 @@ parsing live in focused helper modules.
 
 import json
 import os
-import re
 import textwrap
 import threading
 import uuid
@@ -27,6 +26,7 @@ from .plan_mode import PlanModeController
 from .permissions import PermissionChecker
 from .read_ledger import ReadLedger
 from .run_store import RunStore
+from .runtime_context import RuntimeContextMixin
 from .runtime_consumers import default_runtime_consumers
 from .runtime_checkpoints import RuntimeCheckpointsMixin
 from .runtime_events import build_runtime_event
@@ -36,6 +36,7 @@ from .session_fork import fork_runtime_session, rollback_runtime_session
 from .session_lifecycle import clear_runtime_session, resume_runtime_session
 from .session_store import SessionStore as SessionStore  # noqa: F401
 from .session_state import SessionStateMixin
+from .skill_evolution import SkillEvolutionManager
 from .session_topics import DEFAULT_SESSION_TOPIC
 from .tool_repetition import is_repeated_tool_call
 from .tool_profiles import build_tool_profiles
@@ -44,7 +45,7 @@ from .turn_history import TurnHistoryBuilder
 from .worker_manager import WorkerManager
 from ..tools import registry as toolkit
 from ..tools.schema import native_tool_specs
-from .workspace import WorkspaceContext, clip, now
+from .workspace import WorkspaceContext, now
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
     "HOME",
@@ -64,6 +65,11 @@ DEFAULT_SHELL_ENV_ALLOWLIST = (
 DEFAULT_FEATURE_FLAGS = {
     "memory": True,
     "relevant_memory": True,
+    "transcript_recall": True,
+    "turn_index": True,
+    "model_turn_index": True,
+    "skill_evolution": True,
+    "skill_curator": True,
     "context_reduction": True,
     "prompt_cache": True,
 }
@@ -73,26 +79,6 @@ CHECKPOINT_FULL_VALID_STATUS = "full-valid"
 CHECKPOINT_PARTIAL_STALE_STATUS = "partial-stale"
 CHECKPOINT_WORKSPACE_MISMATCH_STATUS = "workspace-mismatch"
 CHECKPOINT_SCHEMA_MISMATCH_STATUS = "schema-mismatch"
-SHORT_APPROVAL_REPLIES = frozenset(
-    {
-        "yes",
-        "ok",
-        "okay",
-        "go ahead",
-        "continue",
-        "sounds good",
-        "sure",
-        "好",
-        "好的",
-        "继续",
-        "我愿意",
-        "可以",
-        "行",
-    }
-)
-NEXT_STEP_CUE_PATTERN = re.compile(
-    r"(?i)(next step|continue|if you'd like|if you want|i can|i will|i'll|接下来|继续|下一步|如果你愿意|我会)"
-)
 
 
 @dataclass
@@ -106,7 +92,12 @@ class PromptPrefix:
     built_at: str
 
 
-class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin):
+class BunnyByte(
+    RuntimeContextMixin,
+    SessionStateMixin,
+    RuntimeSecretsMixin,
+    RuntimeCheckpointsMixin,
+):
     def __init__(
         self,
         model_client,
@@ -207,6 +198,7 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         self.read_ledger = ReadLedger(self)
         self.todo_ledger = TodoLedger(self)
         self.worker_manager = WorkerManager(self)
+        self.skill_evolution = SkillEvolutionManager(self)
         self.skills = skillslib.discover_skills(self.root)
         self.tools = self.build_tools()
         self.tool_profiles = build_tool_profiles(self.tools)
@@ -544,6 +536,8 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
 
             {examples_section}
 
+            {self.skill_evolution.render_prompt_hint() if hasattr(self, "skill_evolution") else ""}
+
             {self.workspace.text()}
             """
         ).strip()
@@ -595,9 +589,6 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
         }
         return dict(self._last_prefix_refresh)
 
-    def memory_text(self):
-        return self.memory.render_memory_text()
-
     @property
     def runtime_mode(self):
         return str(
@@ -612,121 +603,6 @@ class BunnyByte(SessionStateMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin)
 
     def exit_plan_mode(self):
         return self.plan_mode.exit()
-
-    def history_text(self):
-        history = self.session["history"]
-        if not history:
-            return "- empty"
-
-        lines = []
-        for item in history:
-            if item["role"] == "tool":
-                lines.append(
-                    f"[tool:{item['name']}] {json.dumps(item['args'], sort_keys=True)}"
-                )
-                lines.append(str(item["content"]))
-            else:
-                lines.append(f"[{item['role']}] {item['content']}")
-
-        return "\n".join(lines)
-
-    def feature_enabled(self, name):
-        return bool(self.feature_flags.get(str(name), False))
-
-    def effective_user_message(self, user_message):
-        text = str(user_message or "")
-        normalized = " ".join(text.strip().split()).lower()
-        if normalized not in SHORT_APPROVAL_REPLIES:
-            return text
-
-        prior_message = self.latest_assistant_message()
-        if not prior_message or not NEXT_STEP_CUE_PATTERN.search(prior_message):
-            return text
-
-        return textwrap.dedent(
-            f"""\
-            The user's latest reply was a short approval: "{text.strip()}".
-            Interpret it as approval to continue the latest clear next step from the immediately preceding assistant message.
-            Continue that work now instead of asking again or returning an acknowledgement-only final.
-            Relevant prior assistant message:
-            {clip(prior_message, 900)}
-            """
-        ).strip()
-
-    def prompt(self, user_message):
-        prompt, _ = self._build_prompt_and_metadata(user_message)
-        return prompt
-
-    def latest_assistant_message(self):
-        for item in reversed(self.session.get("history", [])):
-            if item.get("role") == "assistant":
-                return str(item.get("content", "")).strip()
-        return ""
-
-    def record(self, item):
-        self.ensure_session_started()
-        if item.get("role") == "user":
-            self._maybe_update_session_topic(item.get("content", ""))
-        self.session["history"].append(self.turn_history.enrich(item))
-        self.session_path = self.session_store.save(self.session)
-
-    def prompt_metadata(self, user_message, prompt):
-        _, metadata = self._build_prompt_and_metadata(user_message)
-        return metadata
-
-    def _build_prompt_and_metadata(self, user_message):
-        refresh = self.refresh_prefix()
-        self.resume_state = self.evaluate_resume_state()
-        prompt, metadata = self.context_manager.build(user_message)
-        if (
-            (metadata.get("prompt_over_budget") or metadata.get("budget_reductions"))
-            and len(self.session.get("history", [])) > 4
-            and not getattr(self.model_client, "deterministic_scripted", False)
-        ):
-            self.compact_history(trigger="auto_prompt_over_budget")
-            prompt, metadata = self.context_manager.build(user_message)
-            metadata["auto_compacted"] = True
-        # 这里把“这轮 prompt 是怎么拼出来的”连同缓存相关状态一起记下来，
-        # 后面 trace/report 才能解释清楚：为什么这一轮 prefix 变了、缓存有没有命中。
-        metadata.update(
-            {
-                "prefix_chars": len(self.prefix),
-                "workspace_chars": len(self.workspace.text()),
-                "memory_chars": len(self.memory_text()),
-                "history_chars": len(self.history_text()),
-                "request_chars": len(user_message),
-                "tool_count": len(self.tools),
-                "workspace_docs": len(self.workspace.project_docs),
-                "recent_commits": len(self.workspace.recent_commits),
-                "prefix_hash": self.prefix_state.hash,
-                "prompt_cache_key": self.prefix_state.hash,
-                "workspace_fingerprint": self.prefix_state.workspace_fingerprint,
-                "tool_signature": self.prefix_state.tool_signature,
-                "workspace_changed": refresh["workspace_changed"],
-                "prefix_changed": refresh["prefix_changed"],
-                "prompt_cache_supported": bool(
-                    getattr(self.model_client, "supports_prompt_cache", False)
-                ),
-                "resume_status": self.resume_state.get(
-                    "status", CHECKPOINT_NONE_STATUS
-                ),
-                "stale_summary_invalidations": int(
-                    self.resume_state.get("stale_summary_invalidations", 0)
-                ),
-                "stale_paths": list(self.resume_state.get("stale_paths", [])),
-                "runtime_identity_mismatch_fields": list(
-                    self.resume_state.get("runtime_identity_mismatch_fields", [])
-                ),
-            }
-        )
-        metadata.update(self.detected_secret_env_summary())
-        usage_payload = {
-            "run_id": getattr(getattr(self, "current_task_state", None), "run_id", ""),
-            "context_usage": metadata.get("context_usage", {}),
-        }
-        if getattr(self, "current_task_state", None) is not None:
-            self.session_event_bus.emit("context_usage_recorded", usage_payload)
-        return prompt, metadata
 
     def compact_history(self, trigger="manual", keep_recent_turns=2):
         return self.compact_manager.compact(

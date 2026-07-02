@@ -25,6 +25,7 @@ class Skill:
     source: str = "builtin"
     skill_root: str = ""
     when_to_use: str = ""
+    not_when_to_use: str = ""
     context: str = "inline"
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str = ""
@@ -53,6 +54,7 @@ class Skill:
             "source": self.source,
             "context": self.context,
             "allowed_tools": list(self.allowed_tools),
+            "not_when_to_use": self.not_when_to_use,
             "paths": list(self.paths),
             "user_invocable": self.user_invocable,
             "disable_model_invocation": self.disable_model_invocation,
@@ -99,6 +101,7 @@ def load_skill_file(path, source):
         name=name,
         description=_string(metadata.get("description")),
         when_to_use=_string(metadata.get("when_to_use")),
+        not_when_to_use=_string(metadata.get("not_when_to_use")),
         context=_string(metadata.get("context"), "inline") or "inline",
         allowed_tools=tuple(_list_value(metadata.get("allowed_tools"))),
         argument_hint=_string(metadata.get("arguments") or metadata.get("argument_hint")),

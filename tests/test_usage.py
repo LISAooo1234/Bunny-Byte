@@ -175,6 +175,66 @@ def test_provider_command_switches_cli_runtime_only(tmp_path, monkeypatch):
     assert "| Provider profile | `deepseek` |" in output
 
 
+def test_startup_memory_scope_prompt_default_keeps_session_pending(
+    tmp_path, monkeypatch, capsys
+):
+    from bunnybyte.cli import _prompt_startup_memory_scope
+
+    agent = build_agent(tmp_path, [], lazy_session=True)
+    pending_path = agent.session_path
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    _prompt_startup_memory_scope(agent)
+
+    output = capsys.readouterr().out
+    assert "长期记忆范围" in output
+    assert agent.session["memory_scope"]["mode"] == "project"
+    assert agent.is_pending_session is True
+    assert not pending_path.exists()
+
+
+def test_startup_memory_scope_prompt_selected_sets_session_ids(
+    tmp_path, monkeypatch
+):
+    from bunnybyte.cli import _prompt_startup_memory_scope
+
+    agent = build_agent(tmp_path, [], lazy_session=True)
+    agent.session_store.save(
+        {
+            "id": "prior-session-a",
+            "created_at": "2026-06-20T00:00:00+00:00",
+            "topic": "Prior auth work",
+            "workspace_root": str(tmp_path),
+            "history": [{"role": "user", "content": "auth notes"}],
+        }
+    )
+    agent.session_store.save(
+        {
+            "id": "prior-session-b",
+            "created_at": "2026-06-21T00:00:00+00:00",
+            "topic": "Prior ui work",
+            "workspace_root": str(tmp_path),
+            "history": [{"role": "user", "content": "ui notes"}],
+        }
+    )
+    answers = iter(["selected", "prior-session-a prior-session-b"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    _prompt_startup_memory_scope(agent)
+
+    assert agent.session["memory_scope"] == {
+        "mode": "selected",
+        "session_ids": ["prior-session-a", "prior-session-b"],
+    }
+    assert agent.is_pending_session is True
+    assert not agent.session_path.exists()
+
+    agent.model_client.outputs.append("<final>Done.</final>")
+    assert agent.ask("hello") == "Done."
+    saved = agent.session_store.load(agent.session["id"])
+    assert saved["memory_scope"] == agent.session["memory_scope"]
+
+
 def test_provider_list_includes_configured_profiles(tmp_path):
     from bunnybyte.cli import handle_repl_command
     from bunnybyte.config import ProviderConfig

@@ -11,6 +11,8 @@ def invoke_skill(agent, name, arguments=""):
     skill = agent.skills.get(str(name).lstrip("/"))
     if not skill:
         raise KeyError(name)
+    if hasattr(agent, "skill_evolution"):
+        agent.skill_evolution.record_skill_usage(skill)
     prompt = _skill_prompt(skill, arguments)
     agent.session_event_bus.emit("skill_invoked", _event_payload(skill, arguments, prompt))
     if skill.disable_model_invocation:

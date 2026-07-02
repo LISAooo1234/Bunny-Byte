@@ -1,6 +1,7 @@
 """Session state helpers shared by the runtime lifecycle."""
 
 from ..features import memory as memorylib
+from .memory_scope import normalize_memory_scope
 from .session_topics import (
     DEFAULT_SESSION_TOPIC,
     derive_session_topic,
@@ -31,6 +32,7 @@ class SessionStateMixin:
         read_ledger = self.session.setdefault("read_ledger", {})
         if not isinstance(read_ledger, dict):
             self.session["read_ledger"] = {}
+        self.session["memory_scope"] = normalize_memory_scope(self.session.get("memory_scope"))
         topic = str(self.session.get("topic", "") or "").strip()
         if not topic or derive_session_topic(topic) != topic:
             self.session["topic"] = topic_from_history(self.session.get("history", []))

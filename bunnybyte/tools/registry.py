@@ -1,9 +1,3 @@
-"""工具定义与执行辅助逻辑。
-
-可以把这个文件看成 agent 的能力白名单：模型能申请哪些动作、这些动作
-如何做参数校验，以及最终如何执行，都是在这里定义的。
-"""
-
 import html
 import importlib
 import inspect
@@ -362,4 +356,3 @@ def tool_patch_file(agent, args):
         raise ValueError(f"old_text must occur exactly once, found {count}")
     path.write_text(text.replace(old_text, str(args["new_text"]), 1), encoding="utf-8")
     return f"patched {path.relative_to(agent.root)}"
-

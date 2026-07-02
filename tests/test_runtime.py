@@ -53,6 +53,7 @@ def test_engine_drives_real_session_and_persists_event_timeline(tmp_path):
         "model_requested",
         "model_parsed",
         "assistant_message",
+        "turn_indexed",
         "turn_finished",
     ]
 
