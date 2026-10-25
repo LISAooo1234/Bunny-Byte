@@ -205,6 +205,7 @@ def run_task(
         "passed": False,
         "failure": "",
         "steps": 0,
+        "wasted_steps": 0,
         "over_budget": False,
         "model_calls": 0,
         "input_tokens": None,
@@ -239,6 +240,7 @@ def run_task(
     state = getattr(agent, "current_task_state", None)
     if state is not None:
         result["steps"] = state.tool_steps
+        result["wasted_steps"] = state.wasted_steps
         result["over_budget"] = state.tool_steps > task.step_budget
         result["model_calls"] = state.attempts
         result["stop_reason"] = state.stop_reason

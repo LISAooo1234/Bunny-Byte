@@ -23,6 +23,16 @@ def _average(rows, key):
     return round(sum(values) / len(values), 2) if values else None
 
 
+def _per_pass(rows, keys):
+    """全部任务（含失败的）消耗的总量 / 通过数：失败题的开销也算在通过的任务头上。"""
+    keys = (keys,) if isinstance(keys, str) else keys
+    passed = sum(1 for row in rows if row["passed"])
+    totals = [_total(rows, key) for key in keys]
+    if not passed or any(total is None for total in totals):
+        return None
+    return round(sum(totals) / passed)
+
+
 def summarize(rows):
     runs = len(rows)
     passed = sum(1 for row in rows if row["passed"])
@@ -34,6 +44,11 @@ def summarize(rows):
         "within_budget": sum(1 for row in rows if not row.get("over_budget")),
         "avg_steps": _average(rows, "steps"),
         "avg_model_calls": _average(rows, "model_calls"),
+        "avg_wasted_steps": _average(rows, "wasted_steps"),
+        "step_limit_stops": sum(1 for row in rows if row.get("stop_reason") == "step_limit_reached"),
+        "loop_stalled": sum(1 for row in rows if row.get("stop_reason") == "loop_stalled"),
+        "model_calls_per_pass": _per_pass(rows, "model_calls"),
+        "tokens_per_pass": _per_pass(rows, ("input_tokens", "output_tokens")),
         "avg_wall_seconds": _average(rows, "wall_seconds"),
         "total_wall_seconds": round(sum(row["wall_seconds"] for row in rows), 1),
         "input_tokens": _total(rows, "input_tokens"),
@@ -179,7 +194,8 @@ def render_row(row):
     note = "" if row["passed"] else f"  {row['failure'][:80]}"
     budget = " (超预算)" if row.get("over_budget") else ""
     gate = f"  [验证 {row['verify_status']}{'·修复' + str(row['verify_repairs']) if row.get('verify_repairs') else ''}]" if row.get("verify_status") else ""
-    return f"{mark} {row['task']} #{row['attempt']}  {row['steps']} 步{budget}  {row['wall_seconds']}s{tokens}{gate}{note}"
+    wasted = f"，空转 {row['wasted_steps']}" if row.get("wasted_steps") else ""
+    return f"{mark} {row['task']} #{row['attempt']}  {row['steps']} 步{wasted}{budget}  {row['wall_seconds']}s{tokens}{gate}{note}"
 
 
 def render_record(record, previous=None):
@@ -200,11 +216,27 @@ def render_record(record, previous=None):
         f"通过率：{summary['passed']}/{summary['runs']} = {summary['pass_rate'] * 100:.1f}%    正常收尾 {summary['clean_finish']}/{summary['runs']}    步数达标 {summary['within_budget']}/{summary['runs']}",
         f"平均步数 {_fmt(summary['avg_steps'])}，平均模型调用 {_fmt(summary['avg_model_calls'])}，总耗时 {summary['total_wall_seconds']}s",
         f"Token：{_tokens(summary, record.get('protocol', ''))}",
+        *_waste_lines(summary),
         *_verify_lines(record),
         _delta(record, previous),
         NOISE_NOTE.format(step=100 / max(len(record["task_ids"]) * record["repeat"], 1)),
     ]
     return "\n".join(lines)
+
+
+def _waste_lines(summary):
+    if summary.get("avg_wasted_steps") is None:
+        return []  # 旧结果文件没有这一列
+    per_pass = [
+        f"{label} {_fmt(summary.get(key))}"
+        for label, key in (("模型调用", "model_calls_per_pass"), ("token", "tokens_per_pass"))
+        if summary.get(key) is not None
+    ]
+    cost = f"；每个通过任务平均 {'、'.join(per_pass)}" if per_pass else ""
+    return [
+        f"空转：平均每题 {_fmt(summary['avg_wasted_steps'])} 步是重复/无新信息的调用（不计入步数上限）；"
+        f"撞步数上限 {summary['step_limit_stops']} 次，被判空转提前收尾 {summary['loop_stalled']} 次{cost}"
+    ]
 
 
 def _verify_lines(record):

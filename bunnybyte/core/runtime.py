@@ -668,7 +668,7 @@ class BunnyByte(
     def infer_next_step(self, task_state):
         if task_state.status == "completed":
             return "No next step recorded."
-        if task_state.stop_reason == "step_limit_reached":
+        if task_state.stop_reason in {"step_limit_reached", "loop_stalled"}:
             return "Resume from the latest checkpoint and continue the task."
         if task_state.last_tool:
             return f"Decide the next action after {task_state.last_tool}."
@@ -819,6 +819,7 @@ class BunnyByte(
             "stop_reason": task_state.stop_reason,
             "final_answer": task_state.final_answer,
             "tool_steps": task_state.tool_steps,
+            "wasted_steps": task_state.wasted_steps,
             "attempts": task_state.attempts,
             "checkpoint_id": task_state.checkpoint_id,
             "resume_status": task_state.resume_status,

@@ -327,7 +327,9 @@ _STEP_LIMIT_SUMMARY_NOTICE = (
 )
 
 
-def request_step_limit_summary(engine, task_state, user_message):
+def request_step_limit_summary(
+    engine, task_state, user_message, notice=_STEP_LIMIT_SUMMARY_NOTICE, event="step_limit_summary"
+):
     """Ask the model to write a graceful step-limit summary.
 
     Returns the final text, or None if the model fails or refuses to comply.
@@ -337,14 +339,14 @@ def request_step_limit_summary(engine, task_state, user_message):
     agent = engine.runtime
     started_at = time.monotonic()
     try:
-        prompt, _ = agent._build_prompt_and_metadata(_STEP_LIMIT_SUMMARY_NOTICE)
+        prompt, _ = agent._build_prompt_and_metadata(notice)
         result = complete_model(
             agent.model_client, prompt, agent.max_new_tokens
         )
     except Exception as exc:
         agent.emit_trace(
             task_state,
-            "step_limit_summary_failed",
+            f"{event}_failed",
             {"error": clip(str(exc), 200)},
         )
         return None
@@ -356,7 +358,7 @@ def request_step_limit_summary(engine, task_state, user_message):
     duration_ms = int((time.monotonic() - started_at) * 1000)
     agent.emit_trace(
         task_state,
-        "step_limit_summary",
+        event,
         {"kind": kind, "duration_ms": duration_ms, "produced": bool(kind == "final")},
     )
     if kind == "final" and payload:

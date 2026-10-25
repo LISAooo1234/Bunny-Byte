@@ -28,7 +28,8 @@ def run_worker(manager, task, prompt, action):
     started = time.monotonic()
     try:
         result = task.runtime.ask(str(prompt or ""))
-        status = "stopped" if task.stop_requested else "completed"
+        stalled = getattr(getattr(task.runtime, "current_task_state", None), "stop_reason", "") == "loop_stalled"
+        status = "stopped" if task.stop_requested or stalled else "completed"
     except Exception as exc:
         result = f"error: worker failed: {exc}"
         status = "failed"

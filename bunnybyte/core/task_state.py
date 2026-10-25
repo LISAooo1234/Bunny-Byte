@@ -16,6 +16,7 @@ STATUS_FAILED = "failed"
 STOP_REASON_FINAL_ANSWER_RETURNED = "final_answer_returned"
 STOP_REASON_STEP_LIMIT_REACHED = "step_limit_reached"
 STOP_REASON_RETRY_LIMIT_REACHED = "retry_limit_reached"
+STOP_REASON_LOOP_STALLED = "loop_stalled"
 STOP_REASON_MODEL_ERROR = "model_error"
 STOP_REASON_TOOL_TIMEOUT = "tool_timeout"
 STOP_REASON_APPROVAL_DENIED = "approval_denied"
@@ -30,6 +31,7 @@ class TaskState:
     user_request: str
     status: str = STATUS_RUNNING
     tool_steps: int = 0
+    wasted_steps: int = 0
     attempts: int = 0
     last_tool: str = ""
     stop_reason: str = ""
@@ -57,6 +59,7 @@ class TaskState:
             user_request=str(data.get("user_request", "")),
             status=str(data.get("status", STATUS_RUNNING)),
             tool_steps=int(data.get("tool_steps", 0)),
+            wasted_steps=int(data.get("wasted_steps", 0)),
             attempts=int(data.get("attempts", 0)),
             last_tool=str(data.get("last_tool", "")),
             stop_reason=str(data.get("stop_reason", "")),
@@ -96,6 +99,9 @@ class TaskState:
     def stop_retry_limit(self, final_answer=""):
         return self.stop(STOP_REASON_RETRY_LIMIT_REACHED, final_answer=final_answer)
 
+    def stop_loop_stalled(self, final_answer=""):
+        return self.stop(STOP_REASON_LOOP_STALLED, final_answer=final_answer)
+
     def stop_model_error(self, final_answer=""):
         return self.stop(STOP_REASON_MODEL_ERROR, status=STATUS_FAILED, final_answer=final_answer)
 
@@ -112,6 +118,7 @@ class TaskState:
             "user_request": self.user_request,
             "status": self.status,
             "tool_steps": self.tool_steps,
+            "wasted_steps": self.wasted_steps,
             "attempts": self.attempts,
             "last_tool": self.last_tool,
             "stop_reason": self.stop_reason,

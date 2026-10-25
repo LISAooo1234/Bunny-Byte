@@ -14,6 +14,7 @@ from .engine_helpers import (
 from .model_errors import finish_model_error
 from .model_stream import complete_model_with_deltas
 from .provider_failover import failover_events
+from .stall_budget import STOP, StallBudget, finish_stalled, watch_tool_events
 from .task_state import TaskState
 from .tool_loop_guard import stall_notice
 from .verification_gate import verification_gate, verification_notice
@@ -108,6 +109,8 @@ def run_turn(engine, user_message):
     provider_retries = {}
     protocol_retry_notice = ""
     max_attempts = agent.max_steps + 2
+    stall = StallBudget(agent.max_steps)
+    stalled = False
 
     while tool_steps < agent.max_steps and attempts < max_attempts:
         if agent.abort_requested:
@@ -126,8 +129,11 @@ def run_turn(engine, user_message):
         agent.run_store.write_task_state(task_state)
         prompt_started_at = time.monotonic()
         native_tools = agent.native_tools() if hasattr(agent, "native_tools") else None
+        native_tools, quarantine_notice = stall.next_call(native_tools)
         prompt_user_message = _with_protocol_retry_notice(
-            user_message, protocol_retry_notice, native_tools=bool(native_tools)
+            user_message,
+            "\n".join(filter(None, [protocol_retry_notice, quarantine_notice])),
+            native_tools=bool(native_tools),
         )
         prompt, prompt_metadata = agent._build_prompt_and_metadata(prompt_user_message)
         agent.emit_trace(
@@ -258,6 +264,7 @@ def run_turn(engine, user_message):
                 run_started_at,
             )
             return
+        stall.call_done()
         raw = result.text
         result_tool_calls = list(getattr(result, "tool_calls", []) or [])
         completion_metadata = dict(result.metadata or getattr(agent.model_client, "last_completion_metadata", {}) or {})
@@ -315,14 +322,16 @@ def run_turn(engine, user_message):
 
         if kind in {"tool", "tools"}:
             tools = [payload] if kind == "tool" else list(payload)
-            executed = yield from execute_tool_payloads(
-                engine,
-                task_state,
-                user_message,
-                tools,
-                agent.max_steps - tool_steps,
+            executed = yield from watch_tool_events(
+                execute_tool_payloads(engine, task_state, user_message, tools, agent.max_steps - tool_steps),
+                stall,
             )
-            tool_steps += executed
+            tool_steps += stall.charge(executed)
+            max_attempts += stall.last_refund
+            task_state.wasted_steps = stall.wasted_total
+            escalation = stall.assess()
+            if escalation:
+                agent.emit_trace(task_state, f"stall_{escalation}", stall.snapshot())
             protocol_retry_notice = stall_notice(agent.session["history"])
             if protocol_retry_notice:
                 agent.emit_trace(task_state, "loop_guard_stall", {"notice": protocol_retry_notice})
@@ -336,6 +345,9 @@ def run_turn(engine, user_message):
                     run_started_at,
                 )
                 return
+            if escalation == STOP:
+                stalled = True
+                break
             continue
 
         if kind == "retry":
@@ -438,7 +450,9 @@ def run_turn(engine, user_message):
         }
         return
 
-    if attempts >= max_attempts and tool_steps < agent.max_steps:
+    if stalled:
+        final = finish_stalled(engine, task_state, user_message)
+    elif attempts >= max_attempts and tool_steps < agent.max_steps:
         final = "Stopped after too many malformed model responses without a valid tool call or final answer."
         task_state.stop_retry_limit(final)
     else:

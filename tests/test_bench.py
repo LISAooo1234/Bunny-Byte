@@ -249,6 +249,30 @@ def test_summary_aggregates_pass_rate_steps_and_tokens():
     assert summary["total_wall_seconds"] == 8.0
 
 
+def test_waste_is_a_bench_metric_and_repeats_do_not_hit_the_ceiling():
+    task = select_tasks(["add_cli_flag"])[0]
+    oracle = run_task(task, oracle_client(task), timeout=60)
+    repeat = '<tool>{"name":"list_files","args":{"path":"."}}</tool>'
+    outputs = [repeat] * 6 + scripted_outputs(task, python_command())
+
+    result = run_task(task, ScriptedModelClient(outputs), timeout=60, max_steps=oracle["steps"] + 3)
+
+    assert result["passed"] and result["stop_reason"] == "final_answer_returned"
+    assert result["wasted_steps"] == 4 and result["steps"] == oracle["steps"] + 6
+    assert "空转 4" in report.render_row(result)
+    summary = report.summarize([result, dict(result, passed=False, wasted_steps=0)])
+    assert summary["avg_wasted_steps"] == 2
+    assert summary["model_calls_per_pass"] == result["model_calls"] * 2
+    assert "空转：平均每题 4.0 步" in report.render_record(make_record_for_render([result]), None)
+
+
+def make_record_for_render(rows):
+    task = select_tasks(["add_cli_flag"])[0]
+    return report.build_record(
+        rows, [task], provider="scripted", model="oracle", set_hash=task_set_hash([task]), repeat=1
+    )
+
+
 def test_previous_comparable_requires_same_task_set_provider_and_model(tmp_path):
     older = make_record([True, False], "2026-10-01T00:00:00Z")
     other_set = make_record([True, True], "2026-10-02T00:00:00Z", set_hash="zzz")
