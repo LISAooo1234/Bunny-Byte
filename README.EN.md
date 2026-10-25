@@ -31,6 +31,7 @@ stored locally for recovery, review, and debugging.
 | Capability | Summary |
 | --- | --- |
 | Model integration | Supports the OpenAI Responses API and Anthropic-style interfaces; `provider` selects configuration and `protocol` selects the request format. |
+| Provider failover | When the primary provider returns 5xx / rate limits / timeouts, requests switch to the configured `fallback` chain; the switch is shown in the UI and recorded in the run trace. See [Configuration](docs/configuration.md). |
 | Tool calling | Uses provider-native tool calling when available and keeps a fallback path for legacy backends. |
 | Session lifecycle | Supports `/history`, `/resume`, `/fork`, `/rollback`, and `/compact`. |
 | Task orchestration | Includes plan mode, todo ledger, `ask_user`, and `Explore` / `worker` subagents. |

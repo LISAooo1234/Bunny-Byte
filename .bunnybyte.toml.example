@@ -1,4 +1,6 @@
 provider = "deepseek"
+# 主 provider 暂时不可用（5xx / 限流 / 超时）时依次改用的备用 provider
+# fallback = ["openai"]
 
 [providers.openai]
 protocol = "openai"

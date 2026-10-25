@@ -22,6 +22,7 @@ from .config import (
     resolve_project_sandbox_config,
     resolve_provider_config,
 )
+from .config.fallback import resolve_fallback_configs, resolve_fallback_names
 from .features.sandbox.checker import SandboxChecker
 from .providers.base import complete_model
 from .providers.errors import ProviderError, sanitize_url
@@ -109,6 +110,29 @@ def check_provider(start, provider=None, config_path=None):
             )
         )
     return checks, config
+
+
+def check_fallback(start, config, config_path=None):
+    """报告备用 provider 链；没有配置时不输出任何检查项。"""
+    if config is None:
+        return []
+    names = resolve_fallback_names(config.name, start=start, config_path=config_path)
+    if not names:
+        return []
+    usable = resolve_fallback_configs(config.name, start=start, config_path=config_path)
+    usable_names = {item.name for item in usable}
+    skipped = [name for name in names if name not in usable_names]
+    detail = " -> ".join(f"{item.name} ({item.model})" for item in usable) or "无可用备用"
+    if skipped:
+        return [
+            DoctorCheck(
+                "备用 Provider",
+                "warn",
+                f"{detail}；已忽略配置不完整的：{', '.join(skipped)}",
+                "为这些 provider 配置 api_key / base_url / model，否则故障切换不会使用它们。",
+            )
+        ]
+    return [DoctorCheck("备用 Provider", "ok", detail)]
 
 
 def check_connectivity(config, client_factory):
@@ -252,6 +276,7 @@ def run_doctor(
     checks.extend(check_config_files(start, config_path))
     provider_checks, config = check_provider(start, provider, config_path)
     checks.extend(provider_checks)
+    checks.extend(check_fallback(start, config, config_path))
     if offline:
         checks.append(DoctorCheck("连通性", "skip", "--offline，跳过网络检查。"))
     elif client_factory is not None:

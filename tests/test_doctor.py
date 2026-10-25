@@ -180,3 +180,33 @@ def test_cli_doctor_online_builds_real_client(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "pong" in out
     assert built and built[0].provider == "deepseek"
+
+
+def test_doctor_reports_fallback_chain_and_skips_incomplete(tmp_path, monkeypatch):
+    _isolate_env(monkeypatch, tmp_path)
+    (tmp_path / ".bunnybyte.toml").write_text(
+        "\n".join(
+            [
+                'provider = "deepseek"',
+                'fallback = ["anthropic", "openai"]',
+                "[providers.deepseek]",
+                f'api_key = "{SECRET}"',
+                "[providers.anthropic]",
+                'api_key = "anthropic-secret-9999"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    checks = run_doctor(tmp_path, offline=True)
+    by_name = {check.name: check for check in checks}
+    check = by_name["备用 Provider"]
+    assert check.status == "warn"
+    assert "anthropic" in check.detail and "openai" in check.detail
+    assert "anthropic-secret-9999" not in render_doctor_json(checks)
+
+    (tmp_path / ".bunnybyte.toml").write_text(
+        f'provider = "deepseek"\n[providers.deepseek]\napi_key = "{SECRET}"\n',
+        encoding="utf-8",
+    )
+    names = [c.name for c in run_doctor(tmp_path, offline=True)]
+    assert "备用 Provider" not in names

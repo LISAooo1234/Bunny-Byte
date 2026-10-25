@@ -81,6 +81,28 @@ base_url = "https://api.anthropic.com"
 model = "claude-sonnet-4-6"
 ```
 
+## 备用 provider（故障切换）
+
+主 provider 返回 5xx、限流、超时或网络错误，并且重试仍然失败时，Bunny Byte 会自动改用备用 provider 完成这一次请求，并在界面提示、run trace（`provider_fallback` 事件）和会话事件里留下记录。切换后主 provider 会冷却 120 秒，期间直接使用备用，工具循环不会每一步都重新等一轮重试；冷却结束后自动回到主 provider。
+
+```toml
+provider = "openai"
+fallback = ["deepseek"]          # 顶层默认备用链
+
+[providers.openai]
+fallback = ["deepseek", "anthropic"]   # 可选：只对这个 profile 生效，优先于顶层
+```
+
+也可以用环境变量 `BUNNYBYTE_FALLBACK=deepseek,anthropic` 或命令行 `--fallback deepseek`；`none` 表示关闭。优先级：CLI > 环境变量 > profile 内的 `fallback` > 顶层 `fallback`。
+
+注意：
+
+- 只有可重试的服务端/网络错误才会切换；鉴权失败（401/403）、请求格式错误不会悄悄换模型，避免掩盖配置问题。
+- 回答已经开始流式输出之后发生的错误不会切换，以免内容重复。
+- 备用 provider 必须配置完整（api_key、base_url、model），不完整的会被忽略，`bunny doctor` 会提示。
+- `BUNNYBYTE_API_KEY` / `BUNNYBYTE_BASE_URL` / `BUNNYBYTE_MODEL` 这类通用 override 只作用于主 provider，不会套到备用上。
+- 主备可以跨协议（例如 openai 主、anthropic 协议的 deepseek 备），工具定义会自动转换格式。
+
 ## 环境变量
 
 不写 toml 也能跑——只设环境变量即可：
@@ -88,7 +110,8 @@ model = "claude-sonnet-4-6"
 | 变量 | 用途 |
 |------|------|
 | `BUNNYBYTE_PROVIDER` | 默认 provider |
-| `BUNNYBYTE_API_KEY` / `BUNNYBYTE_BASE_URL` / `BUNNYBYTE_MODEL` | 通用 override |
+| `BUNNYBYTE_API_KEY` / `BUNNYBYTE_BASE_URL` / `BUNNYBYTE_MODEL` | 通用 override（只作用于主 provider） |
+| `BUNNYBYTE_FALLBACK` | 备用 provider 链，逗号分隔 |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Anthropic |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` | DeepSeek |
@@ -100,6 +123,7 @@ model = "claude-sonnet-4-6"
 ```bash
 bunny --provider deepseek --model deepseek-v4-pro
 bunny --api-key sk-... --base-url https://...
+bunny --fallback deepseek     # 主 provider 故障时改用 deepseek；none 关闭
 bunny --max-steps 50
 bunny --max-new-tokens 4096  # 可选：显式限制每步最大输出 token
 bunny --temperature 0.0

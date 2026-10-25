@@ -210,9 +210,14 @@ def resolve_provider_config(
     model: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    include_generic_env: bool = True,
 ) -> ProviderConfig:
     file_values = _load_config_values(start=start, explicit_path=config_path)
     legacy_env = _load_legacy_env_values(start)
+    # BUNNYBYTE_MODEL / BUNNYBYTE_BASE_URL / BUNNYBYTE_API_KEY 只描述主 provider；
+    # 解析备用 provider 时必须关闭，否则会把主 provider 的 key 套到备用上。
+    generic_env = os.environ if include_generic_env else {}
+    generic_legacy = legacy_env if include_generic_env else {}
 
     requested_provider = (
         provider
@@ -239,28 +244,28 @@ def resolve_provider_config(
 
     resolved_model = _first_value(
         model,
-        os.environ.get(ENV_MODEL),
+        generic_env.get(ENV_MODEL),
         env_values.get("model"),
         profile_values.get("model"),
-        legacy_env.get(ENV_MODEL),
+        generic_legacy.get(ENV_MODEL),
         legacy_values.get("model"),
         default_values.get("model"),
     )
     resolved_base_url = _first_value(
         base_url,
-        os.environ.get(ENV_BASE_URL),
+        generic_env.get(ENV_BASE_URL),
         env_values.get("base_url"),
         profile_values.get("base_url"),
-        legacy_env.get(ENV_BASE_URL),
+        generic_legacy.get(ENV_BASE_URL),
         legacy_values.get("base_url"),
         default_values.get("base_url"),
     )
     resolved_api_key = _first_value(
         api_key,
-        os.environ.get(ENV_API_KEY),
+        generic_env.get(ENV_API_KEY),
         env_values.get("api_key"),
         profile_values.get("api_key"),
-        legacy_env.get(ENV_API_KEY),
+        generic_legacy.get(ENV_API_KEY),
         legacy_values.get("api_key"),
         "",
     )
@@ -404,6 +409,8 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     values: dict[str, Any] = {"top": {}, "providers": {}, "sandbox": {}}
     if "provider" in data:
         values["top"]["provider"] = data["provider"]
+    if "fallback" in data:
+        values["top"]["fallback"] = data["fallback"]
 
     providers = data.get("providers", {})
     if isinstance(providers, dict):
@@ -427,6 +434,10 @@ def _render_config_values(values: dict[str, Any]) -> str:
     provider = values.get("top", {}).get("provider")
     if provider:
         lines.append(f"provider = {_toml_value(provider)}")
+        lines.append("")
+    fallback = values.get("top", {}).get("fallback")
+    if fallback:
+        lines.append(f"fallback = {_toml_value(fallback)}")
         lines.append("")
 
     providers = dict(values.get("providers", {}) or {})
@@ -474,6 +485,8 @@ def _toml_value(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     return json.dumps(str(value))
 
 

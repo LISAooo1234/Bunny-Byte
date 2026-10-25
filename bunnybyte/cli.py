@@ -36,10 +36,12 @@ from .config import (
     resolve_provider_config,
     write_global_provider_config,
 )
+from .config.fallback import resolve_fallback_configs
 from .features import skills as skillslib
 from .features.skills_runtime import invoke_skill
 from .providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
 from .providers.errors import sanitize_url
+from .providers.fallback import FallbackModelClient
 from .core.memory_scope import (
     mark_memory_scope_startup_prompted,
     should_prompt_memory_scope_startup,
@@ -144,7 +146,23 @@ def _build_model_client_with_config(args, provider=None, include_cli_overrides=T
     config = _resolve_cli_provider_config(
         args, provider=provider, include_cli_overrides=include_cli_overrides
     )
-    return _model_client_from_config(args, config), config
+    return _client_with_fallbacks(args, config), config
+
+
+def _client_with_fallbacks(args, config):
+    """主 client 之外，按配置挂上备用 provider；没有可用备用时返回原 client。"""
+    client = _model_client_from_config(args, config)
+    fallback_configs = resolve_fallback_configs(
+        config.name,
+        start=getattr(args, "cwd", "."),
+        config_path=getattr(args, "config", None),
+        cli_value=getattr(args, "fallback", None),
+    )
+    if not fallback_configs:
+        return client
+    return FallbackModelClient(
+        client, [_model_client_from_config(args, item) for item in fallback_configs]
+    )
 
 
 def _model_client_from_config(args, config):
@@ -341,7 +359,7 @@ def _attach_provider_switching(agent, args):
             base_url=getattr(args, "base_url", None),
             api_key=getattr(args, "api_key", None),
         )
-        return _model_client_from_config(args, config)
+        return _client_with_fallbacks(args, config)
 
     def provider_switch_factory(provider):
         client, config = _build_model_client_with_config(
@@ -382,6 +400,11 @@ def build_arg_parser():
         "--provider",
         default=None,
         help=f"要使用的 provider 配置；默认读取配置文件，未配置时使用 {DEFAULT_PROVIDER}。",
+    )
+    parser.add_argument(
+        "--fallback",
+        default=None,
+        help="主 provider 暂时不可用时依次改用的备用 provider，逗号分隔；none 表示关闭。也可在配置文件中设置 fallback。",
     )
     parser.add_argument(
         "--api-key",
@@ -1096,16 +1119,25 @@ def _format_usage(agent):
 
 def _format_provider(agent):
     base_url = str(getattr(agent.model_client, "base_url", "") or "")
-    return _format_key_value_section(
-        "Provider",
-        [
-            ("Provider", getattr(agent.model_client, "provider", "-") or "-"),
-            ("Protocol", getattr(agent.model_client, "protocol", "-") or "-"),
-            ("Model", getattr(agent.model_client, "model", "-") or "-"),
-            ("Base URL", sanitize_url(base_url) or "-"),
-            ("Max new tokens", getattr(agent, "max_new_tokens", "-")),
-        ],
-    )
+    rows = [
+        ("Provider", getattr(agent.model_client, "provider", "-") or "-"),
+        ("Protocol", getattr(agent.model_client, "protocol", "-") or "-"),
+        ("Model", getattr(agent.model_client, "model", "-") or "-"),
+        ("Base URL", sanitize_url(base_url) or "-"),
+        ("Max new tokens", getattr(agent, "max_new_tokens", "-")),
+    ]
+    fallbacks = getattr(agent.model_client, "fallback_clients", None)
+    if isinstance(fallbacks, list) and fallbacks:
+        rows.append(
+            (
+                "Fallback",
+                " -> ".join(
+                    f"{getattr(item, 'provider', '?')}/{getattr(item, 'model', '?')}"
+                    for item in fallbacks
+                ),
+            )
+        )
+    return _format_key_value_section("Provider", rows)
 
 
 def provider_profiles_for_agent(agent):

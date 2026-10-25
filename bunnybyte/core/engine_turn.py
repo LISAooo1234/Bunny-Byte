@@ -13,6 +13,7 @@ from .engine_helpers import (
 )
 from .model_errors import finish_model_error
 from .model_stream import complete_model_with_deltas
+from .provider_failover import failover_events
 from .task_state import TaskState
 from .workspace import clip, now
 
@@ -201,6 +202,7 @@ def run_turn(engine, user_message):
                 tools=native_tools,
             )
         except Exception as exc:
+            yield from failover_events(engine, task_state)
             if agent.abort_requested:
                 yield from finish_stopped_run(
                     engine,
@@ -243,6 +245,7 @@ def run_turn(engine, user_message):
                 int((time.monotonic() - run_started_at) * 1000),
             )
             return
+        yield from failover_events(engine, task_state)
         if agent.abort_requested:
             yield from finish_stopped_run(
                 engine,

@@ -27,6 +27,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 能力 | 说明 |
 | --- | --- |
 | 模型接入 | 支持 OpenAI Responses API 与 Anthropic 风格接口；`provider` 负责配置选择，`protocol` 负责请求协议。 |
+| 故障切换 | 主 provider 5xx / 限流 / 超时时自动改用 `fallback` 备用链，切换过程写入 trace 并在界面提示；详见 [配置](docs/configuration.md)。 |
 | 工具调用 | 优先使用 provider 原生 tool calling；同时保留兼容旧后端的 fallback。 |
 | 会话管理 | 支持 `/history`、`/resume`、`/fork`、`/rollback`、`/compact`。 |
 | 任务编排 | 支持 plan mode、todo ledger、`ask_user`、`Explore` / `worker` 子 agent。 |

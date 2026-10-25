@@ -30,6 +30,7 @@ class ProviderError(RuntimeError):
         self.retry_count = int(retry_count or 0)
         self.body_excerpt = _clip(body_excerpt, 500)
         self.cause_type = str(cause_type or "")
+        self.fallback_failures = []
 
     def to_metadata(self):
         payload = {
@@ -53,6 +54,8 @@ class ProviderError(RuntimeError):
             error["body_excerpt"] = self.body_excerpt
         if self.cause_type:
             error["cause_type"] = self.cause_type
+        if self.fallback_failures:
+            error["fallback_failures"] = list(self.fallback_failures)
         return payload
 
 
