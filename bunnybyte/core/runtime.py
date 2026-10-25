@@ -43,6 +43,7 @@ from .tool_repetition import is_repeated_tool_call
 from .tool_profiles import build_tool_profiles
 from .todo_ledger import TodoLedger
 from .turn_history import TurnHistoryBuilder
+from .verification import VerifyConfig
 from .worker_manager import WorkerManager
 from ..tools import registry as toolkit
 from ..tools.schema import native_tool_specs
@@ -124,7 +125,9 @@ class BunnyByte(
         sandbox_config=None,
         ask_user_callback=None,
         lazy_session=False,
+        verify_config=None,
     ):
+        self.verify_config = verify_config or VerifyConfig()
         self.model_client = model_client
         self.model_client_factory = model_client_factory
         self.abort_requested = False
@@ -829,6 +832,7 @@ class BunnyByte(
             "compactions": list(self.session.get("compactions", [])),
             "artifact_graph": dict(task_state.artifact_graph),
             "verifier_suggestions": list(task_state.verifier_suggestions),
+            "verification": dict(task_state.verification),
             "runtime_reminders": list(task_state.runtime_reminders),
             "todos": self.todo_ledger.to_dict(),
             "todo_changes": list(task_state.todo_changes),

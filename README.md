@@ -32,6 +32,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 会话管理 | 支持 `/history`、`/resume`、`/fork`、`/rollback`、`/compact`。 |
 | 任务编排 | 支持 plan mode、todo ledger、`ask_user`、`Explore` / `worker` 子 agent。 |
 | 记忆系统 | 提供 working memory、daily logs、durable topics，以及 `/remember`、`/dream`。 |
+| 验证回执 | 改完代码、准备交卷前，运行时真正跑一遍项目自己的测试；失败就把输出塞回去让模型修，最后给出 ✓/✗ 回执，并拦下“声称测试通过却没跑过”的回答；详见下文「验证回执」。 |
 | 跑分基准 | `bunny bench` 用真实模型在 8 个固定任务上打分（通过率、步数、token、耗时），结果与历史写入 `benchmarks/results/`；详见 [跑分基准](docs/benchmark.md)。 |
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
@@ -236,6 +237,26 @@ Bunny Byte 自带实测跑分：`bunny bench` 在 8 个临时 git 仓库里让�
 首个基线（0.5.0，`deepseek-v4-flash`，每题 2 次，步数上限 50）：通过率 16/16，正常收尾 15/16，但只有 4/16 次运行在“高效步数”之内——平均 19.7 步，而参考解只需 2–5 步，最差一次用满 50 步才收尾。瓶颈不在“做不做得出”，而在“做完了还停不下来”，这正是后续 step-budget 退还与验证回执要用这个分数来度量的目标。完整结果见 [`benchmarks/results/`](benchmarks/results/)。
 
 任务只有 8 道，每题 = 12.5 个百分点，单次浮动 1 题属于噪声；平均步数与 token 更能反映回归。细节见 [跑分基准](docs/benchmark.md)。
+
+## 验证回执
+
+便宜模型最常见的毛病是改完代码就说“测试通过了”，其实根本没跑。Bunny Byte 把“交卷前先验证”做成运行时规则，而不是一句提示词：
+
+- 模型准备给出最终回答、且本回合改过代码时，运行时自动执行项目的检查命令（`[verify].commands`，没配置就按改动探测：pytest 或 unittest、npm test，没有测试的 Python 项目做 `compileall` 语法检查；pytest 项目会先跑与改动相关的测试，失败得更快）。
+- 失败时把输出尾部作为一条 `verify` 记录写回会话，最终回答被暂缓，模型继续修复（默认 1 轮，`max_repair_rounds` 可调）；这一步不占 `max_steps`。如果失败在改动前就存在，模型可以直接在回答里说明，不必硬改。
+- 每条命令都留下回执（命令、退出码、耗时、脱敏后的输出尾部、第几轮），写入 `task_state`、`report.json` 和 trace，对话里显示 ✓/✗ 卡片和一行摘要。
+- 回答里写了“测试已通过 / 已验证”，而本回合既没有通过的回执、模型自己也没成功跑过测试命令，就会追加一条 ⚠ 警告。
+- 默认 `ask`：遵循审批策略（`--approval auto` 直接跑，`ask` 会先问你，`never` 不跑）；`auto` 不再询问，`off` 关闭。只在主 agent 上生效，子 agent、plan mode、只读模式和纯文档改动都不会触发。
+- 命令超时会杀掉整个进程组（不会留下卡住的 pytest/jest 子进程），并设置 `CI=1` 避免进入 watch 模式。
+
+```toml
+# .bunnybyte.toml
+[verify]
+mode = "ask"                       # off | ask | auto，也可用 --verify 覆盖
+commands = ["pytest -q", "ruff check ."]   # 不写就自动探测
+timeout = 120                      # 单条命令的秒数上限
+max_repair_rounds = 1              # 验证失败后允许模型修复的轮数
+```
 
 ## 仓库结构
 

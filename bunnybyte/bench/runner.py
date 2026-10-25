@@ -16,11 +16,13 @@ from unittest import mock
 
 from ..core.runtime import BunnyByte
 from ..core.session_store import SessionStore
+from ..core.verification import VerifyConfig, claims_verified
 from ..core.workspace import WorkspaceContext
 from .tasks import PY
 
 VERIFY_TIMEOUT = 60
 DEFAULT_TASK_TIMEOUT = 300
+BENCH_VERIFY = VerifyConfig(mode="auto", timeout=60, max_repair_rounds=1)  # 单次闸门远小于单题墙钟上限
 ABORT_GRACE_SECONDS = 5  # 请求中止后再等多久；agent 只在步与步之间检查中止标志
 DEFAULT_MAX_STEPS = 50  # 与正常 CLI 的 --max-steps 默认值一致，分数才代表真实使用
 IGNORED_PARTS = {".git", ".bunnybyte", "__pycache__"}
@@ -179,7 +181,14 @@ def _drive(agent, prompt, timeout, result):
 
 
 def run_task(
-    task, client, *, attempt=1, timeout=DEFAULT_TASK_TIMEOUT, max_steps=DEFAULT_MAX_STEPS, keep_dir=None
+    task,
+    client,
+    *,
+    attempt=1,
+    timeout=DEFAULT_TASK_TIMEOUT,
+    max_steps=DEFAULT_MAX_STEPS,
+    keep_dir=None,
+    verify_gate=False,
 ):
     """在全新的临时仓库里跑一次任务，返回一行可序列化的结果。
 
@@ -204,6 +213,10 @@ def run_task(
         "wall_seconds": 0.0,
         "stop_reason": "",
         "timed_out": False,
+        "verify_status": "",
+        "verify_rounds": 0,
+        "verify_repairs": 0,
+        "false_claim": False,
     }
     started = time.monotonic()
     agent = None
@@ -217,6 +230,7 @@ def run_task(
                 approval_policy="auto",
                 max_steps=max_steps,
                 auto_dream=False,
+                verify_config=BENCH_VERIFY if verify_gate else None,
             )
             answer, error, stuck = _drive(agent, task.prompt, timeout, result)
     except Exception as exc:
@@ -228,6 +242,9 @@ def run_task(
         result["over_budget"] = state.tool_steps > task.step_budget
         result["model_calls"] = state.attempts
         result["stop_reason"] = state.stop_reason
+        result["verify_status"] = str(state.verification.get("status", ""))
+        result["verify_rounds"] = int(state.verification.get("rounds", 0))
+        result["verify_repairs"] = int(state.verification.get("repairs", 0))
         result.update(trace_usage(agent.run_store.trace_path(state)))
     problems = []
     if stuck:
@@ -240,19 +257,32 @@ def run_task(
             problems.insert(0, f"超过 {timeout}s 墙钟上限")
     result["failure"] = scrub("；".join(problems), root, real_home)
     result["passed"] = not result["failure"]
+    result["false_claim"] = bool(not result["passed"] and claims_verified(answer))  # 声称已验证，判分却没过
     if keep_dir is None:
         shutil.rmtree(root, ignore_errors=True)
     return result
 
 
 def run_bench(
-    tasks, client_factory, *, repeat=1, timeout=DEFAULT_TASK_TIMEOUT, max_steps=DEFAULT_MAX_STEPS, on_result=None
+    tasks,
+    client_factory,
+    *,
+    repeat=1,
+    timeout=DEFAULT_TASK_TIMEOUT,
+    max_steps=DEFAULT_MAX_STEPS,
+    on_result=None,
+    verify_gate=False,
 ):
     results = []
     for task in tasks:
         for attempt in range(1, repeat + 1):
             row = run_task(
-                task, client_factory(task), attempt=attempt, timeout=timeout, max_steps=max_steps
+                task,
+                client_factory(task),
+                attempt=attempt,
+                timeout=timeout,
+                max_steps=max_steps,
+                verify_gate=verify_gate,
             )
             results.append(row)
             if on_result is not None:

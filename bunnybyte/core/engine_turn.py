@@ -16,6 +16,7 @@ from .model_stream import complete_model_with_deltas
 from .provider_failover import failover_events
 from .task_state import TaskState
 from .tool_loop_guard import stall_notice
+from .verification_gate import verification_gate, verification_notice
 from .workspace import clip, now
 
 CHECKPOINT_NONE_STATUS = "no-checkpoint"
@@ -369,6 +370,14 @@ def run_turn(engine, user_message):
             agent.run_store.write_task_state(task_state)
             yield {"type": "runtime_notice", "run_id": task_state.run_id, "content": notice}
             continue
+        if (yield from verification_gate(engine, task_state, final)):
+            max_attempts += 1  # 修复轮次不挤占模型调用预算
+            continue
+        if agent.abort_requested:
+            yield from finish_stopped_run(
+                engine, task_state, user_message, "Stopped after abort request.", "aborted", run_started_at
+            )
+            return
 
         agent.record({"role": "assistant", "content": final, "created_at": now()})
         final_event_id = str((agent.session.get("history", []) or [{}])[-1].get("event_id", ""))
@@ -383,6 +392,7 @@ def run_turn(engine, user_message):
         except Exception as exc:
             agent.session_event_bus.emit("turn_index_failed", {"run_id": task_state.run_id, "error": clip(str(exc), 300)})
         task_state.finish_success(final)
+        verification_text = verification_notice(agent, task_state, final)
         agent.promote_durable_memory(user_message, final)
         maintain_memory_safely(agent, task_state, final)
         checkpoint = agent.create_checkpoint(task_state, user_message, trigger="run_finished")
@@ -418,6 +428,8 @@ def run_turn(engine, user_message):
         agent.current_turn_id = ""
         agent.current_run_id = ""
         yield {"type": "final", "run_id": task_state.run_id, "content": final, "event_id": final_event_id}
+        if verification_text:
+            yield {"type": "runtime_notice", "run_id": task_state.run_id, "content": verification_text}
         yield {
             "type": "turn_finished",
             "run_id": task_state.run_id,
@@ -441,4 +453,10 @@ def run_turn(engine, user_message):
         else:
             final = "Stopped after reaching the step limit without a final answer."
         task_state.stop_step_limit(final)
+    # 预算耗尽的运行最需要回执：只记录结果，不再让模型继续改
+    yield from verification_gate(engine, task_state, final, allow_repair=False)
+    limit_notice = verification_notice(agent, task_state, final)
+    if limit_notice:
+        final = f"{final}\n\n{limit_notice}"
+        task_state.final_answer = final
     yield from finish_limited_run(engine, task_state, user_message, final, run_started_at)

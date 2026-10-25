@@ -39,6 +39,9 @@ def summarize(rows):
         "input_tokens": _total(rows, "input_tokens"),
         "output_tokens": _total(rows, "output_tokens"),
         "cached_tokens": _total(rows, "cached_tokens"),
+        "verify_rounds": sum(row.get("verify_rounds", 0) for row in rows),
+        "verify_repairs": sum(row.get("verify_repairs", 0) for row in rows),
+        "false_claims": sum(1 for row in rows if row.get("false_claim")),
     }
 
 
@@ -68,7 +71,7 @@ def package_version():
         return "unknown"
 
 
-def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol=""):
+def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False):
     return {
         "schema_version": SCHEMA_VERSION,
         "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -82,6 +85,7 @@ def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=No
         "task_ids": [task.id for task in tasks],
         "repeat": repeat,
         "max_steps": max_steps,
+        "verify": bool(verify),
         "summary": summarize(rows),
         "runs": rows,
     }
@@ -124,12 +128,13 @@ def load_history(out_dir):
 
 
 def previous_comparable(record, history):
-    """上一次同任务集、同 provider、同模型、同步数上限的结果；任一项变了就不比较。"""
+    """上一次同任务集、同 provider、同模型、同步数上限、同验证闸门开关的结果；任一项变了就不比较。"""
     keys = ("task_set_hash", "provider", "model", "max_steps")
     older = [
         item
         for item in history
         if all(item.get(key) == record.get(key) for key in keys)
+        and bool(item.get("verify")) == bool(record.get("verify"))
         and item["captured_at"] < record["captured_at"]
     ]
     return older[-1] if older else None
@@ -173,7 +178,8 @@ def render_row(row):
     tokens = "" if row.get("input_tokens") is None else f"  in {row['input_tokens']} / out {row['output_tokens'] or 0}"
     note = "" if row["passed"] else f"  {row['failure'][:80]}"
     budget = " (超预算)" if row.get("over_budget") else ""
-    return f"{mark} {row['task']} #{row['attempt']}  {row['steps']} 步{budget}  {row['wall_seconds']}s{tokens}{note}"
+    gate = f"  [验证 {row['verify_status']}{'·修复' + str(row['verify_repairs']) if row.get('verify_repairs') else ''}]" if row.get("verify_status") else ""
+    return f"{mark} {row['task']} #{row['attempt']}  {row['steps']} 步{budget}  {row['wall_seconds']}s{tokens}{gate}{note}"
 
 
 def render_record(record, previous=None):
@@ -194,10 +200,21 @@ def render_record(record, previous=None):
         f"通过率：{summary['passed']}/{summary['runs']} = {summary['pass_rate'] * 100:.1f}%    正常收尾 {summary['clean_finish']}/{summary['runs']}    步数达标 {summary['within_budget']}/{summary['runs']}",
         f"平均步数 {_fmt(summary['avg_steps'])}，平均模型调用 {_fmt(summary['avg_model_calls'])}，总耗时 {summary['total_wall_seconds']}s",
         f"Token：{_tokens(summary, record.get('protocol', ''))}",
+        *_verify_lines(record),
         _delta(record, previous),
         NOISE_NOTE.format(step=100 / max(len(record["task_ids"]) * record["repeat"], 1)),
     ]
     return "\n".join(lines)
+
+
+def _verify_lines(record):
+    summary = record["summary"]
+    if not record.get("verify") and not summary.get("false_claims"):
+        return []
+    claims = f"声称已验证但判分未过 {summary.get('false_claims', 0)} 次"
+    if not record.get("verify"):
+        return [claims]
+    return [f"验证闸门：触发 {summary['verify_rounds']} 次，其中让模型修复 {summary['verify_repairs']} 次；{claims}"]
 
 
 def render_history(records):

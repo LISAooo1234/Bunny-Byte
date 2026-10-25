@@ -4,10 +4,11 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from ..core.verification import resolve_verify_config
 from ..features.sandbox import resolve_sandbox_config as resolve_sandbox_values
 
 if sys.version_info >= (3, 11):
@@ -378,6 +379,23 @@ def resolve_project_sandbox_config(
     return resolve_sandbox_values(values)
 
 
+def resolve_project_verify_config(
+    *, start: str | Path = ".", config_path: str | None = None, mode: str | None = None
+):
+    values = _load_config_values(start=start, explicit_path=config_path)
+    config = resolve_verify_config(values, mode=mode)
+    if mode or config_path or config.mode != "auto":
+        return config
+    # 克隆来的仓库自带的 .bunnybyte.toml 不能替用户决定“免确认运行任意命令”：
+    # mode = "auto" 只认命令行或用户自己的全局配置，否则降级为 ask。
+    trusted = {}
+    if DEFAULT_CONFIG_PATH.exists():
+        trusted = _read_config_file(DEFAULT_CONFIG_PATH).get("verify", {})
+    if trusted.get("mode") == "auto":
+        return config
+    return replace(config, mode="ask")
+
+
 def normalize_provider_name(provider: str | None) -> str:
     normalized = (provider or DEFAULT_PROVIDER).strip().lower()
     return PROVIDER_ALIASES.get(normalized, normalized)
@@ -406,7 +424,7 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     except OSError as exc:
         raise ValueError(f"could not read BunnyByte config file {path}: {exc}") from exc
 
-    values: dict[str, Any] = {"top": {}, "providers": {}, "sandbox": {}}
+    values: dict[str, Any] = {"top": {}, "providers": {}, "sandbox": {}, "verify": {}}
     if "provider" in data:
         values["top"]["provider"] = data["provider"]
     if "fallback" in data:
@@ -421,6 +439,9 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     sandbox = data.get("sandbox", {})
     if isinstance(sandbox, dict):
         values["sandbox"] = dict(sandbox)
+    verify = data.get("verify", {})
+    if isinstance(verify, dict):
+        values["verify"] = dict(verify)
 
     for name in ("openai", "anthropic", "deepseek"):
         section = data.get(name, {})
@@ -493,6 +514,7 @@ def _toml_value(value: Any) -> str:
 def _merge_config_values(target: dict[str, Any], incoming: dict[str, Any]) -> None:
     target["top"].update(incoming.get("top", {}))
     target["sandbox"].update(incoming.get("sandbox", {}))
+    target.setdefault("verify", {}).update(incoming.get("verify", {}))
     for name, section in incoming.get("providers", {}).items():
         target["providers"].setdefault(name, {}).update(section)
 

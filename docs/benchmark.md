@@ -8,6 +8,7 @@ bunny bench                      # 跑全部任务，结果写入 benchmarks/res
 bunny bench --list               # 列出任务
 bunny bench --tasks add_cli_flag,multi_file_rename   # 部分任务默认不写结果文件，加 --save 才保存
 bunny bench --repeat 3           # 每题跑 3 次，分数更稳
+bunny bench --verify             # 开启验证闸门（交卷前自动跑探测到的测试，失败可修复 1 轮）
 bunny bench --history            # 查看历史分数
 bunny bench --provider openai --model gpt-x --no-save
 bunny bench --json > result.json
@@ -40,7 +41,9 @@ bunny bench --json > result.json
 通过率、正常收尾率（模型自己给出最终回答，而不是撞到步数上限）、步数达标率、平均步数、平均模型调用数、token（provider 没有上报就显示“未上报”，不会写成 0）、缓存命中 token（Anthropic 风格下与输入分开计，OpenAI 风格下包含在输入里）、耗时。
 
 每次完整运行会写一个 JSON 到 `benchmarks/results/`（在 Bunny Byte 源码目录里运行时；否则写到 `~/.bunnybyte/bench-results/`，也可用 `--out` 指定），包含版本、git 提交、模型、任务集指纹和逐题明细；失败原因中的临时目录和用户目录会被替换为 `<repo>` / `~`，不含密钥。
-只有“任务集指纹、provider、模型、步数上限”都相同的结果才会互相比较并显示变化量。
+只有“任务集指纹、provider、模型、步数上限、验证闸门开关”都相同的结果才会互相比较并显示变化量。
+
+`--verify` 开启后，每行会带上回执状态（如 `[验证 passed·修复1]`），汇总多一行“验证闸门：触发 N 次，其中让模型修复 M 次”。无论是否开启闸门，汇总都会统计“声称已验证但判分未过”的次数（false claim）：模型在最终回答里写了“测试通过 / 已验证”，隐藏 verifier 却没通过。
 
 ## 如何解读
 

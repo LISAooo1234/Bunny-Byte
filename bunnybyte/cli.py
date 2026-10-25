@@ -33,6 +33,7 @@ from .config import (
     list_provider_profiles,
     load_project_env,
     resolve_project_sandbox_config,
+    resolve_project_verify_config,
     resolve_provider_config,
     write_global_provider_config,
 )
@@ -294,6 +295,11 @@ def build_agent(args):
         mode=getattr(args, "sandbox", None),
         backend=getattr(args, "sandbox_backend", None),
     )
+    verify_config = resolve_project_verify_config(
+        start=workspace.repo_root,
+        config_path=getattr(args, "config", None),
+        mode=getattr(args, "verify", None),
+    )
     load_project_env(workspace.repo_root, override=False)
     configured_secret_names = _configured_secret_names(args)
     session_id = args.resume
@@ -320,6 +326,7 @@ def build_agent(args):
             dream_min_sessions=dream_min_sessions,
             model_client_factory=model_client_factory,
             sandbox_config=sandbox_config,
+            verify_config=verify_config,
             ask_user_callback=ask_user_callback,
         )
         _attach_provider_switching(agent, args)
@@ -339,6 +346,7 @@ def build_agent(args):
         dream_min_sessions=dream_min_sessions,
         model_client_factory=model_client_factory,
         sandbox_config=sandbox_config,
+        verify_config=verify_config,
         ask_user_callback=ask_user_callback,
         lazy_session=lazy_session,
     )
@@ -457,6 +465,12 @@ def build_arg_parser():
         choices=("ask", "auto", "never"),
         default="ask",
         help="高风险工具的审批策略。",
+    )
+    parser.add_argument(
+        "--verify",
+        choices=("off", "ask", "auto"),
+        default=None,
+        help="交卷前自动运行项目测试并留下验证回执：off 关闭，ask 遵循审批策略（默认），auto 不再询问。",
     )
     parser.add_argument(
         "--sandbox",

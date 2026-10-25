@@ -30,3 +30,11 @@ excluded_commands = []
 extra_readonly_paths = []
 deny_read = []
 deny_write = []
+
+[verify]
+# 交卷前自动跑项目测试：off | ask（遵循审批策略） | auto
+mode = "ask"
+# 不写 commands 就按本回合改动的文件自动探测
+# commands = ["pytest -q"]
+timeout = 120
+max_repair_rounds = 1

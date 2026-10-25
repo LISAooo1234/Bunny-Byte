@@ -32,7 +32,10 @@ from ..commands.slash import SlashCommand, suggest_commands
 
 def format_tool_args(name: str, args: dict | None) -> str:
     args = args or {}
-    if name == "run_shell":
+    if name in {"run_shell", "verify"}:
+        commands = args.get("commands")
+        if isinstance(commands, list) and commands:
+            return " ; ".join(str(item) for item in commands)
         return str(args.get("command", ""))
     if name in {"read_file", "write_file", "patch_file", "list_files"}:
         path = str(args.get("path", "."))
@@ -733,7 +736,7 @@ class ChatLog(VerticalScroll):
 
     def add_tool_history(self, name: str, args: dict | None, content: str) -> ToolCard:
         card = self.add_tool_call(name, args)
-        if str(content).startswith("error:"):
+        if str(content).startswith(("error:", "Verification failed")):
             card.set_error(content)
         else:
             card.set_success(content)

@@ -41,6 +41,7 @@ def build_bench_parser():
     parser.add_argument("--repeat", type=int, default=1, help="每个任务重复次数；次数越多分数越稳。")
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS, help="agent 每题的工具步数硬上限（默认与正常 CLI 一致）。")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TASK_TIMEOUT, help="单个任务的墙钟上限（秒）。")
+    parser.add_argument("--verify", action="store_true", help="给 agent 开启验证闸门（交卷前自动跑探测到的测试，失败可修复 1 轮）；结果单独对比。")
     parser.add_argument("--out", default=None, help="结果目录；默认 ./benchmarks/results（存在时），否则 ~/.bunnybyte/bench-results。")
     parser.add_argument("--no-save", action="store_true", help="只打印，不写结果文件。")
     parser.add_argument("--save", action="store_true", help="用 --tasks 只跑部分任务时默认不写结果文件；加上它才保存。")
@@ -111,7 +112,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
 
     progress = sys.stderr if args.json else stream
     print(
-        f"bunny bench：{provider}/{model}，{len(tasks)} 个任务 × {args.repeat} 次，步数上限 {args.max_steps}，单题 {args.timeout}s",
+        f"bunny bench：{provider}/{model}，{len(tasks)} 个任务 × {args.repeat} 次，步数上限 {args.max_steps}，单题 {args.timeout}s{'，验证闸门开启' if args.verify else ''}",
         file=progress,
     )
     rows = run_bench(
@@ -121,6 +122,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         timeout=args.timeout,
         max_steps=args.max_steps,
         on_result=lambda row: print(render_row(row), file=progress, flush=True),
+        verify_gate=args.verify,
     )
     record = build_record(
         rows,
@@ -131,6 +133,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         repeat=args.repeat,
         max_steps=args.max_steps,
         protocol=protocol,
+        verify=args.verify,
     )
     record["temperature"] = BENCH_TEMPERATURE
     previous = previous_comparable(record, load_history(out_dir))

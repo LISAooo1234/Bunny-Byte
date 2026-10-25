@@ -36,6 +36,7 @@ stored locally for recovery, review, and debugging.
 | Session lifecycle | Supports `/history`, `/resume`, `/fork`, `/rollback`, and `/compact`. |
 | Task orchestration | Includes plan mode, todo ledger, `ask_user`, and `Explore` / `worker` subagents. |
 | Memory | Includes working memory, daily logs, durable topics, `/remember`, and `/dream`. |
+| Verification receipts | Before the agent hands in a turn that changed code, the runtime actually runs the project's own tests, feeds failures back for repair, records a pass/fail receipt, and flags answers that claim "tests pass" without any evidence. See "Verification receipts" below. |
 | Benchmark | `bunny bench` scores the agent with a real model on 8 fixed tasks (pass rate, steps, tokens, wall time) and appends results to `benchmarks/results/`. See [Benchmark](docs/benchmark.md). |
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
@@ -242,6 +243,26 @@ Bunny Byte ships a live benchmark. `bunny bench` has a real model solve 8 tasks 
 First baseline (0.5.0, `deepseek-v4-flash`, 2 runs per task, step ceiling 50): 16/16 passed and 15/16 finished cleanly, but only 4/16 runs stayed within the efficient step budget: 19.7 steps on average against 2-5 for the reference solutions, and one run needed all 50 steps. The bottleneck is not whether the model can solve the task but that it keeps going after the work is done; that is exactly what the upcoming step-budget refund and verification receipts will be measured against. Full results are in [`benchmarks/results/`](benchmarks/results/).
 
 There are only 8 tasks, so one task is 12.5 percentage points and a single run can move by one task as noise; average steps and tokens are the more sensitive regression signals. Details: [Benchmark](docs/benchmark.md) (Chinese).
+
+## Verification receipts
+
+Cheap models love to say "tests pass" without running anything. Bunny Byte makes "verify before you hand in" a runtime rule instead of a sentence in the prompt:
+
+- When the model is about to give its final answer and the turn changed code, the runtime runs the project's checks: `[verify].commands` if configured, otherwise detected from what changed (pytest or unittest, `npm test`, or a `compileall` syntax check for Python projects without tests; pytest projects run the tests related to the change first so failures surface sooner).
+- On failure the output tail is written back into the session as a `verify` entry, the final answer is held back and the model keeps repairing (1 round by default, `max_repair_rounds`). The check does not consume `max_steps`. If the failure predates the change, the model may say so in its answer instead of editing.
+- Every command leaves a receipt (command, exit code, duration, redacted output tail, round) in `task_state`, `report.json` and the trace; the UI shows a pass/fail card and a one-line summary.
+- If the answer says "tests pass / verified" but the turn has no passing receipt and the model never ran a test command successfully itself, a warning line is appended.
+- Default mode `ask` follows the approval policy (`--approval auto` runs it, `ask` prompts first, `never` skips); `auto` never asks; `off` disables it. It only applies to the main agent: subagents, plan mode, read-only mode and docs-only changes never trigger it.
+- A timed-out command kills its whole process group (no stray pytest/jest children) and runs with `CI=1` so watch modes do not hang.
+
+```toml
+# .bunnybyte.toml
+[verify]
+mode = "ask"                       # off | ask | auto; override with --verify
+commands = ["pytest -q", "ruff check ."]   # omit to auto-detect
+timeout = 120                      # per-command seconds
+max_repair_rounds = 1              # repair attempts after a failed check
+```
 
 ## Repository Layout
 

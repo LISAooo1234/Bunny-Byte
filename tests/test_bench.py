@@ -439,3 +439,33 @@ def test_default_out_dir_only_uses_a_bunny_byte_checkout(tmp_path, monkeypatch):
     (tmp_path / "bunnybyte" / "bench").mkdir(parents=True)
     (tmp_path / "bunnybyte" / "bench" / "tasks.py").write_text("", encoding="utf-8")
     assert resolve_out_dir(None) == tmp_path / "benchmarks" / "results"
+
+
+def test_verify_gate_adds_receipt_columns_and_is_compared_separately(tmp_path):
+    task = select_tasks(["fix_failing_test"])[0]
+
+    plain = run_task(task, oracle_client(task), timeout=60)
+    gated = run_task(task, oracle_client(task), timeout=60, verify_gate=True)
+
+    assert plain["verify_status"] == "" and plain["verify_rounds"] == 0
+    assert gated["passed"] and gated["verify_status"] == "passed"
+    assert (gated["verify_rounds"], gated["verify_repairs"]) == (1, 0)
+    assert "[验证 passed]" in report.render_row(gated)
+
+    base = dict(provider="p", model="m", set_hash="h", repeat=1, max_steps=50)
+    off = report.build_record([plain], [task], **base)
+    on = report.build_record([gated], [task], verify=True, **base)
+    on["captured_at"] = "2999-01-01T00:00:00Z"
+    assert report.previous_comparable(on, [off]) is None
+    assert "验证闸门：触发 1 次" in report.render_record(on)
+
+
+def test_false_claim_counts_answers_that_claim_verification_but_fail_grading():
+    task = select_tasks(["fix_failing_test"])[0]
+    outputs = ["<final>所有测试已通过，已验证。</final>"]
+
+    row = run_task(task, ScriptedModelClient(outputs), timeout=60)
+
+    assert not row["passed"] and row["false_claim"] is True
+    assert report.summarize([row])["false_claims"] == 1
+    assert "声称已验证但判分未过 1 次" in report.render_record(report.build_record([row], [task], provider="p", model="m", set_hash="h", repeat=1))

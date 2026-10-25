@@ -103,6 +103,23 @@ fallback = ["deepseek", "anthropic"]   # 可选：只对这个 profile 生效，
 - `BUNNYBYTE_API_KEY` / `BUNNYBYTE_BASE_URL` / `BUNNYBYTE_MODEL` 这类通用 override 只作用于主 provider，不会套到备用上。
 - 主备可以跨协议（例如 openai 主、anthropic 协议的 deepseek 备），工具定义会自动转换格式。
 
+## 验证回执（`[verify]`）
+
+模型改了代码、准备给出最终回答时，运行时会先跑项目自己的检查并留下回执（说明见 README「验证回执」）。
+
+```toml
+[verify]
+mode = "ask"                  # off | ask | auto，默认 ask：遵循审批策略
+commands = ["pytest -q"]      # 可选；不写则按本回合改动的文件自动探测
+timeout = 120                 # 单条命令秒数，1-1800
+max_repair_rounds = 1         # 验证失败后让模型修复的轮数，0-5；0 表示只记录不重试
+```
+
+- `ask`：`--approval auto` 直接跑，`--approval ask` 会先询问，`--approval never` 不跑；`auto` 一律直接跑；`off` 关闭。
+- 只对主 agent 生效；子 agent、plan mode、只读模式、纯文档改动不会触发。
+- 配置了 `[sandbox]` 时验证命令走同一个沙箱；`CI=1` 会注入环境。
+- 回执写入 `task_state.json`、`report.json` 的 `verification` 字段和 trace 的 `verification_run` 事件。
+
 ## 环境变量
 
 不写 toml 也能跑——只设环境变量即可：
@@ -129,6 +146,7 @@ bunny --max-new-tokens 4096  # 可选：显式限制每步最大输出 token
 bunny --temperature 0.0
 bunny --approval ask          # ask | auto | never
 bunny --sandbox best_effort   # off | best_effort | required
+bunny --verify auto           # off | ask | auto：交卷前自动跑项目测试
 bunny --no-auto-dream         # 关闭后台 memory 整合
 bunny --cwd /path/to/repo     # 切换工作目录
 bunny --resume latest         # 续接上一个 session
