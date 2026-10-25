@@ -173,8 +173,11 @@ curl -fsSL https://raw.githubusercontent.com/LISAooo1234/Bunny-Byte/main/install
 
 ```bash
 bunny setup
+bunny doctor
 bunny
 ```
+
+`bunny doctor` 会逐项检查 Python、配置文件、provider/模型/API key（只显示末 4 位）、真实连通性、git 仓库、sandbox 后端和 ripgrep，并检测 `.bunnybyte.toml` / `.env` 是否被 git 跟踪导致 key 泄露。每个失败项都附带可直接执行的修复建议；`--offline` 跳过网络请求，`--json` 便于脚本和 CI 使用，存在失败项时退出码为 1。
 
 ### 源码开发
 

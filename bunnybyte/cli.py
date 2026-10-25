@@ -371,7 +371,7 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description="Minimal coding agent for provider profiles backed by OpenAI-compatible or Anthropic-compatible APIs.",
-        epilog="First-time setup: bunny setup. Config helpers: bunny config path, bunny config show.",
+        epilog="First-time setup: bunny setup. Health check: bunny doctor. Config helpers: bunny config path, bunny config show.",
     )
     parser.add_argument("prompt", nargs="*", help="可选的一次性提示词。")
     parser.add_argument("--cwd", default=".", help="工作区目录。")
@@ -639,6 +639,37 @@ def run_config_command(argv=None):
         marker = "*" if profile.name == active.name else " "
         print(f" {marker} {profile.name} ({profile.protocol}) {profile.model}")
     return 0
+
+
+def build_doctor_parser():
+    parser = argparse.ArgumentParser(
+        prog="bunny doctor",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="检查 provider 配置、网络连通性、工作区和 sandbox，并给出修复建议。",
+    )
+    parser.add_argument("--cwd", default=".", help="要检查的工作区目录。")
+    parser.add_argument("--provider", default=None, help="检查指定 provider profile。")
+    parser.add_argument("--config", default=None, help="BunnyByte TOML 配置文件路径。")
+    parser.add_argument("--offline", action="store_true", help="跳过向 provider 发送测试请求。")
+    parser.add_argument("--json", action="store_true", help="以 JSON 输出检查结果。")
+    return parser
+
+
+def run_doctor_command(argv=None):
+    from .doctor import doctor_exit_code, render_doctor_json, render_doctor_text, run_doctor
+
+    args = build_doctor_parser().parse_args(argv)
+    checks = run_doctor(
+        args.cwd,
+        provider=args.provider,
+        config_path=args.config,
+        offline=args.offline,
+        client_factory=lambda config: _model_client_from_config(
+            argparse.Namespace(temperature=0.0, openai_timeout=30), config
+        ),
+    )
+    print(render_doctor_json(checks) if args.json else render_doctor_text(checks))
+    return doctor_exit_code(checks)
 
 
 def _prompt_provider():
@@ -1481,6 +1512,8 @@ def main(argv=None):
         return run_setup_command(argv[1:])
     if argv and argv[0] == "config":
         return run_config_command(argv[1:])
+    if argv and argv[0] == "doctor":
+        return run_doctor_command(argv[1:])
 
     args = build_arg_parser().parse_args(argv)
     try:

@@ -180,8 +180,11 @@ Then initialize provider settings:
 
 ```bash
 bunny setup
+bunny doctor
 bunny
 ```
+
+`bunny doctor` checks Python, config files, provider/model/API key (only the last 4 characters are shown), live connectivity, the git repo, the sandbox backend and ripgrep, and flags `.bunnybyte.toml` / `.env` files tracked by git that could leak keys. Every failing check comes with an actionable fix; `--offline` skips the network request, `--json` is meant for scripts and CI, and the exit code is 1 when any check fails.
 
 ### Source setup
 
