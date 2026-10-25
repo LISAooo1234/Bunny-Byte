@@ -11,11 +11,14 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .project_rules import load_project_rules
+
 MAX_TOOL_OUTPUT = 4000
 MAX_HISTORY = 12000
 # 这些文件最可能直接影响 agent 的行动方式。
 # 我们不会预加载整个仓库，只会先给模型一小份“导航包”。
-DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
+# AGENTS.md / CLAUDE.md 不在这里：它们走 project_rules，有独立预算，不会被截成 1200 字。
+DOC_NAMES = ("README.md", "pyproject.toml", "package.json")
 IGNORED_PATH_NAMES = {".git", ".bunnybyte", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"}
 
 
@@ -42,7 +45,7 @@ def middle(text, limit):
 
 
 class WorkspaceContext:
-    def __init__(self, cwd, repo_root, branch, default_branch, status, recent_commits, project_docs):
+    def __init__(self, cwd, repo_root, branch, default_branch, status, recent_commits, project_docs, project_rules=()):
         self.cwd = cwd
         self.repo_root = repo_root
         self.branch = branch
@@ -50,6 +53,7 @@ class WorkspaceContext:
         self.status = status
         self.recent_commits = recent_commits
         self.project_docs = project_docs
+        self.project_rules = tuple(project_rules)
 
     @classmethod
     def build(cls, cwd, repo_root_override=None):
@@ -94,9 +98,11 @@ class WorkspaceContext:
             default_branch=(
                 lambda branch: branch[len("origin/") :] if branch.startswith("origin/") else branch
             )(git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], "origin/main") or "origin/main"),
-            status=clip(git(["status", "--short"], "clean") or "clean", 1500),
+            # 路径始终相对仓库根目录：agent.path() 按仓库根解析，从子目录启动时 cwd 相对路径会指到仓库外。
+            status=clip(git(["-c", "status.relativePaths=false", "status", "--short"], "clean") or "clean", 1500),
             recent_commits=[line for line in git(["log", "--oneline", "-5"]).splitlines() if line],
             project_docs=docs,
+            project_rules=load_project_rules(repo_root, cwd),
         )
 
     def text(self):
@@ -131,4 +137,6 @@ class WorkspaceContext:
             "recent_commits": list(self.recent_commits),
             "project_docs": dict(self.project_docs),
         }
+        if self.project_rules:  # 没有规则文件时指纹保持原样，已有会话不会被判成工作区变化
+            payload["project_rules"] = [[rule.path, rule.text] for rule in self.project_rules]
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()

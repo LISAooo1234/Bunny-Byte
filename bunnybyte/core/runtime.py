@@ -23,6 +23,7 @@ from .context_manager import ContextManager
 from .engine import Engine
 from . import model_output, tool_executor
 from .plan_mode import PlanModeController
+from .project_rules import inject_rules
 from .permissions import PermissionChecker
 from .read_ledger import ReadLedger
 from .run_store import RunStore
@@ -545,6 +546,7 @@ class BunnyByte(
             {self.workspace.text()}
             """
         ).strip()
+        text = inject_rules(text, self.workspace.project_rules)
         return PromptPrefix(
             text=text,
             hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
@@ -570,7 +572,7 @@ class BunnyByte(
 
         # 工作区事实相对稳定，所以这里按整体刷新；
         # 只有这些事实真的变化了，才重建完整 prefix。
-        refreshed_workspace = WorkspaceContext.build(self.root)
+        refreshed_workspace = WorkspaceContext.build(self.workspace.cwd, repo_root_override=self.root)
         refreshed_workspace_fingerprint = refreshed_workspace.fingerprint()
         workspace_changed = (
             force or refreshed_workspace_fingerprint != previous_workspace_fingerprint

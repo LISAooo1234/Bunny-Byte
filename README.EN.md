@@ -37,6 +37,7 @@ stored locally for recovery, review, and debugging.
 | Task orchestration | Includes plan mode, todo ledger, `ask_user`, and `Explore` / `worker` subagents. |
 | Memory | Includes working memory, daily logs, durable topics, `/remember`, and `/dream`. |
 | Verification receipts | Before the agent hands in a turn that changed code, the runtime actually runs the project's own tests, feeds failures back for repair, records a pass/fail receipt, and flags answers that claim "tests pass" without any evidence. See "Verification receipts" below. |
+| Project rules | `AGENTS.md`, `CLAUDE.md` and `.bunnybyte/rules/*.md` from the repository are placed in the prompt prefix with their own budget, and a long file is cut with an explicit pointer to read the rest; `bunny doctor` lists what was actually loaded. See "Project rules" below. |
 | Stall guard | Cheap models often re-read a file that has not changed. Those "already read" / repeated-call replies no longer eat the step budget. Repeated waste first takes the repeated read-only tool away for a couple of calls, and a model that still loops is asked to report progress without tools and stopped early (`loop_stalled`) instead of burning all 50 steps. |
 | Benchmark | `bunny bench` scores the agent with a real model on 8 fixed tasks (pass rate, steps, tokens, wall time) and appends results to `benchmarks/results/`. See [Benchmark](docs/benchmark.md). |
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
@@ -257,6 +258,8 @@ Cheap models love to say "tests pass" without running anything. Bunny Byte makes
 - If the answer says "tests pass / verified" but the turn has no passing receipt and the model never ran a test command successfully itself, a warning line is appended.
 - Default mode `ask` follows the approval policy (`--approval auto` runs it, `ask` prompts first, `never` skips); `auto` never asks; `off` disables it. It only applies to the main agent: subagents, plan mode, read-only mode and docs-only changes never trigger it.
 - A timed-out command kills its whole process group (no stray pytest/jest children) and runs with `CI=1` so watch modes do not hang.
+- If the test files are plain assert-scripts run as `python test_x.py` (no unittest / pytest), they are run directly (up to 3, the ones related to the change first) instead of unittest collecting 0 tests and the gate ending "skipped".
+- When deciding whether the model ran the tests itself, the exit code only counts for a test command that ran last and was not piped: the 0 of `pytest | tail`, `pytest; echo done` or `pytest || true` belongs to another command and is accepted only when the output has an unambiguous "all passed" summary.
 
 ```toml
 # .bunnybyte.toml
@@ -266,6 +269,17 @@ commands = ["pytest -q", "ruff check ."]   # omit to auto-detect
 timeout = 120                      # per-command seconds
 max_repair_rounds = 1              # repair attempts after a failed check
 ```
+
+## Project rules
+
+Write the team's conventions into the repository and the agent sees them every turn:
+
+- Reads `AGENTS.md`, `CLAUDE.md` and `.bunnybyte/rules/*.md` (sorted by name), first from the repository root and then from the sub-directory you launched in, so sub-directory rules come later and are more specific. Files with identical content are loaded once (for example `AGENTS.md` symlinked to `CLAUDE.md`).
+- Rules have their own budget: 6000 characters per file and 12000 in total. Anything beyond that is cut at a line boundary and the prompt says how much was cut and which file to `read_file` for the rest, instead of silently clipping `AGENTS.md` to 1200 characters as before.
+- Rules sit near the front of the prompt prefix, before the tool list. Under context pressure the prefix is trimmed from its tail, so rules are touched last. Editing a rule file rebuilds the prefix automatically.
+- The "项目规则" row of `bunny doctor` lists the files that were really loaded and warns when one was cut.
+- Rules are advisory text: they never widen tool permissions or skip approvals. But they are part of the system prompt and weigh more than a README: `AGENTS.md`, `CLAUDE.md` and `.bunnybyte/rules/` from a cloned repository are injected automatically, so look at them before running the agent in a repository you do not trust.
+- `.bunnybyte/` is usually gitignored (it holds runtime data); to share `rules/` with your team, ignore `.bunnybyte/*` and add `!.bunnybyte/rules/` (git cannot re-include a sub-directory of an ignored directory, so ignoring `.bunnybyte/` itself will not work).
 
 ## Repository Layout
 

@@ -23,6 +23,7 @@ from .config import (
     resolve_provider_config,
 )
 from .config.fallback import resolve_fallback_configs, resolve_fallback_names
+from .core.project_rules import load_project_rules
 from .features.sandbox.checker import SandboxChecker
 from .providers.base import complete_model
 from .providers.errors import ProviderError, sanitize_url
@@ -197,6 +198,32 @@ def check_workspace(start, run=subprocess.run):
     return checks
 
 
+def check_project_rules(start, run=subprocess.run):
+    cwd = Path(start).resolve()
+    root = Path(_git(run, cwd, ["rev-parse", "--show-toplevel"]) or cwd)
+    if not root.is_dir():
+        root = cwd
+    rules = load_project_rules(root, cwd)
+    if not rules:
+        return DoctorCheck(
+            "项目规则",
+            "skip",
+            "未找到 AGENTS.md / CLAUDE.md / .bunnybyte/rules/*.md",
+            "在仓库根目录写一份 AGENTS.md（构建/测试命令、代码约定），agent 每轮都会读到。",
+        )
+    detail = "、".join(f"{rule.path}（{rule.chars} 字）" for rule in rules)
+    clipped = [rule for rule in rules if rule.clipped]
+    if not clipped:
+        return DoctorCheck("项目规则", "ok", detail)
+    names = "、".join(f"{rule.path} 少读了 {rule.clipped} 字" for rule in clipped)
+    return DoctorCheck(
+        "项目规则",
+        "warn",
+        f"{detail}；{names}",
+        "规则文件超出预算，后面的内容模型要自己 read_file 才看得到；精简它，或把细则拆进 .bunnybyte/rules/*.md。",
+    )
+
+
 def _secret_exposure_checks(run, git_root):
     if git_root is None:
         return []
@@ -282,6 +309,7 @@ def run_doctor(
     elif client_factory is not None:
         checks.append(check_connectivity(config, client_factory))
     checks.extend(check_workspace(start, run=run))
+    checks.append(check_project_rules(start, run=run))
     checks.append(check_sandbox(start, config_path, which=which))
     checks.extend(check_tools(which=which))
     return checks

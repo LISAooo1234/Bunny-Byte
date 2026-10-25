@@ -291,6 +291,9 @@ class ContextManager:
             )
             for section, budget in self._section_budgets.items()
         }
+        if getattr(getattr(self.agent, "workspace", None), "project_rules", ()):  # 规则让前缀变长；吃紧时别把工具列表裁掉
+            prefix_size = min(len(str(self.agent.prefix)), int(self._section_budgets.get("prefix", 0)))
+            floors["prefix"] = max(floors.get("prefix", 0), prefix_size)
         floors.update(self._section_floor_overrides)
         return floors
 

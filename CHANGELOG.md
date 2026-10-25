@@ -2,6 +2,9 @@
 
 ## 未发布
 
+- 新增项目规则：`AGENTS.md`、`CLAUDE.md`、`.bunnybyte/rules/*.md` 进入提示词前缀，每个文件最多 6000 字、合计 12000 字，超出时在提示词里写明截断量并指向原文件（以前 `AGENTS.md` 只有 1200 字片段，`CLAUDE.md` 和 rules 目录读不到）；从子目录启动时子目录规则排在后面；规则文件变化会重建前缀；`bunny doctor` 新增“项目规则”一行。顺带修复：提示词前缀第一次刷新后，从子目录启动的会话会丢掉启动目录（工作区 cwd 被重置为仓库根目录）。
+- 修复 `run_shell` 被误拦：`cd X && python3 -m unittest | tail && cat result.txt`、`make && cat log` 这类“真正在干活、末尾顺带看一眼”的复合命令以前会因为段首的 `cat` 被判成“该用 search/read_file”，现在只拦整条命令都只是查看/搜索的情况；引号里的 `&&`、`;`、heredoc 正文不再被当成分隔符。
+- 验证回执：测试文件是直接运行的断言脚本（没有 unittest / pytest）时，闸门改为直接运行这些脚本，而不是 unittest 收集到 0 个测试后显示“没有收集到测试”；模型自己跑过 `python3 test_x.py` 也算证据；`pytest | tail`、`pytest; echo done`、`pytest || true` 的退出码不再被当成测试通过的证据。
 - 步数预算不再被空转吞掉：模型重复读取未变文件、重复相同调用得到的“已读/重复”应答不再占用 `max_steps`（每轮最多退还 `max_steps` 的一半，同时放宽模型调用上限，所以最坏情况下模型调用会比以前多）。便宜模型做完活后又“复查”一遍，更不容易因此撞上步数上限而看到“已达 step 预算”。
 - 空转升级链：近 8 次工具结果里有 5 次空转（或累计 8 次）时，下两次请求暂时收走被重复的只读工具（read_file / list_files / search；原生 tool calling 下才真正从工具列表移除，文本协议下只提示）并提示，重复的是 run_shell / patch_file 时只提示不收走；收走之后仍有 4 次空转，就不带工具让模型汇报进展并以新的停止原因 `loop_stalled` 提前收尾，回答里明确写出任务可能未完成。一次真实的文件修改会清零计数。
 - 新增 `task_state.wasted_steps` / report.json 的 `wasted_steps`，trace 增加 `stall_quarantine` / `stall_stop` 事件；`bunny bench` 每行显示“空转 N”，汇总新增平均空转步数、撞上限次数、`loop_stalled` 次数、每个通过任务的模型调用与 token。

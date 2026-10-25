@@ -120,6 +120,10 @@ max_repair_rounds = 1         # 验证失败后让模型修复的轮数，0-5；
 - 配置了 `[sandbox]` 时验证命令走同一个沙箱；`CI=1` 会注入环境。
 - 回执写入 `task_state.json`、`report.json` 的 `verification` 字段和 trace 的 `verification_run` 事件。
 
+## 项目规则
+
+没有配置项，放文件即可：仓库根目录（以及启动目录）下的 `AGENTS.md`、`CLAUDE.md`、`.bunnybyte/rules/*.md` 会进入提示词前缀。每个文件最多 6000 字、合计最多 12000 字，超出部分会提示去 `read_file`；`bunny doctor` 的“项目规则”一行显示实际读到的文件。规则不会放宽工具权限。详见 README「项目规则」。
+
 ## 环境变量
 
 不写 toml 也能跑——只设环境变量即可：
