@@ -239,7 +239,7 @@ bunny bench             # live benchmark (calls the real model)
 
 Bunny Byte ships a live benchmark. `bunny bench` has a real model solve 8 tasks in throwaway git repositories (fix a failing test, implement a function from its docstring, rename across files, add a CLI flag, answer a read-only codebase question, recover from a rejected patch, ...). A shell verifier, including hidden tests that only exist at grading time, decides each result. The command reports pass rate, clean-finish rate, average steps, tokens and wall time, and appends a result file tagged with version, git commit, model and task-set fingerprint to `benchmarks/results/`, so the score history is public.
 
-<<BASELINE>>
+First baseline (0.5.0, `deepseek-v4-flash`, 2 runs per task, step ceiling 50): 16/16 passed and 15/16 finished cleanly, but only 4/16 runs stayed within the efficient step budget: 19.7 steps on average against 2-5 for the reference solutions, and one run needed all 50 steps. The bottleneck is not whether the model can solve the task but that it keeps going after the work is done; that is exactly what the upcoming step-budget refund and verification receipts will be measured against. Full results are in [`benchmarks/results/`](benchmarks/results/).
 
 There are only 8 tasks, so one task is 12.5 percentage points and a single run can move by one task as noise; average steps and tokens are the more sensitive regression signals. Details: [Benchmark](docs/benchmark.md) (Chinese).
 
