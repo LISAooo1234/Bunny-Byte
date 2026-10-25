@@ -38,6 +38,7 @@ from .session_store import SessionStore as SessionStore  # noqa: F401
 from .session_state import SessionStateMixin
 from .skill_evolution import SkillEvolutionManager
 from .session_topics import DEFAULT_SESSION_TOPIC
+from .tool_loop_guard import same_turn_compacted
 from .tool_repetition import is_repeated_tool_call
 from .tool_profiles import build_tool_profiles
 from .todo_ledger import TodoLedger
@@ -784,7 +785,9 @@ class BunnyByte(
         result, _metadata = self.run_tool_with_metadata(name, args)
         return result
     def repeated_tool_call(self, name, args):
-        return is_repeated_tool_call(self.session["history"], name, args, self.read_ledger)
+        return is_repeated_tool_call(
+            self.session["history"], name, args, self.read_ledger, same_turn_compacted(self)
+        )
 
     @staticmethod
     def new_task_id():

@@ -1,11 +1,13 @@
 """Repeated tool-call guardrails."""
 
+from .tool_loop_guard import current_turn_history, read_content_visible
+
 FILE_MUTATION_TOOLS = {"write_file", "patch_file"}
 FILE_READ_TOOLS = {"read_file"}
 
 
-def is_repeated_tool_call(history, name, args, read_ledger=None):
-    current_turn = _current_turn_history(history)
+def is_repeated_tool_call(history, name, args, read_ledger=None, compacted=True):
+    current_turn = current_turn_history(history)
     tool_events = [
         (index, item)
         for index, item in enumerate(current_turn)
@@ -25,7 +27,7 @@ def is_repeated_tool_call(history, name, args, read_ledger=None):
         )
     if name in FILE_READ_TOOLS:
         if read_ledger is not None and read_ledger.covered(args):
-            return True
+            return read_content_visible(history, args, compacted)
         if not matches:
             return False
         last_index, _ = matches[-1]
@@ -76,11 +78,3 @@ def _file_was_mutated_after(current_turn, name, args, last_index):
         if str(item_args.get("path", "")).strip() == path:
             return True
     return False
-
-
-def _current_turn_history(history):
-    history = list(history)
-    for index in range(len(history) - 1, -1, -1):
-        if history[index].get("role") == "user":
-            return history[index + 1 :]
-    return history
