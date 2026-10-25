@@ -239,11 +239,16 @@ def _extract_anthropic_usage_details(data):
             total_tokens = int(input_tokens) + int(output_tokens)
         except (TypeError, ValueError):
             total_tokens = None
-    return {
+    details = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
     }
+    cache_read = usage.get("cache_read_input_tokens")
+    if isinstance(cache_read, int) and not isinstance(cache_read, bool):
+        details["cached_tokens"] = cache_read
+        details["cache_hit"] = cache_read > 0
+    return details
 
 
 def _request_with_retries(provider, model, base_url, request, timeout, retry_budget=2):
@@ -485,6 +490,11 @@ def _stream_anthropic_response(response, on_delta):
         event_usage = event.get("usage")
         if isinstance(event_usage, dict):
             usage.update(event_usage)
+        # Anthropic 风格流把输入 token 放在 message_start.message.usage 里，
+        # 只读顶层 usage 会让流式请求丢失 input_tokens。
+        message = event.get("message")
+        if isinstance(message, dict) and isinstance(message.get("usage"), dict):
+            usage.update(message["usage"])
     for index, partial_json in tool_input_json.items():
         block = content_blocks.get(index)
         if not isinstance(block, dict) or block.get("type") != "tool_use":
