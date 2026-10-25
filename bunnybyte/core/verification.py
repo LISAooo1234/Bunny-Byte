@@ -20,6 +20,7 @@ from shutil import which
 from ..features.sandbox.checker import SandboxChecker
 from ..features.sandbox.command_matcher import command_is_excluded
 from .artifacts import build_artifact_graph
+from .shell_segments import split_segments, stage_head
 from .workspace import IGNORED_PATH_NAMES
 
 VERIFY_MODES = ("off", "ask", "auto")
@@ -73,7 +74,15 @@ TEST_TOOL_RE = re.compile(
     re.IGNORECASE,
 )
 RUNNER_PREFIX_RE = re.compile(r"^(?:(?:[A-Za-z_]\w*=\S*|uv\s+run|poetry\s+run|npx|env|time)\s+)+")
-COMMAND_SPLIT_RE = re.compile(r"&&|\|\||[;|\n]")
+COMMAND_SPLIT_RE = re.compile(r"&&|\|\||[;|\n]")  # 引号没闭合、shlex 解析不了时的回退
+PYTHON_NAME_RE = re.compile(r"python[\d.]*$")
+FRAMEWORK_TEST_MARKERS = ("unittest", "pytest", "TestCase", "def test", "class Test")
+ASSERT_SCRIPT_RE = re.compile(r"\bassert\b|\bsys\.exit\b")
+MAX_SCRIPT_TESTS = 3
+PASS_SUMMARY_RE = re.compile(r"\b[1-9]\d* passed\b|^OK\b|^ok\s|test result: ok\.", re.MULTILINE)
+FAIL_SUMMARY_RE = re.compile(
+    r"\b[1-9]\d* (?:failed|errors?)\b|\bFAIL(?:ED)?\b|^not ok\b|--- FAIL|Traceback \(most recent", re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -143,6 +152,8 @@ def _python_commands(root, python_files):
             return []
         quoted = " ".join(shlex.quote(path) for path in python_files[:20])
         return [{"command": f"{py} -m compileall -q {quoted}", "reason": "改了 Python 文件但没有测试，至少做语法检查"}]
+    if _all_assert_scripts(root, found):
+        return _script_commands(root, py, python_files, found)
     if _uses_pytest(root):
         commands = []
         targeted = _targeted_tests(root, python_files, found)
@@ -154,6 +165,31 @@ def _python_commands(root, python_files):
     test_dirs = sorted({str(Path(path).parent) for path in found})
     discover = f"discover -q -s {shlex.quote(test_dirs[0])}" if len(test_dirs) == 1 and test_dirs[0] != "." else "-q"
     return [{"command": f"{py} -m unittest {discover}", "reason": "项目有 unittest 风格的测试"}]
+
+
+def _all_assert_scripts(root, found):
+    """测试文件全是不依赖框架的断言脚本（unittest/pytest 一个都收集不到）时为 True；没有 assert 的文件（含空文件）不算。"""
+    for relative in found:
+        try:
+            text = (root / relative).read_text(encoding="utf-8", errors="replace")[:20_000]
+        except OSError:
+            return False
+        if not ASSERT_SCRIPT_RE.search(text) or any(marker in text for marker in FRAMEWORK_TEST_MARKERS):
+            return False
+    return True
+
+
+def _script_commands(root, py, python_files, scripts):
+    targeted = _targeted_tests(root, python_files, scripts)
+    ordered = targeted + [path for path in scripts if path not in targeted]
+    commands = []
+    for relative in ordered[:MAX_SCRIPT_TESTS]:
+        prefix = "PYTHONPATH=.${PYTHONPATH:+:$PYTHONPATH} " if "/" in relative else ""  # 子目录里的脚本找不到根目录的模块
+        reason = "测试文件是直接运行的断言脚本"
+        if len(ordered) > MAX_SCRIPT_TESTS:
+            reason += f"（共 {len(ordered)} 个，只跑前 {MAX_SCRIPT_TESTS} 个）"
+        commands.append({"command": f"{prefix}{py} {shlex.quote(relative)}", "reason": reason})
+    return commands
 
 
 def _find_test_files(root):
@@ -335,22 +371,60 @@ def claims_verified(text):
     return False
 
 
-def runs_test_tool(command):
-    """命令里是否真的在运行测试/检查工具（而不只是提到它的名字，比如 echo pytest、pip install pytest）。"""
-    for part in COMMAND_SPLIT_RE.split(str(command or "")):
-        part = RUNNER_PREFIX_RE.sub("", part.strip())
-        if TEST_TOOL_RE.match(part):
-            return True
+def _stage_runs_test(tokens):
+    name, args = stage_head(tokens)
+    text = RUNNER_PREFIX_RE.sub("", " ".join([name, *args]).strip())
+    if TEST_TOOL_RE.match(text):
+        return True
+    parts = text.split()
+    if parts and PYTHON_NAME_RE.match(parts[0]):
+        script = next((part for part in parts[1:] if not part.startswith("-")), "")
+        return bool(TEST_FILE_RE.search(script.strip("'\"")))
     return False
 
 
+def runs_test_tool(command):
+    """命令里是否真的在运行测试/检查工具（而不只是提到它的名字，比如 echo pytest、pip install pytest）。"""
+    segments = split_segments(command)
+    if segments is None:
+        parts = (RUNNER_PREFIX_RE.sub("", part.strip()) for part in COMMAND_SPLIT_RE.split(str(command or "")))
+        return any(TEST_TOOL_RE.match(part) for part in parts)
+    return any(_stage_runs_test(stage) for segment in segments for stage in segment.stages)
+
+
+def _summary_shows_pass(content):
+    text = str(content or "")
+    return bool(PASS_SUMMARY_RE.search(text)) and not FAIL_SUMMARY_RE.search(text) and not NO_TESTS_RE.search(text)
+
+
+def _exit_vouches_for_tests(command, content):
+    """退出码 0 是否真的说明测试通过：测试命令必须是最后执行的、没被管道接走，后面只能跟 `&&`。
+
+    `pytest | tail`、`pytest; echo done`、`pytest || true` 的退出码属于别的命令，
+    这几种只在输出里有明确的"全部通过"摘要时才算。
+    """
+    segments = split_segments(command)
+    if segments is None:
+        return runs_test_tool(command)
+    ran_tests = False
+    for index, segment in enumerate(segments):
+        if not any(_stage_runs_test(stage) for stage in segment.stages):
+            continue
+        ran_tests = True
+        chained = all(item.separator == "&&" for item in segments[index:-1]) and not segments[-1].separator
+        if _stage_runs_test(segment.stages[-1]) and chained:  # 末尾的 `&` 表示放到后台，退出码和测试无关
+            return True
+    return ran_tests and _summary_shows_pass(content)
+
+
 def shell_evidence(history_items):
-    """本回合里模型自己是否成功跑过测试/检查类命令（run_shell 且 exit_code 为 0）。"""
+    """本回合里模型自己是否成功跑过测试/检查类命令（run_shell 且这次退出码 0 确实属于测试命令）。"""
     for item in history_items:
         if item.get("role") != "tool" or item.get("name") != "run_shell":
             continue
-        if runs_test_tool((item.get("args") or {}).get("command", "")) and re.search(
-            r"exit_code:\s*0\b", str(item.get("content", ""))
+        content = str(item.get("content", ""))
+        if re.search(r"exit_code:\s*0\b", content) and _exit_vouches_for_tests(
+            (item.get("args") or {}).get("command", ""), content
         ):
             return True
     return False

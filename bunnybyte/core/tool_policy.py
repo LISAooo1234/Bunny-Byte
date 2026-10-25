@@ -1,15 +1,9 @@
 """Tool usage policy checks above raw permission gates."""
 
-import re
 from dataclasses import dataclass
 
 from ..features import memory as memorylib
-
-# 只在"主命令位置"禁这些工具——命令开头，或被 ; && || 串联起的开头。
-# 管道 | 之后允许：模型常把 `... | tail -5` 用来截断输出，不是在搜索 workspace。
-SHELL_SEARCH_RE = re.compile(
-    r"(?:^|;|&&|\|\|)\s*(?:cat|less|head|tail|grep|rg|find|ls)(?:\s|$)"
-)
+from .shell_segments import is_pure_lookup
 
 
 @dataclass(frozen=True)
@@ -46,8 +40,8 @@ class ToolPolicyChecker:
             if path.exists() and path.is_file() and not self._has_fresh_read(args.get("path", "")):
                 return self._prior_read_required(tool.name, args.get("path", ""))
         if tool.name == "run_shell":
-            command = str(args.get("command", "")).strip()
-            if SHELL_SEARCH_RE.search(command):
+            # 只拦整条命令都是查看/搜索的情况；`... | tail` 截断输出、或查看命令和真正干活的命令串在一起都放行。
+            if is_pure_lookup(str(args.get("command", "")).strip()):
                 return ToolPolicyDecision.deny(
                     "shell_search_should_use_tool",
                     "error: run_shell is not for ordinary workspace search/read; use search, read_file, or list_files first",

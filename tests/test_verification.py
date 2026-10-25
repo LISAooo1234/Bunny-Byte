@@ -16,6 +16,7 @@ from bunnybyte.core.verification import (
     resolve_verify_config,
     run_command,
     runs_test_tool,
+    shell_evidence,
 )
 from bunnybyte.core.task_state import TaskState
 from bunnybyte.core.verification_gate import verification_gate
@@ -431,3 +432,100 @@ def test_approval_prompt_shows_the_verify_commands():
 
     assert format_tool_args("verify", {"commands": ["pytest -q", "ruff check ."]}) == "pytest -q ; ruff check ."
     assert format_tool_args("verify", {"command": "pytest -q"}) == "pytest -q"
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("python3 test_m.py", True),
+        ("python3 -B tests/lib_test.py", True),
+        ("uv run python test_m.py", True),
+        ("python3 tests/check_x.py", False),
+        ("python3 run.py", False),
+        ("echo 'a && pytest'", False),
+        ("grep pytest requirements.txt", False),
+    ],
+)
+def test_model_run_test_scripts_count_as_evidence_commands(command, expected):
+    assert runs_test_tool(command) is expected
+
+
+def shell_turn(command, content):
+    return [{"role": "tool", "name": "run_shell", "args": {"command": command}, "content": content}]
+
+
+@pytest.mark.parametrize(
+    ("command", "content", "expected"),
+    [
+        ("python3 test_m.py", "exit_code: 0\n", True),
+        ("python3 test_m.py", "exit_code: 1\n", False),
+        ("cd x && pytest -q && echo ok", "exit_code: 0\nok", True),
+        ("pytest -q; echo done", "exit_code: 0\n1 failed\ndone", False),
+        ("pytest -q || echo failed", "exit_code: 0\nfailed", False),
+        ("python3 test_m.py | tail -3", "exit_code: 0\nTraceback (most recent call last)", False),
+        ("python3 test_m.py | tail -3", "exit_code: 0\n", False),
+        ("python3 -m pytest -q 2>&1 | tail -3", "exit_code: 0\n3 passed in 0.1s", True),
+        ("python3 -m pytest -q 2>&1 | tail -3", "exit_code: 0\n1 failed, 2 passed in 0.1s", False),
+        ("cd x && python3 -m unittest 2>&1 | tail && cat out", "exit_code: 0\nRan 3 tests in 0.0s\n\nOK", True),
+        ("python3 -m unittest 2>&1 | tail", "exit_code: 0\nRan 0 tests in 0.0s\n\nOK", False),
+        ("echo pytest && cat out", "exit_code: 0\n3 passed", False),
+        ("(pytest -q);echo done", "exit_code: 0\n1 failed\ndone", False),
+        ("(cd x && pytest -q)|tail", "exit_code: 0\n1 failed, 2 passed", False),
+        ("pytest -q # run it\necho done", "exit_code: 0\n1 failed\ndone", False),
+        ("pytest -q &", "exit_code: 0\n", False),
+        ("timeout 60 pytest -q", "exit_code: 0\n3 passed", True),
+        ("go test ./... | tail", "exit_code: 0\nok  \tpkg/a\t0.1s\nFAIL\tpkg/b\t0.2s", False),
+        ("go test ./... | tail", "exit_code: 0\nok  \tpkg/a\t0.1s", True),
+        ("make test | tail", "exit_code: 0\nok 1 - a\nnot ok 2 - b", False),
+    ],
+)
+def test_exit_code_only_vouches_for_the_test_command_it_belongs_to(command, content, expected):
+    assert shell_evidence(shell_turn(command, content)) is expected
+
+
+def test_assert_script_tests_get_a_real_receipt_instead_of_zero_tests_collected(tmp_path):
+    touch(tmp_path, "m.py", "def f():\n    return 1\n")
+    touch(tmp_path, "test_m.py", "import m\nassert m.f() == 1\nprint('ok')\n")
+    agent = build_agent(tmp_path, [], gate())
+
+    commands = [item["command"] for item in detect_commands(tmp_path, ["m.py"])]
+    assert len(commands) == 1 and commands[0].endswith(" test_m.py") and "unittest" not in commands[0]
+    assert run_command(agent, commands[0], timeout=30)["status"] == "passed"
+
+    touch(tmp_path, "m.py", "def f():\n    return 22\n")
+    failed = run_command(agent, commands[0], timeout=30)
+    assert failed["status"] == "failed" and "AssertionError" in failed["output_tail"]
+
+
+def test_assert_scripts_prefer_the_targeted_ones_and_cap_at_three(tmp_path):
+    touch(tmp_path, "pkg/m.py")
+    for name in ("a", "b", "c", "d"):
+        touch(tmp_path, f"tests/test_{name}.py", "assert True\n")
+    touch(tmp_path, "tests/test_m.py", "assert True\n")
+
+    commands = [item["command"] for item in detect_commands(tmp_path, ["pkg/m.py"])]
+
+    assert len(commands) == 3
+    assert commands[0].startswith("PYTHONPATH=.${PYTHONPATH:+:$PYTHONPATH} ") and commands[0].endswith(" tests/test_m.py")
+    assert all(command.startswith("PYTHONPATH=.") for command in commands)
+
+
+def test_framework_tests_are_not_mistaken_for_assert_scripts(tmp_path):
+    touch(tmp_path, "m.py")
+    touch(tmp_path, "test_m.py", "import unittest\nclass T(unittest.TestCase):\n    def test_x(self):\n        pass\n")
+    touch(tmp_path, "test_n.py", "assert True\n")
+
+    commands = [item["command"] for item in detect_commands(tmp_path, ["m.py"])]
+
+    assert len(commands) == 1 and commands[0].endswith("-m unittest -q")
+
+
+def test_claim_after_the_model_ran_its_own_test_script_is_not_flagged(tmp_path):
+    touch(tmp_path, "test_m.py", "assert 1 + 1 == 2\n")
+    outputs = [f'<tool name="run_shell" command="cd . && {PY} test_m.py | cat && cat test_m.py"></tool>', "<final>All tests pass.</final>"]
+    piped = build_agent(tmp_path, outputs, gate())
+    assert [e["content"] for e in piped.engine.run_turn("跑一下测试") if e["type"] == "runtime_notice"][0].startswith("⚠")
+
+    outputs[0] = f'<tool name="run_shell" command="cd . && {PY} test_m.py"></tool>'
+    direct = build_agent(tmp_path, outputs, gate())
+    assert not [e for e in direct.engine.run_turn("跑一下测试") if e["type"] == "runtime_notice"]
