@@ -1,0 +1,214 @@
+"""bench 结果的汇总、落盘、历史对比与终端渲染。"""
+
+import json
+import re
+import subprocess
+import tempfile
+import unicodedata
+from datetime import datetime, timezone
+from pathlib import Path
+
+SCHEMA_VERSION = 1
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+NOISE_NOTE = "每题 = {step:.1f} 个百分点；单次结果上下浮动 1 题属于噪声，需要看多次历史才能下结论。"
+
+
+def _total(rows, key):
+    values = [row[key] for row in rows if isinstance(row.get(key), int)]
+    return sum(values) if values else None
+
+
+def _average(rows, key):
+    values = [row[key] for row in rows if isinstance(row.get(key), (int, float))]
+    return round(sum(values) / len(values), 2) if values else None
+
+
+def summarize(rows):
+    runs = len(rows)
+    passed = sum(1 for row in rows if row["passed"])
+    return {
+        "runs": runs,
+        "passed": passed,
+        "pass_rate": round(passed / runs, 4) if runs else 0.0,
+        "clean_finish": sum(1 for row in rows if row.get("stop_reason") == "final_answer_returned"),
+        "within_budget": sum(1 for row in rows if not row.get("over_budget")),
+        "avg_steps": _average(rows, "steps"),
+        "avg_model_calls": _average(rows, "model_calls"),
+        "avg_wall_seconds": _average(rows, "wall_seconds"),
+        "total_wall_seconds": round(sum(row["wall_seconds"] for row in rows), 1),
+        "input_tokens": _total(rows, "input_tokens"),
+        "output_tokens": _total(rows, "output_tokens"),
+        "cached_tokens": _total(rows, "cached_tokens"),
+    }
+
+
+def _git(*args):
+    if not (PACKAGE_ROOT / ".git").exists():
+        return ""  # 通过 pip 安装时包目录不在自己的仓库里，别误取外层仓库的提交
+    try:
+        done = subprocess.run(
+            ["git", *args], cwd=PACKAGE_ROOT, capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def package_version():
+    pyproject = PACKAGE_ROOT / "pyproject.toml"
+    if pyproject.exists():
+        match = re.search(r'^version = "([^"]+)"', pyproject.read_text(encoding="utf-8"), re.M)
+        if match:
+            return match.group(1)
+    try:
+        from importlib.metadata import version
+
+        return version("bunnybyte-agent")
+    except Exception:
+        return "unknown"
+
+
+def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol=""):
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "bunnybyte_version": package_version(),
+        "git_sha": _git("rev-parse", "--short", "HEAD"),
+        "git_dirty": bool(_git("status", "--porcelain", "--", "bunnybyte")),
+        "provider": provider,
+        "model": model,
+        "protocol": protocol,
+        "task_set_hash": set_hash,
+        "task_ids": [task.id for task in tasks],
+        "repeat": repeat,
+        "max_steps": max_steps,
+        "summary": summarize(rows),
+        "runs": rows,
+    }
+
+
+def _slug(text):
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(text)).strip("-") or "unknown"
+
+
+def save_record(record, out_dir):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = record["captured_at"].replace("-", "").replace(":", "").replace("T", "-").rstrip("Z")
+    base = f"{stamp}-{_slug(record['provider'])}-{_slug(record['model'])}"
+    path = out_dir / f"{base}.json"
+    suffix = 1
+    while path.exists():  # 同一秒内的两次运行不能互相覆盖
+        suffix += 1
+        path = out_dir / f"{base}-{suffix}.json"
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", delete=False, dir=out_dir, prefix=path.name + ".", suffix=".tmp"
+    ) as handle:
+        json.dump(record, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
+        temp_name = handle.name
+    Path(temp_name).replace(path)
+    return path
+
+
+def load_history(out_dir):
+    records = []
+    for path in sorted(Path(out_dir).glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict) and data.get("schema_version") == SCHEMA_VERSION and "summary" in data:
+            records.append(data)
+    return sorted(records, key=lambda item: item["captured_at"])
+
+
+def previous_comparable(record, history):
+    """上一次同任务集、同 provider、同模型、同步数上限的结果；任一项变了就不比较。"""
+    keys = ("task_set_hash", "provider", "model", "max_steps")
+    older = [
+        item
+        for item in history
+        if all(item.get(key) == record.get(key) for key in keys)
+        and item["captured_at"] < record["captured_at"]
+    ]
+    return older[-1] if older else None
+
+
+def _width(text):
+    return sum(2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1 for char in str(text))
+
+
+def pad(text, width):
+    return str(text) + " " * max(0, width - _width(text))
+
+
+def _fmt(value, suffix=""):
+    return "-" if value is None else f"{value}{suffix}"
+
+
+def _tokens(summary, protocol=""):
+    if summary["input_tokens"] is None and summary["output_tokens"] is None:
+        return "provider 未上报"
+    cached = summary.get("cached_tokens")
+    # OpenAI 风格的 cached_tokens 是 input_tokens 的子集；Anthropic 风格则是另外计的。
+    word = "其中" if protocol == "openai" else "另有"
+    extra = f"（{word} {cached} 命中缓存）" if cached else ""
+    return f"输入 {_fmt(summary['input_tokens'])}{extra} / 输出 {_fmt(summary['output_tokens'])}"
+
+
+def _delta(record, previous):
+    if previous is None:
+        return "无可比较的历史结果（任务集、provider、模型、步数上限需一致）"
+    gap = (record["summary"]["pass_rate"] - previous["summary"]["pass_rate"]) * 100
+    steps = ""
+    now_steps, then_steps = record["summary"]["avg_steps"], previous["summary"]["avg_steps"]
+    if now_steps is not None and then_steps is not None:
+        steps = f"，平均步数 {now_steps - then_steps:+.1f}"
+    return f"相比 {previous['captured_at'][:10]}（{previous.get('git_sha') or '?'}）：通过率 {gap:+.1f} 个百分点{steps}"
+
+
+def render_row(row):
+    mark = "✓" if row["passed"] else "✗"
+    tokens = "" if row.get("input_tokens") is None else f"  in {row['input_tokens']} / out {row['output_tokens'] or 0}"
+    note = "" if row["passed"] else f"  {row['failure'][:80]}"
+    budget = " (超预算)" if row.get("over_budget") else ""
+    return f"{mark} {row['task']} #{row['attempt']}  {row['steps']} 步{budget}  {row['wall_seconds']}s{tokens}{note}"
+
+
+def render_record(record, previous=None):
+    summary = record["summary"]
+    by_task = {}
+    for row in record["runs"]:
+        by_task.setdefault(row["task"], []).append(row)
+    name_width = max([_width(task) for task in by_task] + [4])
+    lines = [f"{pad('任务', name_width)}  通过  平均步数  平均耗时"]
+    for task, rows in by_task.items():
+        ok = sum(1 for row in rows if row["passed"])
+        lines.append(
+            f"{pad(task, name_width)}  {ok}/{len(rows)}   {_fmt(_average(rows, 'steps')):>7}  {_fmt(_average(rows, 'wall_seconds'), 's')}"
+        )
+    lines += [
+        "",
+        f"模型：{record['provider']} / {record['model']}    bunnybyte {record['bunnybyte_version']} @ {record.get('git_sha') or '?'}",
+        f"通过率：{summary['passed']}/{summary['runs']} = {summary['pass_rate'] * 100:.1f}%    正常收尾 {summary['clean_finish']}/{summary['runs']}    步数达标 {summary['within_budget']}/{summary['runs']}",
+        f"平均步数 {_fmt(summary['avg_steps'])}，平均模型调用 {_fmt(summary['avg_model_calls'])}，总耗时 {summary['total_wall_seconds']}s",
+        f"Token：{_tokens(summary, record.get('protocol', ''))}",
+        _delta(record, previous),
+        NOISE_NOTE.format(step=100 / max(len(record["task_ids"]) * record["repeat"], 1)),
+    ]
+    return "\n".join(lines)
+
+
+def render_history(records):
+    if not records:
+        return "还没有 bench 历史结果。运行 `bunny bench` 生成第一条。"
+    lines = ["日期        版本    提交      模型                     通过率    平均步数  任务集"]
+    for item in records:
+        summary = item["summary"]
+        lines.append(
+            f"{item['captured_at'][:10]}  {pad(item['bunnybyte_version'], 6)}  {pad(item.get('git_sha') or '?', 8)}  "
+            f"{pad(item['provider'] + '/' + item['model'], 23)}  {summary['pass_rate'] * 100:5.1f}%   "
+            f"{pad(_fmt(summary['avg_steps']), 8)}  {item['task_set_hash']}"
+        )
+    return "\n".join(lines)

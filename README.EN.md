@@ -36,6 +36,7 @@ stored locally for recovery, review, and debugging.
 | Session lifecycle | Supports `/history`, `/resume`, `/fork`, `/rollback`, and `/compact`. |
 | Task orchestration | Includes plan mode, todo ledger, `ask_user`, and `Explore` / `worker` subagents. |
 | Memory | Includes working memory, daily logs, durable topics, `/remember`, and `/dream`. |
+| Benchmark | `bunny bench` scores the agent with a real model on 8 fixed tasks (pass rate, steps, tokens, wall time) and appends results to `benchmarks/results/`. See [Benchmark](docs/benchmark.md). |
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
 
@@ -215,6 +216,8 @@ bunny
 bunny --resume latest
 bunny --repl
 bunny "Fix the first failing test in the current repository"
+bunny doctor            # environment self-check
+bunny bench             # live benchmark (calls the real model)
 ```
 
 ### TUI Slash Commands
@@ -232,6 +235,14 @@ bunny "Fix the first failing test in the current repository"
 - `/working-memory`
 - `/dream`
 
+## Benchmark
+
+Bunny Byte ships a live benchmark. `bunny bench` has a real model solve 8 tasks in throwaway git repositories (fix a failing test, implement a function from its docstring, rename across files, add a CLI flag, answer a read-only codebase question, recover from a rejected patch, ...). A shell verifier, including hidden tests that only exist at grading time, decides each result. The command reports pass rate, clean-finish rate, average steps, tokens and wall time, and appends a result file tagged with version, git commit, model and task-set fingerprint to `benchmarks/results/`, so the score history is public.
+
+<<BASELINE>>
+
+There are only 8 tasks, so one task is 12.5 percentage points and a single run can move by one task as noise; average steps and tokens are the more sensitive regression signals. Details: [Benchmark](docs/benchmark.md) (Chinese).
+
 ## Repository Layout
 
 ```text
@@ -241,13 +252,15 @@ bunnybyte/
 ├── tui/         # Textual terminal interface
 ├── features/    # memory, skills, sandbox
 ├── providers/   # model provider clients
+├── bench/       # bunny bench live benchmark
 └── evaluation/  # evaluation and run artifacts
 
 docs/
 ├── configuration.md
 ├── skills.md
 ├── memory.md
-└── sandbox.md
+├── sandbox.md
+└── benchmark.md
 
 tests/           # runtime / safety / TUI / acceptance / regression tests
 ```
@@ -259,3 +272,4 @@ tests/           # runtime / safety / TUI / acceptance / regression tests
 - [Skills](docs/skills.md)
 - [Memory](docs/memory.md)
 - [Sandbox](docs/sandbox.md)
+- [Benchmark](docs/benchmark.md) (Chinese)

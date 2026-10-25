@@ -32,6 +32,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 会话管理 | 支持 `/history`、`/resume`、`/fork`、`/rollback`、`/compact`。 |
 | 任务编排 | 支持 plan mode、todo ledger、`ask_user`、`Explore` / `worker` 子 agent。 |
 | 记忆系统 | 提供 working memory、daily logs、durable topics，以及 `/remember`、`/dream`。 |
+| 跑分基准 | `bunny bench` 用真实模型在 8 个固定任务上打分（通过率、步数、token、耗时），结果与历史写入 `benchmarks/results/`；详见 [跑分基准](docs/benchmark.md)。 |
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
 
@@ -208,6 +209,8 @@ bunny
 bunny --resume latest
 bunny --repl
 bunny "修复当前仓库里最先失败的测试"
+bunny doctor            # 环境自检
+bunny bench             # 跑分基准（会调用真实模型）
 ```
 
 ### TUI Slash Commands
@@ -225,6 +228,15 @@ bunny "修复当前仓库里最先失败的测试"
 - `/working-memory`
 - `/dream`
 
+## 跑分基准
+
+Bunny Byte 自带实测跑分：`bunny bench` 在 8 个临时 git 仓库里让真实模型完成修 bug、按 docstring 写功能、跨文件重命名、加 CLI 开关、只读问答、补丁失败后恢复等任务，
+再由 shell verifier（含只在判分时才写入的隐藏测试）判定结果，输出通过率、正常收尾率、平均步数、token 和耗时，并把带版本/提交/模型指纹的结果追加到 `benchmarks/results/`，分数历史公开可查。
+
+<<BASELINE>>
+
+任务只有 8 道，每题 = 12.5 个百分点，单次浮动 1 题属于噪声；平均步数与 token 更能反映回归。细节见 [跑分基准](docs/benchmark.md)。
+
 ## 仓库结构
 
 ```text
@@ -234,13 +246,15 @@ bunnybyte/
 ├── tui/         # Textual 终端界面
 ├── features/    # memory、skills、sandbox
 ├── providers/   # model provider client
+├── bench/       # bunny bench 实测跑分
 └── evaluation/  # 评估与运行证据
 
 docs/
 ├── configuration.md
 ├── skills.md
 ├── memory.md
-└── sandbox.md
+├── sandbox.md
+└── benchmark.md
 
 tests/           # runtime / safety / TUI / acceptance / regression tests
 ```
@@ -252,3 +266,4 @@ tests/           # runtime / safety / TUI / acceptance / regression tests
 - [Skills](docs/skills.md)
 - [Memory](docs/memory.md)
 - [Sandbox](docs/sandbox.md)
+- [跑分基准](docs/benchmark.md)

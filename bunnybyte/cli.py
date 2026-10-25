@@ -389,7 +389,7 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description="Minimal coding agent for provider profiles backed by OpenAI-compatible or Anthropic-compatible APIs.",
-        epilog="First-time setup: bunny setup. Health check: bunny doctor. Config helpers: bunny config path, bunny config show.",
+        epilog="First-time setup: bunny setup. Health check: bunny doctor. Benchmark: bunny bench. Config helpers: bunny config path, bunny config show.",
     )
     parser.add_argument("prompt", nargs="*", help="可选的一次性提示词。")
     parser.add_argument("--cwd", default=".", help="工作区目录。")
@@ -1546,6 +1546,10 @@ def main(argv=None):
         return run_config_command(argv[1:])
     if argv and argv[0] == "doctor":
         return run_doctor_command(argv[1:])
+    if argv and argv[0] == "bench":
+        from .bench.cli import run_bench_command
+
+        return run_bench_command(argv[1:])
 
     args = build_arg_parser().parse_args(argv)
     try:
