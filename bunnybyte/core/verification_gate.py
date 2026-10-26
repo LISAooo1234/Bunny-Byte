@@ -103,6 +103,7 @@ def verification_gate(engine, task_state, final, allow_repair=True):
             "name": "verify",
             "content": _render_receipt(receipt),
             "metadata": {"tool_status": "ok" if receipt["status"] in NON_FAILURE_STATUSES else "error"},
+            "duration_ms": receipt["duration_ms"],
         }
         if receipt["status"] in (STATUS_FAILED, STATUS_TIMEOUT) or agent.abort_requested:
             break

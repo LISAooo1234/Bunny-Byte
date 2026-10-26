@@ -40,6 +40,7 @@ def final_hook_gate(engine, task_state, final, allow_block=True):
             "name": "hook",
             "content": _render(outcome),
             "metadata": {"tool_status": "error" if outcome.blocks or outcome.failed else "ok"},
+            "duration_ms": outcome.duration_ms,
         }
         if agent.abort_requested or outcome.status == STATUS_ABORTED:
             return False

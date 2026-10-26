@@ -95,6 +95,7 @@ def _commit_tool_record(engine, task_state, user_message, record):
         "name": record.name,
         "content": record.result,
         "metadata": record.metadata,
+        "duration_ms": record.duration_ms,
     }
 
 

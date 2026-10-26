@@ -75,7 +75,7 @@ def test_compact_tool_card_success_label_is_one_line():
     card = ToolCard("search", "Engine in bunnybyte/core")
     card.set_success("bunnybyte/core/engine.py:27:class Engine:")
 
-    assert card._label() == "✓ Search  │  Engine in bunnybyte/core  │  1 match"
+    assert card._label() == "✓ 搜索 Engine in bunnybyte/core · 1 处匹配"
 
 
 def test_compact_tool_card_summarizes_read_metadata():
@@ -84,7 +84,7 @@ def test_compact_tool_card_summarizes_read_metadata():
     card = ToolCard("read_file", "runtime.py · lines 1-80")
     card.set_success('# bunnybyte/core/runtime.py\n   1: hello\n<read_file_meta path="bunnybyte/core/runtime.py" start="1" end="80" returned_lines="80" total_lines="980" eof="false" />')
 
-    assert card._label() == "✓ Read file  │  runtime.py · lines 1-80  │  80 lines · 980 total"
+    assert card._label() == "✓ 读取 runtime.py · lines 1-80 · 80 行 / 共 980 行"
 
 
 def test_read_only_tool_card_error_expands():
@@ -95,7 +95,7 @@ def test_read_only_tool_card_error_expands():
 
     assert card.compact is False
     assert not card.has_class("compact")
-    assert card._label().startswith("[!] Read file")
+    assert card._label().startswith("✗ 读取 missing.txt:1-1 · error: path is not a file")
 
 
 def test_compact_tool_card_output_remains_expandable():
@@ -182,8 +182,12 @@ def test_status_and_welcome_clip_long_session_topic(tmp_path):
 
     assert banner.session.endswith("...")
     assert len(banner.session) <= 34
+    # 会话名现在只在横幅/一行标题里出现，状态栏不再重复它。
     assert long_topic not in rendered_text(bar)
-    assert "..." in rendered_text(bar)
+    banner.set_collapsed(True)
+    header = rendered_text(banner)
+    assert long_topic not in header
+    assert banner.session in header
 
 
 def test_cli_defaults_interactive_tty_mode_to_tui(monkeypatch):
@@ -460,7 +464,8 @@ def test_status_bar_shows_runtime_identity(tmp_path):
 
     text = rendered_text(status)
     assert "mode default" in text
-    assert "session" in text
+    assert "● 就绪" in text
+    assert "/help" in text
 
 
 def test_welcome_banner_shows_runtime_hints_and_activity(tmp_path):
@@ -563,8 +568,7 @@ def test_status_bar_reads_context_usage_governance_fields():
         }
     )
 
-    assert "context 1234/200000 est" in rendered_text(status)
-    assert "░" in rendered_text(status)
+    assert "context 0% ░░░░░░░░ 1.2k/200k" in rendered_text(status)
 
     status.update_context_usage(
         {
@@ -576,8 +580,8 @@ def test_status_bar_reads_context_usage_governance_fields():
     )
 
     text = rendered_text(status)
-    assert "context 1234/200000 est" in text
-    assert "provider" not in text
+    assert "1.2k/200k" in text
+    assert "display_source" not in text and "1200" not in text
 
 
 def test_cli_plan_mode_and_session_commands_expose_runtime_state(tmp_path):

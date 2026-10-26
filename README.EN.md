@@ -58,6 +58,8 @@ stored locally for recovery, review, and debugging.
 The same interface shows model output, tool calls, command results, and
 sub-task state.
 
+Layout (since 0.6.x): the welcome banner only shows on an empty session; after the first message (or when `--resume` opens a session with history) it collapses to a one-line header, and `/banner` toggles it. The status bar shows segments for run state and elapsed time, model, mode, context usage (percent + mini bar, yellow above 50%, red above 80%), this turn's tokens (↑ input of the last request, ↓ summed output; `-` when the provider reports nothing), subagents and key hints, dropping the less important segments first when the window is narrow. Tool cards are one line each, e.g. `✓ 读取 calc.py:1-50 · 全部 2 行 · 13ms`; `run_shell` shows the exit code (red when non-zero), `patch_file` / `write_file` show an inline colored diff (short diffs open automatically, long ones are clipped with a count of hidden lines), and verification receipts get their own ✓/✗ card. In `ask` mode the approval prompt shows the diff before you approve a `patch_file`. `Ctrl+O` expands or collapses every tool card. The screenshots still show the old layout.
+
 ### Planning and memory state
 
 <p align="center">
@@ -236,6 +238,7 @@ bunny bench             # live benchmark (calls the real model)
 - `/fork <event|turn|#>`
 - `/rollback <event|turn|#>`
 - `/undo`, `/undo list`, `/undo --force`
+- `/banner` (toggle the welcome banner; `Ctrl+O` toggles all tool cards)
 - `/hooks`, `/hooks trust`
 - `/plan <topic>`
 - `/plan-exit`

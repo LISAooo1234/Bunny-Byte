@@ -797,6 +797,8 @@ def handle_repl_command(agent, user_input):
         return True, True, ""
     if user_input == "/help":
         return True, False, HELP_DETAILS
+    if command_name == "banner":
+        return True, False, "`/banner` 只在 TUI 里可用：展开或收起顶部横幅。"
     if user_input == "/memory":
         return True, False, agent.memory_command_text()
     if command_name == "memory-scope":

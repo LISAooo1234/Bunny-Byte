@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.containers import Horizontal, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Button, Collapsible, Input, Markdown, Static
+from textual.widgets import Button, Input, Markdown, Static
 
 from ..branding import (
     AI_NOTICE,
@@ -28,6 +28,23 @@ from ..branding import (
     mascot_visible_width,
 )
 from ..commands.slash import SlashCommand, suggest_commands
+from .status import StatusBar
+from .tool_cards import (
+    COMPACT_TOOLS as READ_ONLY_DISPLAY_TOOLS,
+    ToolCard,
+    confirm_preview,
+    summarize_tool_output,
+    tool_title as _display_tool_name,
+)
+
+__all__ = [
+    "READ_ONLY_DISPLAY_TOOLS",
+    "StatusBar",
+    "ToolCard",
+    "_display_tool_name",
+    "confirm_preview",
+    "summarize_tool_output",
+]
 
 
 def format_tool_args(name: str, args: dict | None) -> str:
@@ -89,6 +106,8 @@ def _format_context_usage_text(usage: dict | None, *, include_bar: bool = True) 
 
 
 class WelcomeBanner(Static):
+    """空会话时显示吉祥物横幅；第一轮开始（或恢复的会话已有历史）后收成一行标题，/banner 切换。"""
+
     DEFAULT_CSS = f"""
     WelcomeBanner {{
         height: auto;
@@ -97,6 +116,13 @@ class WelcomeBanner(Static):
         background: {TUI_PANEL_BG};
         color: {TUI_TEXT};
         border: round {TUI_PANEL_BORDER};
+    }}
+    WelcomeBanner.collapsed {{
+        margin: 0 1;
+        padding: 0 1;
+        border: none;
+        border-bottom: hkey #2b3245;
+        background: {TUI_PANEL_BG};
     }}
     """
 
@@ -114,7 +140,16 @@ class WelcomeBanner(Static):
         self.activity_detail = "就绪"
         self.activity_frame = 0
         self.busy = False
+        self.collapsed = False
 
+    def set_collapsed(self, collapsed: bool) -> None:
+        self.collapsed = bool(collapsed)
+        self.set_class(self.collapsed, "collapsed")
+        self.refresh(layout=True)
+
+    def toggle_collapsed(self) -> bool:
+        self.set_collapsed(not self.collapsed)
+        return self.collapsed
     def update_agent(self, agent) -> None:
         self.model_name = str(getattr(agent.model_client, "model", ""))
         self.provider = str(getattr(agent.model_client, "provider", ""))
@@ -146,6 +181,8 @@ class WelcomeBanner(Static):
         self.refresh()
 
     def render(self) -> Text:
+        if self.collapsed:
+            return self._render_header()
         cwd_name = Path(self.cwd).name + "/" if self.cwd else "-"
         muted = TUI_MUTED
         accent = TUI_ACCENT
@@ -174,6 +211,20 @@ class WelcomeBanner(Static):
             right = info_rows[index] if index < len(info_rows) else Text("")
             rows.append(self._fit_line(Text.assemble(left, Text("   "), right), content_width))
         return Text("\n").join(rows)
+
+    def _render_header(self) -> Text:
+        """一行标题：名字 · 会话 · 目录@分支 · 审批；状态和用量交给底部状态栏。"""
+        cwd_name = Path(self.cwd).name + "/" if self.cwd else "-"
+        location = f"{cwd_name}@{self.branch}" if self.branch not in {"", "-"} else cwd_name
+        line = Text("🐰 ", style=TUI_ACCENT)
+        line.append(DISPLAY_NAME, style=f"bold {TUI_ACCENT}")
+        for label, value in (("session", self.session or "-"), ("cwd", location), ("approval", self.approval or "-")):
+            line.append("  ")
+            line.append(f"{label} ", style=TUI_MUTED)
+            line.append(str(value), style=TUI_TEXT)
+        line.append("   /banner 展开", style="#5c6680")
+        width = int(getattr(getattr(self, "size", None), "width", 0) or 0)
+        return self._fit_line(line, max(0, width - 2) if width else 0)
 
     def _content_width(self) -> int:
         size = getattr(self, "size", None)
@@ -330,153 +381,6 @@ class AssistantMessage(Static):
             pass
 
 
-READ_ONLY_DISPLAY_TOOLS = {"read_file", "search", "list_files"}
-TOOL_DISPLAY_NAMES = {
-    "read_file": "Read file",
-    "search": "Search",
-    "list_files": "List files",
-    "run_shell": "Run shell",
-    "write_file": "Write file",
-    "patch_file": "Patch file",
-    "agent": "Agent",
-    "send_message": "Message agent",
-    "task_stop": "Stop task",
-}
-
-
-def _display_tool_name(name: str) -> str:
-    return TOOL_DISPLAY_NAMES.get(name, name.replace("_", " ").title())
-
-
-def summarize_tool_output(name: str, output: str) -> str:
-    text = str(output or "").strip()
-    if not text:
-        return ""
-    if name == "read_file":
-        meta = re.search(r'<read_file_meta [^>]*returned_lines="(\d+)"[^>]*total_lines="(\d+)"[^>]*eof="(true|false)"', text)
-        if meta:
-            lines, total, eof = meta.groups()
-            summary = f"{lines} lines · {total} total"
-            return summary + (" · complete" if eof == "true" else "")
-        if text.startswith("File range already read"):
-            return "已读取过 · 复用缓存"
-        line_count = sum(1 for line in text.splitlines() if re.match(r"\s*\d+:", line))
-        return f"{line_count} lines"
-    if name == "search":
-        count = len([line for line in text.splitlines() if line.strip()])
-        return "no matches" if text == "(no matches)" else f"{count} match" + ("" if count == 1 else "es")
-    if name == "list_files":
-        entries = [line.strip() for line in text.splitlines() if line.strip()]
-        if text == "(empty)" or not entries:
-            return "empty"
-        if len(entries) <= 3:
-            return ", ".join(entries)
-        return f"{len(entries)} items"
-    if text.startswith("error:"):
-        return text.splitlines()[0]
-    return "done"
-
-
-class ToolCard(Static):
-    DEFAULT_CSS = """
-    ToolCard {
-        height: auto;
-        margin: 0 0 1 0;
-        padding: 0 1;
-        background: #14171d;
-        border: round #4dabf7;
-    }
-    ToolCard .tool-output {
-        max-height: 14;
-        color: #adb5bd;
-        padding: 0 1;
-        overflow-x: hidden;
-    }
-    ToolCard .tool-output Markdown {
-        height: auto;
-        width: 100%;
-    }
-    ToolCard.compact {
-        margin: 0 0 1 0;
-        padding: 0 1;
-        background: #10131b;
-        border-left: thick #3b82f6;
-    }
-    ToolCard.compact .tool-output {
-        max-height: 16;
-        margin: 1 0 0 0;
-        padding: 0 1;
-        background: #0b0f16;
-    }
-    """
-
-    def __init__(self, tool_name: str, args_summary: str = "") -> None:
-        super().__init__()
-        self.tool_name = tool_name
-        self.args_summary = args_summary[:120]
-        self.status = "running"
-        self.output = ""
-        self.result_summary = ""
-        self.compact = tool_name in READ_ONLY_DISPLAY_TOOLS
-        if self.compact:
-            self.add_class("compact")
-        self._collapsible: Collapsible | None = None
-        self._output_widget: Markdown | None = None
-
-    def compose(self):
-        self._output_widget = Markdown("", classes="tool-output")
-        self._collapsible = Collapsible(
-            self._output_widget, title=self._label(), collapsed=self.compact
-        )
-        yield self._collapsible
-
-    def _label(self) -> str:
-        icon = {"running": "…", "success": "✓", "error": "!"}.get(
-            self.status, "•"
-        )
-        tool_name = _display_tool_name(self.tool_name)
-        if self.compact and self.status == "success":
-            parts = [f"✓ {tool_name}"]
-            if self.args_summary:
-                parts.append(self.args_summary)
-            if self.result_summary:
-                parts.append(self.result_summary)
-            return "  │  ".join(parts)
-        label = f"[{icon}] {tool_name}"
-        if self.args_summary:
-            label += f"  │  {self.args_summary}"
-        if self.result_summary:
-            label += f"  │  {self.result_summary}"
-        return label
-
-    def _refresh_label(self) -> None:
-        if self._collapsible is not None:
-            self._collapsible.title = self._label()
-
-    def set_success(self, output: str = "") -> None:
-        self.status = "success"
-        self.output = output
-        self.result_summary = summarize_tool_output(self.tool_name, output) if self.compact else ""
-        self._refresh_label()
-        if self._output_widget is not None:
-            self._output_widget.update(_format_tool_output(output, self.tool_name))
-        if self._collapsible is not None:
-            self._collapsible.collapsed = True
-
-    def set_error(self, output: str = "") -> None:
-        self.status = "error"
-        self.output = output
-        self.result_summary = summarize_tool_output(self.tool_name, output)
-        if self.compact:
-            self.compact = False
-            self.remove_class("compact")
-        self._refresh_label()
-        if self._output_widget is not None:
-            self._output_widget.update(_format_tool_output(output, self.tool_name))
-        if self._collapsible is not None:
-            self._collapsible.collapsed = False
-
-
 class ConfirmPrompt(Static):
     DEFAULT_CSS = """
     ConfirmPrompt {
@@ -489,19 +393,22 @@ class ConfirmPrompt(Static):
     }
     """
 
-    def __init__(self, tool_name: str, args_summary: str) -> None:
+    def __init__(self, tool_name: str, args_summary: str, preview: Text | None = None) -> None:
         super().__init__()
         self.tool_name = tool_name
         self.args_summary = args_summary
+        self.preview = preview
         self.selected = False
 
     def render(self) -> Text:
         allow = "[allow]" if self.selected else " allow "
         deny = " deny " if self.selected else "[deny]"
+        preview = Text.assemble(self.preview, "\n") if self.preview is not None and self.preview.plain else Text("")
         return Text.assemble(
             Text("Approve tool call? ", style="bold yellow"),
             Text(self.tool_name, style="yellow"),
             Text(f" {self.args_summary}\n", style="#ffe8a1"),
+            preview,
             Text("左/右选择，Enter 确认，Esc 拒绝：", style="#c9a227"),
             Text(deny, style="bold red"),
             Text("  "),
@@ -728,8 +635,8 @@ class ChatLog(VerticalScroll):
         self.call_after_refresh(self.scroll_end, animate=False)
         return widget
 
-    def add_tool_call(self, name: str, args: dict | None = None) -> ToolCard:
-        card = ToolCard(tool_name=name, args_summary=format_tool_args(name, args))
+    def add_tool_call(self, name: str, args: dict | None = None, expanded: bool = False) -> ToolCard:
+        card = ToolCard(tool_name=name, args=args or {}, expanded=expanded)
         self.mount(card)
         self.call_after_refresh(self.scroll_end, animate=False)
         return card
@@ -745,6 +652,13 @@ class ChatLog(VerticalScroll):
     def clear_messages(self) -> None:
         for child in list(self.children):
             child.remove()
+
+    def set_tool_cards_expanded(self, expanded: bool) -> int:
+        cards = list(self.query(ToolCard))
+        for card in cards:
+            card.force_expanded = bool(expanded)
+            card.set_expanded(expanded)
+        return len(cards)
 
 
 class ThinkingIndicator(Static):
@@ -787,50 +701,6 @@ class ThinkingIndicator(Static):
         if self.detail:
             label = f"{label}  {self.detail}"
         self.update(label)
-
-
-class StatusBar(Static):
-    DEFAULT_CSS = """
-    StatusBar {
-        height: 1;
-        padding: 0 2;
-        background: #1b1f2a;
-        color: #c5d1e8;
-    }
-    """
-
-    def __init__(self) -> None:
-        super().__init__("")
-        self.turns = 0
-        self.context_text = "context -"
-        self.agent_text = ""
-
-    def update_agent(self, agent) -> None:
-        provider = getattr(agent.model_client, "provider", "")
-        model = getattr(agent.model_client, "model", "")
-        mode = getattr(agent, "runtime_mode", "default")
-        session = _session_display_label(agent, limit=28)
-        workers = list((agent.session.get("workers", {}) or {}).get("items", []) or [])
-        running = sum(1 for item in workers if item.get("status") in {"running", "stopping"})
-        worker_text = f" | agents {running}/{len(workers)}" if workers else ""
-        self.agent_text = (
-            f"provider {provider or '-'} | model {model or '-'} | "
-            f"mode {mode} | session {session}{worker_text}"
-        )
-        self._render_status()
-
-    def update_turns(self, count: int) -> None:
-        self.turns = int(count)
-        self._render_status()
-
-    def update_context_usage(self, usage: dict | None) -> None:
-        self.context_text = _format_context_usage_text(usage, include_bar=True)
-        self._render_status()
-
-    def _render_status(self) -> None:
-        self.update(
-            f"{self.agent_text} | turns {self.turns} | {self.context_text}".strip()
-        )
 
 
 class SlashSuggestions(Static):

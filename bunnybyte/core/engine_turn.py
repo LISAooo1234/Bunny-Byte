@@ -317,7 +317,10 @@ def run_turn(engine, user_message):
             "model_parsed",
             {"run_id": task_state.run_id, "kind": kind, "duration_ms": duration_ms},
         )
-        yield {"type": "model_parsed", "run_id": task_state.run_id, "kind": kind, "duration_ms": duration_ms}
+        yield {
+            "type": "model_parsed", "run_id": task_state.run_id, "kind": kind, "duration_ms": duration_ms,
+            "input_tokens": completion_metadata.get("input_tokens"), "output_tokens": completion_metadata.get("output_tokens"),
+        }
         if kind != "retry":
             protocol_retry_notice = ""
 

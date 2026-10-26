@@ -31,6 +31,7 @@ from .widgets import (
     ThinkingIndicator,
     ToolCard,
     WelcomeBanner,
+    confirm_preview,
     format_tool_args,
 )
 
@@ -70,6 +71,7 @@ class BunnyByteTuiApp(App):
         Binding("enter", "submit_input", "Send", priority=True, show=False),
         Binding("ctrl+x", "stop_turn", "Stop response", priority=True),
         Binding("ctrl+l", "clear_screen", "Clear"),
+        Binding("ctrl+o", "toggle_tool_cards", "Toggle tool cards", show=False),
         Binding("ctrl+q", "quit", "Quit"),
     ]
 
@@ -78,6 +80,7 @@ class BunnyByteTuiApp(App):
         self.agent = agent
         self._turn_count = 0
         self._running_tool_cards: list[ToolCard] = []
+        self._tool_cards_expanded = False
         self._confirm_prompt: ConfirmPrompt | None = None
         self._confirm_decision: tuple[threading.Event, dict] | None = None
         self._ask_user_prompt: AskUserPrompt | None = None
@@ -116,6 +119,9 @@ class BunnyByteTuiApp(App):
     def on_mount(self) -> None:
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(WelcomeBanner).update_agent(self.agent)
+        # --resume 启动时聊天区是空的，但会话已有历史：按历史决定是否收起横幅。
+        if self.agent.session.get("history"):
+            self.query_one(WelcomeBanner).set_collapsed(True)
         self.query_one(ProgressPanel).update_agent(self.agent)
         input_bar = self.query_one(InputBar)
         if hasattr(self.agent, "refresh_skills"):
@@ -140,6 +146,10 @@ class BunnyByteTuiApp(App):
 
     def action_clear_screen(self) -> None:
         self.query_one(ChatLog).clear_messages()
+
+    def action_toggle_tool_cards(self) -> None:
+        self._tool_cards_expanded = not self._tool_cards_expanded
+        self.query_one(ChatLog).set_tool_cards_expanded(self._tool_cards_expanded)
 
     def action_copy_selected_text(self) -> None:
         selection = self.screen.get_selected_text()
@@ -170,6 +180,7 @@ class BunnyByteTuiApp(App):
             self._stop_requested = True
             self.agent.abort_current_turn()
             detail = "正在停止当前回复..."
+            self.query_one(StatusBar).set_stopping()
             self.query_one(InputBar).set_busy(True, stopping=True)
             self.query_one(ThinkingIndicator).set_detail(detail)
             self.query_one(WelcomeBanner).advance_activity(detail)
@@ -221,8 +232,11 @@ class BunnyByteTuiApp(App):
         bar.history_index = len(bar.history)
         bar.input.value = ""
         if text.startswith("/"):
-            self.query_one(ChatLog).add_message("user", text)
             bar.hide_slash_suggestions()
+            if text.split(maxsplit=1)[0] == "/banner":
+                self.query_one(WelcomeBanner).toggle_collapsed()
+                return
+            self.query_one(ChatLog).add_message("user", text)
             self._handle_command(text)
             return
         self.query_one(ChatLog).add_message("user", text)
@@ -380,6 +394,7 @@ class BunnyByteTuiApp(App):
     def _render_session_history(self, notice: str = "") -> None:
         chat = self.query_one(ChatLog)
         chat.clear_messages()
+        self.query_one(WelcomeBanner).set_collapsed(bool(self.agent.session.get("history")))
         for item in self.agent.session.get("history", []):
             role = str(item.get("role", ""))
             content = str(item.get("content", ""))
@@ -403,6 +418,9 @@ class BunnyByteTuiApp(App):
 
     def _run_agent(self, text: str) -> None:
         self._stop_requested = False
+        self._running_tool_cards = []
+        self.query_one(WelcomeBanner).set_collapsed(True)
+        self.query_one(StatusBar).start_turn()
         self.query_one(InputBar).set_busy(True)
         self.query_one(WelcomeBanner).set_activity(True, "思考中")
         self.query_one(ThinkingIndicator).show("按 Ctrl+X / Esc 或点击 Stop 停止")
@@ -439,6 +457,7 @@ class BunnyByteTuiApp(App):
             self.query_one(InputBar).focus_input()
             self._turn_count += 1
             status = self.query_one(StatusBar)
+            status.finish_turn()
             status.update_turns(self._turn_count)
             self.query_one(WelcomeBanner).update_turns(self._turn_count)
             self._refresh_runtime_identity()
@@ -459,6 +478,7 @@ class BunnyByteTuiApp(App):
         input_bar.set_skills(getattr(self.agent, "skills", {}) or {})
 
     def _advance_activity(self) -> None:
+        self.query_one(StatusBar).tick()
         self.query_one(ThinkingIndicator).advance()
         self.query_one(WelcomeBanner).advance_activity()
         self.query_one(ProgressPanel).update_agent(self.agent)
@@ -591,6 +611,7 @@ class BunnyByteTuiApp(App):
             kind = event.get("kind", "")
             if kind in {"tool", "tools"}:
                 self._discard_model_stream()
+            self.query_one(StatusBar).record_model_usage(event.get("input_tokens"), event.get("output_tokens"))
             detail = f"模型返回 {kind}"
             self.query_one(ThinkingIndicator).set_detail(detail)
             self.query_one(WelcomeBanner).advance_activity(detail)
@@ -601,7 +622,7 @@ class BunnyByteTuiApp(App):
             detail = f"运行 {name}"
             self.query_one(ThinkingIndicator).set_detail(detail)
             self.query_one(WelcomeBanner).advance_activity(detail)
-            card = self.query_one(ChatLog).add_tool_call(name, args)
+            card = self.query_one(ChatLog).add_tool_call(name, args, expanded=self._tool_cards_expanded)
             self._running_tool_cards.append(card)
             return
         if event_type == "tool_result":
@@ -627,21 +648,25 @@ class BunnyByteTuiApp(App):
     def _finish_tool_card(self, event: dict) -> None:
         name = str(event.get("name", ""))
         card = None
-        for candidate in reversed(self._running_tool_cards):
+        # 并行工具先全部发出 tool_call，结果再按调用顺序提交，所以取最早的那张同名卡片。
+        for candidate in self._running_tool_cards:
             if candidate.tool_name == name and candidate.status == "running":
                 card = candidate
                 break
         if card is None:
             card = self.query_one(ChatLog).add_tool_call(name, {})
+        else:
+            self._running_tool_cards.remove(card)
         metadata = (
             event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
         )
         content = str(event.get("content", ""))
         status = str(metadata.get("tool_status", "ok") or "ok")
+        duration_ms = event.get("duration_ms")
         if status in {"error", "rejected", "partial_success"}:
-            card.set_error(content)
+            card.set_error(content, duration_ms=duration_ms)
         else:
-            card.set_success(content)
+            card.set_success(content, duration_ms=duration_ms)
 
     def _stop_thinking(self) -> None:
         timer = getattr(self, "_thinking_timer", None)
@@ -744,7 +769,7 @@ class BunnyByteTuiApp(App):
     def _show_confirm(
         self, name: str, args: dict, event: threading.Event, decision: dict
     ) -> None:
-        prompt = ConfirmPrompt(name, format_tool_args(name, args))
+        prompt = ConfirmPrompt(name, format_tool_args(name, args), preview=confirm_preview(name, args))
         self._confirm_prompt = prompt
         self._confirm_decision = (event, decision)
         chat = self.query_one(ChatLog)
