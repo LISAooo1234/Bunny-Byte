@@ -224,11 +224,12 @@ def test_undo_is_refused_while_a_worker_is_running(tmp_path):
     assert "已撤销" in undo(agent)
 
 
-def test_undo_warns_when_git_head_moved_during_the_turn(tmp_path, monkeypatch):
-    for key, value in {"NAME": "t", "EMAIL": "t@t"}.items():
-        monkeypatch.setenv(f"GIT_AUTHOR_{key}", value)
-        monkeypatch.setenv(f"GIT_COMMITTER_{key}", value)
+def test_undo_warns_when_git_head_moved_during_the_turn(tmp_path):
+    # 身份写进仓库配置而不是 GIT_AUTHOR_* 环境变量：run_shell 只传白名单环境变量，
+    # 没有全局 git 身份的 CI 机器上，模型那条 `git commit` 会因此失败。
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True)
     (tmp_path / "a.txt").write_text("v1\n")
     subprocess.run(["git", "add", "a.txt"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "v1"], cwd=tmp_path, check=True)
