@@ -18,6 +18,7 @@ def build_child_runtime(parent, subagent_type, write_scope):
         max_depth=parent.max_depth,
         read_only=subagent_type == "Explore"
         or (subagent_type == "worker" and not write_scope),
+        auto_dream=parent.auto_dream,
         secret_env_names=parent.secret_env_names,
         shell_env_allowlist=parent.shell_env_allowlist,
         feature_flags=parent.feature_flags,

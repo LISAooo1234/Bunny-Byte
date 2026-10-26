@@ -4,6 +4,8 @@
 
 [中文](README.md) | [English](README.EN.md)
 
+[![CI](https://github.com/LISAooo1234/Bunny-Byte/actions/workflows/ci.yml/badge.svg)](https://github.com/LISAooo1234/Bunny-Byte/actions/workflows/ci.yml)
+
 **面向本地代码仓库的终端 Coding Agent**
 
 Bunny Byte 提供 TUI / REPL / CLI 三种交互方式，支持受控工具调用、会话恢复、任务规划、长期记忆和本地运行留痕。  
@@ -33,6 +35,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 任务编排 | 支持 plan mode、todo ledger、`ask_user`、`Explore` / `worker` 子 agent。 |
 | 记忆系统 | 提供 working memory、daily logs、durable topics，以及 `/remember`、`/dream`。 |
 | 验证回执 | 改完代码、准备交卷前，运行时真正跑一遍项目自己的测试；失败就把输出塞回去让模型修，最后给出 ✓/✗ 回执，并拦下“声称测试通过却没跑过”的回答；详见下文「验证回执」。 |
+| 无人值守 | `bunny -p` 给脚本和 CI 用：stdout 只出结果（text / json / stream-json），退出码说明做完没有；`--require-verified` 让退出码绑定“真的跑过且覆盖当前文件的验证回执”；详见下文「无人值守模式」。 |
 | 项目规则 | 仓库里的 `AGENTS.md`、`CLAUDE.md`、`.bunnybyte/rules/*.md` 会放进提示词前缀，有独立预算，超长时明确提示去读原文件；`bunny doctor` 会列出实际读到了哪些；详见下文「项目规则」。 |
 | 空转保护 | 便宜模型常反复读同一个没变的文件。这类“已读/重复调用”不再占用步数预算；连续空转时先暂时收走被重复的只读工具，仍不改就让它不带工具汇报进展并提前收尾（`loop_stalled`），避免烧光 50 步。 |
 | 跑分基准 | `bunny bench` 用真实模型在 8 个固定任务上打分（通过率、步数、token、耗时），结果与历史写入 `benchmarks/results/`；详见 [跑分基准](docs/benchmark.md)。 |
@@ -213,6 +216,7 @@ bunny --resume latest
 bunny --repl
 bunny "修复当前仓库里最先失败的测试"
 bunny doctor            # 环境自检
+bunny -p "修好失败的测试" --approval auto --require-verified   # 无人值守，退出码绑验证回执
 bunny bench             # 跑分基准（会调用真实模型）
 ```
 
@@ -263,6 +267,32 @@ commands = ["pytest -q", "ruff check ."]   # 不写就自动探测
 timeout = 120                      # 单条命令的秒数上限
 max_repair_rounds = 1              # 验证失败后允许模型修复的轮数
 ```
+
+## 无人值守模式
+
+`bunny -p`（`--print`）把 Bunny Byte 接进脚本和 CI：不弹界面、不提问、没有欢迎横幅，stdout 只给结果，**退出码说明这次到底做完没有**。
+
+```bash
+bunny -p "修好 test_calc.py 里失败的测试" --approval auto
+bunny -p "解释这个报错" - < error.log            # 单独的 `-` 表示把 stdin 附在提示词后面；没有参数提示词时 stdin 就是提示词
+bunny -p "修好失败的测试" --approval auto --require-verified && git commit -am "fix"
+bunny -p "总结最近的改动" --output-format json | jq .result
+```
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 正常做完 |
+| 1 | 运行出错（模型/provider 报错、异常） |
+| 2 | 用法或配置错误（没有提示词、`--require-verified` 与 `--verify off` 同用、配置无效） |
+| 3 | 中途停止：步数上限、空转被拦、重试耗尽 |
+| 4 | 只在 `--require-verified` 下出现（3 优先于 4：中途停止的运行不会再报 4）：改了代码，但没有覆盖**当前文件内容**的通过回执（验证失败/超时/被拒绝/不可用/没跑，或验证之后文件又变了） |
+| 130 | 被 Ctrl-C 中断 |
+
+- `--require-verified` 把退出码和验证回执绑在一起：不是模型说“测试过了”，而是运行时真的跑过、并且跑的是当前这版文件。它隐含 `--verify auto`，不能与 `--verify off|ask` 同用（退出码 2）；没改文件或只改了文档不算需要验证（退出码 0）；worker 子 agent 改过的文件也算本次改动；项目里探测不到可跑的检查时，在 `.bunnybyte.toml` 的 `[verify].commands` 里配置。回执命令由你的项目决定，所以只在你信任的仓库里使用。
+- `--output-format text`（默认）：stdout 只有最终回答，进度（`› read_file ...`）和验证提示走 stderr，`-q` 关掉它们。`json`：stdout 是一个结果对象，字段有 `ok`、`exit_code`、`result`、`status`、`stop_reason`、`session_id`、`run_id`、`model`、`tool_steps`、`wasted_steps`、`permission_denials`、`duration_ms`、`usage`（输入/输出/缓存 token，provider 没上报则为 `null`）、`changed_paths`、`verification`（`verdict`、`status`、`commands`、`repairs`）。`stream-json`：每行一个事件（`system` 初始化行、`tool_call`、`tool_result`、`runtime_notice`、`final`…），最后一行是同样的结果对象。
+- 无人值守时永远不会等人确认：审批策略 `ask` 等同 `never`（写文件、跑命令都会被拒绝，拒绝次数记在 `permission_denials` 并在 stderr 提示），需要放行请显式加 `--approval auto`；审批策略不是 `auto` 时只允许启动只读的 Explore 子 agent（写入型 worker 自带放行权限，会绕过拒绝）；`ask_user` 工具不可用；自动 dream、skill 进化等后台学习关闭。
+- 带参数提示词时不会读 stdin（避免被 cron 或其他 agent 的工具 shell 继承来的、永不关闭的 stdin 卡死）；只有没有参数提示词，或参数里有单独的 `-` 时才读（超过 20 万字符会截断并在 stderr 提示）。
+- 不支持斜杠命令和 skill 调用（`bunny -p "/status"` 退出码 2，请直接用自然语言描述任务）；以 `/` 开头的路径（如 `/tmp/app.py 有个 bug`）照常当提示词。可与 `--resume latest`、`--cwd`、`--provider` 等参数组合；`--resume` 找不到会话等启动错误退出码 2，json 格式下 stdout 仍是一个带 `error` 的结果对象。`--output-format`、`-q`、`--require-verified` 不带 `-p` 时报错。
 
 ## 项目规则
 

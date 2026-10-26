@@ -4,6 +4,8 @@
 
 [中文](README.md) | [English](README.EN.md)
 
+[![CI](https://github.com/LISAooo1234/Bunny-Byte/actions/workflows/ci.yml/badge.svg)](https://github.com/LISAooo1234/Bunny-Byte/actions/workflows/ci.yml)
+
 **A terminal coding agent for local repositories**
 
 Bunny Byte provides TUI / REPL / CLI interfaces with controlled tool use,
@@ -37,6 +39,7 @@ stored locally for recovery, review, and debugging.
 | Task orchestration | Includes plan mode, todo ledger, `ask_user`, and `Explore` / `worker` subagents. |
 | Memory | Includes working memory, daily logs, durable topics, `/remember`, and `/dream`. |
 | Verification receipts | Before the agent hands in a turn that changed code, the runtime actually runs the project's own tests, feeds failures back for repair, records a pass/fail receipt, and flags answers that claim "tests pass" without any evidence. See "Verification receipts" below. |
+| Headless mode | `bunny -p` for scripts and CI: stdout carries only the result (text / json / stream-json) and the exit code says whether the job got done; `--require-verified` ties it to a verification receipt that really ran against the current files. See "Headless mode" below. |
 | Project rules | `AGENTS.md`, `CLAUDE.md` and `.bunnybyte/rules/*.md` from the repository are placed in the prompt prefix with their own budget, and a long file is cut with an explicit pointer to read the rest; `bunny doctor` lists what was actually loaded. See "Project rules" below. |
 | Stall guard | Cheap models often re-read a file that has not changed. Those "already read" / repeated-call replies no longer eat the step budget. Repeated waste first takes the repeated read-only tool away for a couple of calls, and a model that still loops is asked to report progress without tools and stopped early (`loop_stalled`) instead of burning all 50 steps. |
 | Benchmark | `bunny bench` scores the agent with a real model on 8 fixed tasks (pass rate, steps, tokens, wall time) and appends results to `benchmarks/results/`. See [Benchmark](docs/benchmark.md). |
@@ -220,6 +223,7 @@ bunny --resume latest
 bunny --repl
 bunny "Fix the first failing test in the current repository"
 bunny doctor            # environment self-check
+bunny -p "Fix the failing tests" --approval auto --require-verified   # headless, exit code tied to a verification receipt
 bunny bench             # live benchmark (calls the real model)
 ```
 
@@ -269,6 +273,32 @@ commands = ["pytest -q", "ruff check ."]   # omit to auto-detect
 timeout = 120                      # per-command seconds
 max_repair_rounds = 1              # repair attempts after a failed check
 ```
+
+## Headless mode
+
+`bunny -p` (`--print`) plugs Bunny Byte into scripts and CI: no UI, no questions, no banner. stdout carries only the result, and **the exit code says whether the job really got done**.
+
+```bash
+bunny -p "Fix the failing test in test_calc.py" --approval auto
+bunny -p "Explain this error" - < error.log      # a lone `-` appends stdin to the prompt; with no prompt argument stdin is the prompt
+bunny -p "Fix the failing tests" --approval auto --require-verified && git commit -am "fix"
+bunny -p "Summarize recent changes" --output-format json | jq .result
+```
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Finished normally |
+| 1 | Run error (model/provider error, exception) |
+| 2 | Usage or config error (no prompt, `--require-verified` with `--verify off`, invalid config) |
+| 3 | Stopped early: step limit, stall guard, retry limit |
+| 4 | Only with `--require-verified` (3 outranks 4: a run that stopped early never reports 4): code changed but there is no passing receipt covering the **current file contents** (verification failed / timed out / declined / unavailable / never ran, or files changed after it) |
+| 130 | Interrupted with Ctrl-C |
+
+- `--require-verified` ties the exit code to the verification receipt: not "the model says tests pass" but the runtime actually ran them against the current version of the files. It implies `--verify auto` and cannot be combined with `--verify off|ask` (exit 2); runs that changed nothing or only docs need no verification (exit 0); files changed by worker subagents count as changes of the run; when no check can be detected, set `[verify].commands` in `.bunnybyte.toml`. The receipt commands come from your project, so only use it in repositories you trust.
+- `--output-format text` (default): stdout is just the final answer; progress (`› read_file ...`) and verification notices go to stderr, `-q` silences them. `json`: stdout is one result object with `ok`, `exit_code`, `result`, `status`, `stop_reason`, `session_id`, `run_id`, `model`, `tool_steps`, `wasted_steps`, `permission_denials`, `duration_ms`, `usage` (input/output/cached tokens, `null` when the provider reports none), `changed_paths` and `verification` (`verdict`, `status`, `commands`, `repairs`). `stream-json`: one event per line (`system` init line, `tool_call`, `tool_result`, `runtime_notice`, `final`, ...) and the same result object as the last line.
+- It never waits for a human: approval policy `ask` behaves like `never` (writes and shell commands are denied, the count lands in `permission_denials` and a note on stderr), so pass `--approval auto` to allow them; unless the policy is `auto` only read-only Explore subagents may be started (write-capable workers carry their own approval and would bypass the denial); the `ask_user` tool is unavailable; background learning (auto dream, skill evolution) is off.
+- With a prompt argument stdin is not read (a stdin inherited from cron or another agent's tool shell may be a pipe that never closes); it is read only when there is no prompt argument or the arguments contain a lone `-` (input beyond 200k characters is truncated, with a note on stderr).
+- Slash commands and skill invocations are not supported (`bunny -p "/status"` exits 2; describe the task in plain language); a prompt that starts with a path such as `/tmp/app.py has a bug` is fine. It combines with `--resume latest`, `--cwd`, `--provider` and the other flags; startup errors such as an unknown `--resume` session exit 2, and with a json format stdout still carries one result object with an `error` field. `--output-format`, `-q` and `--require-verified` are errors without `-p`.
 
 ## Project rules
 

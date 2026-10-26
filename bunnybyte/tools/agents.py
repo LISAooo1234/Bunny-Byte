@@ -45,6 +45,8 @@ def validate_agent_tool(agent, name, args):
             raise ValueError("subagent_type must be worker or Explore")
         if agent.runtime_mode == "plan" and subagent_type != "Explore":
             raise ValueError("plan mode only allows Explore agents")
+        if getattr(agent, "unattended", False) and agent.approval_policy != "auto" and subagent_type != "Explore":
+            raise ValueError("unattended runs without --approval auto only allow Explore agents")
         write_scope = args.get("write_scope", [])
         if write_scope is not None and not isinstance(write_scope, (list, str)):
             raise ValueError("write_scope must be a list of workspace paths")

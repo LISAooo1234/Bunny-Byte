@@ -1,7 +1,6 @@
 """bench 运行器：为每个任务搭一个临时 git 仓库，驱动真实 agent 跑完，再用 verifier 判分。"""
 
 import contextlib
-import json
 import os
 import re
 import shlex
@@ -14,6 +13,7 @@ import time
 from pathlib import Path
 from unittest import mock
 
+from ..core.run_usage import trace_usage
 from ..core.runtime import BunnyByte
 from ..core.session_store import SessionStore
 from ..core.verification import VerifyConfig, claims_verified
@@ -69,27 +69,6 @@ def isolated_home(path):
     """让 ~/.bunnybyte/skills 等用户级状态不影响 bench，保证结果可比。"""
     with mock.patch.object(Path, "home", return_value=Path(path)):
         yield
-
-
-def trace_usage(trace_path):
-    """汇总 trace 里每次模型调用上报的 token；provider 没上报就返回 None，而不是 0。"""
-    totals = {"input_tokens": None, "output_tokens": None, "cached_tokens": None}
-    path = Path(trace_path)
-    if not path.exists():
-        return totals
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("event") != "model_parsed":
-            continue
-        metadata = event.get("completion_metadata") or {}
-        for key in totals:
-            value = metadata.get(key)
-            if isinstance(value, int) and not isinstance(value, bool):
-                totals[key] = (totals[key] or 0) + value
-    return totals
 
 
 def _tail(text, limit=300):

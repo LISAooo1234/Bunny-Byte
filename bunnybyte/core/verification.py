@@ -303,6 +303,14 @@ def _run_plain(command, cwd, env, timeout, agent):
         start_new_session=True,
     )
     deadline = time.monotonic() + timeout
+    try:
+        return _wait(process, deadline, agent)
+    except BaseException:
+        _kill_group(process)  # Ctrl-C 等中断：start_new_session 下 SIGINT 到不了子进程，不能留下孤儿 pytest
+        raise
+
+
+def _wait(process, deadline, agent):
     while True:
         try:
             output, _ = process.communicate(timeout=max(0.05, min(0.5, deadline - time.monotonic())))

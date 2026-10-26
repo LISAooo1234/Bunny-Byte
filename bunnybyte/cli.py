@@ -6,6 +6,7 @@
 """
 
 import argparse
+import contextlib
 import getpass
 import json
 import os
@@ -516,6 +517,29 @@ def build_arg_parser():
         "--repl",
         action="store_true",
         help="使用普通行式 REPL，而不是 TUI。",
+    )
+    parser.add_argument(
+        "-p",
+        "--print",
+        action="store_true",
+        help="无人值守模式：不弹界面、不提问，stdout 只输出结果，退出码反映是否做完（0 完成 / 1 出错 / 3 中途停止 / 4 未验证）。提示词来自参数或管道 stdin。",
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=("text", "json", "stream-json"),
+        default="text",
+        help="-p 的输出格式：text 只输出最终回答；json 输出一个结果对象；stream-json 逐行输出事件，最后一行是结果对象。",
+    )
+    parser.add_argument(
+        "--require-verified",
+        action="store_true",
+        help="-p 下要求改动有通过的验证回执，否则退出码 4；隐含 --verify auto。",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="-p 下不向 stderr 输出进度与验证提示。",
     )
     return parser
 
@@ -1550,6 +1574,45 @@ def interaction_mode(args):
     return "repl"
 
 
+SLASH_COMMAND_RE = re.compile(r"^/[A-Za-z][\w-]*(\s|$)")
+
+
+def run_print_mode(args):
+    """bunny -p：见 headless.py。启动阶段的任何输出都挪到 stderr，stdout 只留给结果。"""
+    from . import headless
+
+    def usage_error(message):
+        return headless.startup_failure(message, args.output_format)
+
+    if args.require_verified and args.verify not in (None, "auto"):
+        return usage_error("--require-verified 需要验证闸门自动运行，不能和 --verify off / ask 同用。")
+    if args.require_verified:
+        args.verify = "auto"
+    piped = headless.read_piped_stdin(sys.stdin) if headless.wants_stdin(args.prompt) else ""
+    if len(piped) >= headless.STDIN_LIMIT:
+        print(f"bunny: stdin 超过 {headless.STDIN_LIMIT} 字符，已截断。", file=sys.stderr)
+    prompt = headless.merge_prompt(args.prompt, piped)
+    if not prompt:
+        return usage_error("bunny -p 需要提示词：写在参数里，或通过管道传入 stdin。")
+    if SLASH_COMMAND_RE.match(prompt):
+        return usage_error("bunny -p 不支持斜杠命令和 skill 调用，请直接用自然语言描述任务。")
+    args.prompt = [prompt]
+    args.no_auto_dream = True
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            agent = build_agent(args)
+    except (ValueError, OSError) as exc:  # JSONDecodeError 是 ValueError；--resume 找不到会话是 FileNotFoundError
+        return usage_error(f"{type(exc).__name__}: {exc}" if isinstance(exc, OSError) else str(exc))
+    headless.prepare_agent(agent)
+    return headless.run_headless(
+        agent,
+        prompt,
+        output_format=args.output_format,
+        require_verified=args.require_verified,
+        quiet=args.quiet,
+    )
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -1566,6 +1629,11 @@ def main(argv=None):
         return run_bench_command(argv[1:])
 
     args = build_arg_parser().parse_args(argv)
+    if args.print:
+        return run_print_mode(args)
+    if args.output_format != "text" or args.quiet or args.require_verified:
+        print("--output-format / --require-verified / -q 只能和 -p 一起使用。", file=sys.stderr)
+        return 2
     try:
         agent = build_agent(args)
     except ValueError as exc:

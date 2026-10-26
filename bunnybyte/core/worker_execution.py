@@ -14,6 +14,16 @@ def _result_preview(text):
     return clip(" | ".join(lines[:3]), 320)
 
 
+def _merge_changed_paths(parent, child_state):
+    """worker 改过的文件算进主 agent 本回合的改动：验证闸门和 --require-verified 才不会漏掉它们。"""
+    parent_state = getattr(parent, "current_task_state", None)
+    if parent_state is None or child_state is None:
+        return
+    for path in child_state.changed_paths:
+        if path not in parent_state.changed_paths:
+            parent_state.changed_paths.append(path)
+
+
 def run_worker(manager, task, prompt, action):
     item = manager._get_item(task.id)
     with manager._lock:
@@ -34,6 +44,7 @@ def run_worker(manager, task, prompt, action):
         result = f"error: worker failed: {exc}"
         status = "failed"
     task_state = getattr(task.runtime, "current_task_state", None)
+    _merge_changed_paths(manager.runtime, task_state)
     with manager._lock:
         item.update(
             {

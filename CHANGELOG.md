@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- 新增无人值守模式 `bunny -p`（`--print`）：不弹界面、不提问、没有欢迎横幅，stdout 只给结果；`--output-format text|json|stream-json`；退出码 0 完成 / 1 出错 / 2 用法错误 / 3 中途停止 / 130 中断。`--require-verified` 让退出码绑定验证回执：改了代码却没有覆盖当前文件内容的通过回执就返回 4（隐含 `--verify auto`，纯文档改动不需要）。无人值守时审批策略 `ask` 等同 `never`（不再阻塞在 `input()`，拒绝次数记在 `permission_denials`），`ask_user`、自动 dream 与 skill 进化关闭；带参数提示词时不读 stdin，参数里写单独的 `-` 才把管道内容附在提示词后面；`-q` 静默 stderr 进度。不支持斜杠命令/skill；启动错误（如 `--resume` 找不到会话）退出码 2 且 json 格式下 stdout 仍是结果对象。审批策略不是 auto 时只允许 Explore 子 agent；worker 改过的文件现在算进主 agent 本回合的 `changed_paths`（验证闸门因此也会验证 worker 的改动）；子 agent 继承 `auto_dream` 设置；验证命令运行期间 Ctrl-C 会杀掉整个进程组。另：`bunny bench` 的 `trace_usage` 移到 `core/run_usage.py`，修复 `datetime.utcnow()` 弃用警告，新增 GitHub Actions CI（pytest + ruff，Python 3.10–3.13）。
 - 新增项目规则：`AGENTS.md`、`CLAUDE.md`、`.bunnybyte/rules/*.md` 进入提示词前缀，每个文件最多 6000 字、合计 12000 字，超出时在提示词里写明截断量并指向原文件（以前 `AGENTS.md` 只有 1200 字片段，`CLAUDE.md` 和 rules 目录读不到）；从子目录启动时子目录规则排在后面；规则文件变化会重建前缀；`bunny doctor` 新增“项目规则”一行。顺带修复：提示词前缀第一次刷新后，从子目录启动的会话会丢掉启动目录（工作区 cwd 被重置为仓库根目录）。
 - 修复 `run_shell` 被误拦：`cd X && python3 -m unittest | tail && cat result.txt`、`make && cat log` 这类“真正在干活、末尾顺带看一眼”的复合命令以前会因为段首的 `cat` 被判成“该用 search/read_file”，现在只拦整条命令都只是查看/搜索的情况；引号里的 `&&`、`;`、heredoc 正文不再被当成分隔符。
 - 验证回执：测试文件是直接运行的断言脚本（没有 unittest / pytest）时，闸门改为直接运行这些脚本，而不是 unittest 收集到 0 个测试后显示“没有收集到测试”；模型自己跑过 `python3 test_x.py` 也算证据；`pytest | tail`、`pytest; echo done`、`pytest || true` 的退出码不再被当成测试通过的证据。
