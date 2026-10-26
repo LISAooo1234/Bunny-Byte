@@ -51,10 +51,11 @@ def final(text="完成。"):
 
 
 def all_tasks():
-    from .catalog_fix import FIX_TASKS
     from .catalog_build import BUILD_TASKS
+    from .catalog_fix import FIX_TASKS
+    from .catalog_ripple import RIPPLE_TASKS
 
-    return [*FIX_TASKS, *BUILD_TASKS]
+    return [*FIX_TASKS, *BUILD_TASKS, *RIPPLE_TASKS]
 
 
 def select_tasks(ids=None):

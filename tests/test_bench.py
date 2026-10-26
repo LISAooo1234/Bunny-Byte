@@ -31,8 +31,8 @@ def oracle_client(task):
 
 
 def test_task_catalog_is_small_fixed_and_well_formed():
-    assert len(TASKS) == 8
-    assert len(set(TASK_IDS)) == 8
+    assert len(TASKS) == 10
+    assert len(set(TASK_IDS)) == 10
     for task in TASKS:
         assert task.prompt and task.files and task.solution
         assert task.verifier or task.answer_regex

@@ -10,6 +10,9 @@
 - 空转升级链：近 8 次工具结果里有 5 次空转（或累计 8 次）时，下两次请求暂时收走被重复的只读工具（read_file / list_files / search；原生 tool calling 下才真正从工具列表移除，文本协议下只提示）并提示，重复的是 run_shell / patch_file 时只提示不收走；收走之后仍有 4 次空转，就不带工具让模型汇报进展并以新的停止原因 `loop_stalled` 提前收尾，回答里明确写出任务可能未完成。一次真实的文件修改会清零计数。
 - 新增 `task_state.wasted_steps` / report.json 的 `wasted_steps`，trace 增加 `stall_quarantine` / `stall_stop` 事件；`bunny bench` 每行显示“空转 N”，汇总新增平均空转步数、撞上限次数、`loop_stalled` 次数、每个通过任务的模型调用与 token。
 - 新增验证回执：模型改完代码准备交卷时，运行时自动运行 `[verify].commands`（未配置则按改动探测 pytest / unittest / npm test / 语法检查），失败就把输出尾部反馈给模型修复（默认 1 轮，不占 `max_steps`），每条命令留下回执（命令、退出码、耗时、脱敏输出），写入 task_state、report.json 和 trace；回答声称“测试通过”却没有任何回执会被警告。步数预算耗尽的运行也会留下回执。新增 `--verify off|ask|auto` 与 `[verify]` 配置，默认 `ask` 遵循审批策略。
+- `bunny bench` 新增 2 道“改动牵连”任务（`fix_keeps_cjk_slug`、`change_default_everywhere`）：提示词只点名一个失败的测试，顺手的改法会弄坏另一个没被点名的测试；任务集 10 道，指纹变化，旧结果不再参与比较。`deepseek-v4-flash` 不开闸门 12/12 通过（每题 6 次），陷阱没有咬到该模型，所以还没有“闸门提高通过率”的实测数字。
+- 修复验收脚本 `scripts/run_real_session_acceptance.py` 依赖本机装了 `uv` 才能通过的问题（`bugfix_pytest` 场景改用当前解释器跑 pytest），GitHub Actions 的测试步骤因此在没有 `uv` 的 Linux 上红。
+- 修复 GitHub Actions 的 Lint 一直红：`ruff` 新版默认规则大幅增多，`pyproject.toml` 现在固定规则集（E4/E7/E9/F）；CI 的测试步骤会把失败用例列成注解。
 - `bunny bench --verify`：开启验证闸门跑分，结果单独对比；所有跑分汇总新增“声称已验证但判分未过”计数。
 
 ## 0.5.0
