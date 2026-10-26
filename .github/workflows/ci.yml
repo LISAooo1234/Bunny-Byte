@@ -22,4 +22,9 @@ jobs:
       - name: Lint
         run: ruff check .
       - name: Test
-        run: pytest tests/ -q
+        run: |
+          set +e
+          pytest tests/ -q -rfE --tb=short 2>&1 | tee pytest.out
+          code=${PIPESTATUS[0]}
+          grep -E '^(FAILED|ERROR) ' pytest.out | head -20 | sed 's/^/::error::/'
+          exit $code
