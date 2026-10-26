@@ -1,7 +1,8 @@
 # Changelog
 
-## 未发布
+## 0.6.0
 
+- 验证回执有了实测收益：`Claude Haiku 4.5` 在陷阱任务 `change_default_everywhere` 上不开闸门 0/5 通过（其中 3 次回答声称已验证），开闸门 4/4 通过（每次 1 轮修复），代价是步数和输入 token 约翻倍；对 `deepseek-v4-flash` 没有收益（本来就 12/12）。样本很小，数字与文件见 README「验证回执」和 `docs/benchmark.md`。首次保存了 10 题完整基线（`oneapi-haiku`，9/10 通过，平均 10.3 步，唯一失败的正是上述陷阱）。
 - 新增钩子 `[[hooks.pre_tool]]` / `[[hooks.post_tool]]` / `[[hooks.on_final]]`：在 `.bunnybyte.toml` 里配置 shell 命令，工具执行前拦截（退出码 2，理由原样返回给模型，不弹审批）、写文件后格式化/lint（退出码 2 的输出追加到工具结果）、模型交卷时扣住最终回答让它继续（`max_final_rounds` 轮，不占模型调用预算）。钩子从 stdin 读 JSON（字段名参考 Claude Code 的钩子，但工具名和路径字段不同，并不兼容现成脚本），环境经过过滤；`post_tool` 在工作区快照之前运行，格式化钩子改的文件计入本轮改动、`/undo` 可撤销；超时或中断会杀掉整个进程组；后台进程不会拖住钩子；出错默认放行并警告，`on_error = "block"` 则拦截。仓库里的 `.bunnybyte.toml` 钩子默认不运行，`/hooks` 查看、`/hooks trust` 记录指纹后启用，配置一改信任作废，仓库自带的 `.env` 不能给自己授信；子 agent 受 pre/post 钩子约束。`bunny -p` 下 `on_final` 在反馈轮次用完后仍拦截时退出码为 5（JSON 的 `hooks.final_blocked`）。新增 `/hooks` 命令、`bunny doctor` 的“钩子”一行、trace 的 `hook_run` 事件和 report.json 的 `hooks`，文档见 docs/hooks.md。
 - 新增 `/undo`、`/undo list`、`/undo --force`：把最近一轮 agent 对文件的改动还原（只动那一轮改过的文件；那一轮结束之后又被改过就一个文件也不动并列出冲突，`--force` 才覆盖；再按一次继续撤销更早的一轮；有子任务运行时拒绝；那一轮期间 git HEAD 变过会提醒；撤销后给模型留一条系统提示）。快照放在 `.bunnybyte/shadow.git`，一个由 `GIT_DIR` 驱动的私有 git 对象库，不碰用户自己仓库的 index / refs / 配置 / hook；遵守 `.gitignore`，跳过 `node_modules` 等依赖目录，8 MB 以上的新增未跟踪文件不入库；`write_file` / `patch_file` 点名的目标即使被忽略也会追踪。
 - 修复大仓库里工具调用极慢、检查点极占磁盘：以前每次有风险的工具调用把整个工作区逐文件 sha256 两遍，每个检查点还把整个工作区拷贝一份（超过 20 MB 就悄悄放弃回滚）。在 800 个源文件加 15,000 个文件的 `node_modules`（已 gitignore）的仓库里，一个只写一个文件的回合，快照开销 18.3 秒 / 187 MB 降到 0.6 秒 / 不到 1 MB。检查点现在记录快照 tree（`shadow_tree`），`/rollback` 从 tree 恢复，不再有 20 MB 上限；旧版本的拷贝式检查点仍可回滚。没有 git 或工作区含嵌套 git 仓库时退回逐文件哈希（现在跳过依赖目录、缓存未改文件、改用 git blob sha1），`/undo` 不可用；`BUNNYBYTE_SHADOW=off` 可关闭。已知取舍：被 `.gitignore` 忽略的文件不再计入本回合的改动文件（显式的 `write_file` / `patch_file` 目标除外），所以只改了忽略路径时验证闸门不会触发。

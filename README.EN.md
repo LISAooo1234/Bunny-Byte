@@ -253,7 +253,7 @@ First baseline (0.5.0, `deepseek-v4-flash`, 2 runs per task, step ceiling 50): 1
 
 With the stall guard (same task set, 2 runs per task, captured from an uncommitted working tree): still 16/16 passed; 0 of 16 runs hit the step ceiling (baseline: 1) and 1 run was ended early as stalled. Average model calls went 14.3 → 12.7 and total wall time 366s → 327s, but 16 runs are noisy and neither is a conclusion. Uncached input tokens actually rose 378k → 459k (about 25.9k → 30.7k tokens per passed task), so this is not a cost-saving feature. What is solid: the bench now counts repeated or no-new-information tool calls as wasted steps, 5.6 per task on average, about 30% of all steps, so the cheap model's waste is mostly re-reading rather than being unable to solve the task. Full results are in [`benchmarks/results/`](benchmarks/results/).
 
-There are 10 tasks, so one task is 10 percentage points and a single run can move by one task as noise; average steps and tokens are the more sensitive regression signals. The historical numbers above come from the original 8 tasks (a different task-set hash, so they are never compared with newer results). The 2 newer "ripple" tasks are traps built on purpose (the obvious fix breaks a test the prompt did not name) to exercise the verification gate; on `deepseek-v4-flash` they passed 12/12 even without the gate (6 runs each), so the trap did not bite this model and there is currently no measured "the gate raises the pass rate" number. Details: [Benchmark](docs/benchmark.md) (Chinese).
+There are 10 tasks, so one task is 10 percentage points and a single run can move by one task as noise; average steps and tokens are the more sensitive regression signals. The historical numbers above come from the original 8 tasks (a different task-set hash, so they are never compared with newer results). The 2 newer "ripple" tasks are traps built on purpose (the obvious fix breaks a test the prompt did not name) to exercise the verification gate; on `deepseek-v4-flash` they passed 12/12 even without the gate (the trap did not bite that model), but on `Claude Haiku 4.5` `change_default_everywhere` went 0/5 without the gate and 4/4 with it (see "Verification receipts" below). Details: [Benchmark](docs/benchmark.md) (Chinese).
 
 ## Undo and snapshots
 
@@ -266,7 +266,11 @@ There are 10 tasks, so one task is 10 percentage points and a single run can mov
 
 ## Verification receipts
 
-Cheap models love to say "tests pass" without running anything. Bunny Byte makes "verify before you hand in" a runtime rule instead of a sentence in the prompt:
+Cheap models love to say "tests pass" without running anything. Bunny Byte makes "verify before you hand in" a runtime rule instead of a sentence in the prompt.
+
+**Measured** (`bunny bench`, `Claude Haiku 4.5`, trap task `change_default_everywhere`: the prompt names one failing test and the obvious fix breaks a test it did not name): **0/5** passed without the gate, and in 3 of those runs the final answer claimed the work was verified; **4/4** passed with the gate, each time because the gate ran the whole suite, saw the other test fail, fed the output back, and the model fixed it. The price is roughly double the steps and tokens (7.8 → 14.3 steps, about 76k → 150k input tokens per run). The sample is small (one task, one model, 4-5 runs per condition), and for a model that already runs the whole suite on its own (`deepseek-v4-flash`, 12/12 without the gate) it buys nothing: it catches models that stop after running only the test they were told about. Offline tests with a scripted model prove the same causal chain.
+
+What the runtime does:
 
 - When the model is about to give its final answer and the turn changed code, the runtime runs the project's checks: `[verify].commands` if configured, otherwise detected from what changed (pytest or unittest, `npm test`, or a `compileall` syntax check for Python projects without tests; pytest projects run the tests related to the change first so failures surface sooner).
 - On failure the output tail is written back into the session as a `verify` entry, the final answer is held back and the model keeps repairing (1 round by default, `max_repair_rounds`). The check does not consume `max_steps`. If the failure predates the change, the model may say so in its answer instead of editing.

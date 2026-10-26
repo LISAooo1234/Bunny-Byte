@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bunnybyte-agent"
-version = "0.5.0"
+version = "0.6.0"
 description = "BunnyByte, a local coding agent for OpenAI-compatible, Anthropic-compatible, and DeepSeek models"
 requires-python = ">=3.10"
 dependencies = [
