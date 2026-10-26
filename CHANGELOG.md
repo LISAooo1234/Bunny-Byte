@@ -7,6 +7,10 @@
 - 修复并行工具调用（如同一批两次 `read_file`）的结果和耗时显示在错误的卡片上：结果按调用顺序提交，界面却匹配最新的同名卡片。`tool_result` 事件（含验证与钩子）新增 `duration_ms`，`model_parsed` 事件新增 `input_tokens` / `output_tokens`。
 - 修复 `/resume`、`/fork` 回放的工具卡片展开后是空的：卡片在挂载前拿到结果时，输出被 Markdown 挂载时的初始内容覆盖；工具极快完成时实时卡片也会如此。
 
+- `@path` 文件提及：`修一下 @calc.py 的 add` 发送后、第一次调用模型前由运行时执行 `read_file`（目录用 `list_files`），走普通工具路径（历史、读取台账、prior-read 凭证、事件、trace 都一样），不占 `max_steps`；TUI 输入 `@` 弹出文件补全；REPL / 一次性命令 / `bunny -p`（只解析参数，不解析 stdin）同样支持；每条最多 5 个、单个 256 KB，二进制跳过，像路径却找不到的给提示。worker、skill、dream 等走 `Engine.ask()` 的内部提示词不会触发预读。
+- 修复 TUI 粘贴多行文本只剩第一行（Textual `Input` 的默认行为）：多行粘贴显示为占位符 `[粘贴 #1 · 23 行]`，发送时展开成完整内容，↑ 翻出的历史同样展开；粘贴内容里的 `@decorator` 不算文件提及。
+- TUI 运行指示：每次模型请求 / 工具调用单独计时，流式输出时显示已输出字数与估算 token（汉字约 1 字 1 token）。
+
 ## 0.6.0
 
 - 验证回执有了实测收益：`Claude Haiku 4.5` 在陷阱任务 `change_default_everywhere` 上不开闸门 0/5 通过（其中 3 次回答声称已验证），开闸门 4/4 通过（每次 1 轮修复），代价是步数和输入 token 约翻倍；对 `deepseek-v4-flash` 没有收益（本来就 12/12）。样本很小，数字与文件见 README「验证回执」和 `docs/benchmark.md`。首次保存了 10 题完整基线（`oneapi-haiku`，9/10 通过，平均 10.3 步，唯一失败的正是上述陷阱）。

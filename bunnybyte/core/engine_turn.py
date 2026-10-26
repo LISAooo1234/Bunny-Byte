@@ -11,6 +11,7 @@ from .engine_helpers import (
     request_step_limit_summary,
     should_retry_model_error,
 )
+from .file_mentions import preload_mentions
 from .hook_gate import final_hook_gate
 from .model_errors import finish_model_error
 from .model_stream import complete_model_with_deltas
@@ -76,7 +77,7 @@ def _merge_provider_usage_into_context_usage(prompt_metadata, completion_metadat
     prompt_metadata["context_usage"] = context_usage
 
 
-def run_turn(engine, user_message):
+def run_turn(engine, user_message, mention_text=None):
     agent = engine.runtime
     agent.ensure_session_started()
     run_started_at = time.monotonic()
@@ -104,6 +105,8 @@ def run_turn(engine, user_message):
         "run_started",
         {"task_id": task_state.task_id, "user_request": clip(user_message, 300)},
     )
+    if mention_text:
+        yield from preload_mentions(engine, task_state, user_message, mention_text)
 
     tool_steps = 0
     attempts = 0

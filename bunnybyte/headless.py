@@ -187,6 +187,7 @@ def run_headless(
     quiet=False,
     stdout=None,
     stderr=None,
+    mention_text=None,
 ):
     out = stdout or sys.stdout
     err = stderr or sys.stderr
@@ -220,7 +221,8 @@ def run_headless(
     try:
         # 工具或第三方库偶尔会直接 print；整个回合期间把 stdout 指向 stderr，保证 stdout 只有我们写的内容
         with contextlib.redirect_stdout(err):
-            for event in agent.engine.run_turn(prompt):
+            # 只预读参数里写的 @path；管道进来的 stdin（diff 的 @@、日志）不当成提及。
+            for event in agent.engine.run_turn(prompt, mention_text=mention_text):
                 kind = event.get("type")
                 if kind == "tool_result" and str(event.get("content", "")).startswith(DENIED_PREFIX):
                     denials += 1

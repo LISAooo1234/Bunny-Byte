@@ -1508,11 +1508,12 @@ def _stream_print(text, *, chunk_size=12, delay=0.012):
 
 def _print_turn_stream(agent, user_message):
     final_answer = ""
+    is_slash = str(user_message or "").lstrip().startswith("/")
     stream_open = False
     stream_buffer = ""
     stream_preview = ""
     native_stream = bool(getattr(agent.model_client, "supports_native_tools", False))
-    for event in agent.engine.run_turn(user_message):
+    for event in agent.engine.run_turn(user_message, mention_text=None if is_slash else user_message):
         event_type = str(event.get("type", ""))
         if event_type == "model_requested":
             stream_buffer = ""
@@ -1618,6 +1619,7 @@ def run_print_mode(args):
     piped = headless.read_piped_stdin(sys.stdin) if headless.wants_stdin(args.prompt) else ""
     if len(piped) >= headless.STDIN_LIMIT:
         print(f"bunny: stdin 超过 {headless.STDIN_LIMIT} 字符，已截断。", file=sys.stderr)
+    typed_prompt = headless.merge_prompt(args.prompt, "")
     prompt = headless.merge_prompt(args.prompt, piped)
     if not prompt:
         return usage_error("bunny -p 需要提示词：写在参数里，或通过管道传入 stdin。")
@@ -1637,6 +1639,7 @@ def run_print_mode(args):
         output_format=args.output_format,
         require_verified=args.require_verified,
         quiet=args.quiet,
+        mention_text=typed_prompt,
     )
 
 

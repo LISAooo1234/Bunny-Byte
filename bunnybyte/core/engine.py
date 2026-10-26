@@ -51,8 +51,10 @@ class Engine:
                 "content": notification,
             }
 
-    def run_turn(self, user_message):
-        yield from run_turn_impl(self, user_message)
+    def run_turn(self, user_message, mention_text=None):
+        # mention_text：用户亲手输入的那部分文字，其中的 `@path` 会在第一次模型调用前预读；
+        # 只有 TUI / REPL / headless 入口传它，worker、skill、dream 走 ask() 不会触发预读。
+        yield from run_turn_impl(self, user_message, mention_text=mention_text)
 
     @staticmethod
     def _looks_like_premature_final(final, task_state):

@@ -128,6 +128,7 @@ class BunnyByteTuiApp(App):
             self.agent.refresh_skills()
         input_bar.set_provider_profiles(provider_profiles_for_agent(self.agent))
         input_bar.set_skills(getattr(self.agent, "skills", {}) or {})
+        input_bar.set_workspace_root(getattr(self.agent, "root", None))
         input_bar.focus_input()
         self.set_interval(0.5, self._drain_idle_worker_notifications)
         if should_prompt_memory_scope_startup(self.agent):
@@ -217,6 +218,8 @@ class BunnyByteTuiApp(App):
         text = bar.input.value.strip()
         if not text or bar.input.disabled:
             return
+        if bar.mention_completion_pending() and bar.complete_slash_suggestion():
+            return
         selected_command = None
         candidate = bar.selected_slash_suggestion()
         if text.startswith("/") and candidate is not None:
@@ -231,16 +234,18 @@ class BunnyByteTuiApp(App):
         bar.history.append(text)
         bar.history_index = len(bar.history)
         bar.input.value = ""
+        bar.hide_slash_suggestions()
+        # 聊天区显示占位符（不刷屏），发给运行时的是展开后的完整粘贴内容。
+        full_text = bar.input.expand(text)
         if text.startswith("/"):
-            bar.hide_slash_suggestions()
             if text.split(maxsplit=1)[0] == "/banner":
                 self.query_one(WelcomeBanner).toggle_collapsed()
                 return
             self.query_one(ChatLog).add_message("user", text)
-            self._handle_command(text)
+            self._handle_command(full_text)
             return
         self.query_one(ChatLog).add_message("user", text)
-        self._run_agent(text)
+        self._run_agent(full_text, mention_text=bar.input.strip_tokens(text))
 
     def on_key(self, event: Key) -> None:
         if self._memory_session_prompt is not None:
@@ -416,7 +421,7 @@ class BunnyByteTuiApp(App):
             return f"{format_tool_args(name, args)} -> {content}"
         return format_tool_args(name, args)
 
-    def _run_agent(self, text: str) -> None:
+    def _run_agent(self, text: str, mention_text: str | None = None) -> None:
         self._stop_requested = False
         self._running_tool_cards = []
         self.query_one(WelcomeBanner).set_collapsed(True)
@@ -425,7 +430,7 @@ class BunnyByteTuiApp(App):
         self.query_one(WelcomeBanner).set_activity(True, "思考中")
         self.query_one(ThinkingIndicator).show("按 Ctrl+X / Esc 或点击 Stop 停止")
         self._thinking_timer = self.set_interval(0.3, self._advance_activity)
-        self._agent_task_handle = asyncio.create_task(self._agent_task(text))
+        self._agent_task_handle = asyncio.create_task(self._agent_task(text, mention_text))
 
     def _drain_idle_worker_notifications(self) -> None:
         if self.query_one(InputBar).input.disabled:
@@ -440,10 +445,10 @@ class BunnyByteTuiApp(App):
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(WelcomeBanner).update_agent(self.agent)
 
-    async def _agent_task(self, text: str) -> None:
+    async def _agent_task(self, text: str, mention_text: str | None = None) -> None:
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, partial(self._drive_turn, text))
+            await loop.run_in_executor(None, partial(self._drive_turn, text, mention_text))
         except Exception as exc:
             self.query_one(ChatLog).add_message("assistant", f"[错误] {exc}")
         finally:
@@ -483,8 +488,8 @@ class BunnyByteTuiApp(App):
         self.query_one(WelcomeBanner).advance_activity()
         self.query_one(ProgressPanel).update_agent(self.agent)
 
-    def _drive_turn(self, text: str) -> None:
-        for event in self.agent.engine.run_turn(text):
+    def _drive_turn(self, text: str, mention_text: str | None = None) -> None:
+        for event in self.agent.engine.run_turn(text, mention_text=mention_text):
             try:
                 self.call_from_thread(self._handle_runtime_event, dict(event))
             except RuntimeError:
@@ -597,15 +602,16 @@ class BunnyByteTuiApp(App):
             self._reset_model_stream()
             attempts = event.get("attempts", 0)
             tool_steps = event.get("tool_steps", 0)
-            detail = f"model request {attempts}, tools {tool_steps}"
-            self.query_one(ThinkingIndicator).set_detail(detail)
+            detail = f"第 {attempts} 次请求 · 已用 {tool_steps} 步"
+            self.query_one(ThinkingIndicator).start_phase("思考中", detail)
             self.query_one(WelcomeBanner).advance_activity(detail)
             return
         if event_type == "model_delta":
-            self._append_model_stream_delta(str(event.get("content", "")))
-            detail = f"接收模型输出 {event.get('total_chars', 0)} 字符"
-            self.query_one(ThinkingIndicator).set_detail(detail)
-            self.query_one(WelcomeBanner).advance_activity(detail)
+            delta = str(event.get("content", ""))
+            self._append_model_stream_delta(delta)
+            # 只累计字数；动画和重绘交给 0.3s 定时器，不按 token 速度刷新。
+            self.query_one(ThinkingIndicator).add_output(delta)
+            self.query_one(WelcomeBanner).advance_activity(f"接收模型输出 {event.get('total_chars', 0)} 字符")
             return
         if event_type == "model_parsed":
             kind = event.get("kind", "")
@@ -620,7 +626,8 @@ class BunnyByteTuiApp(App):
             name = str(event.get("name", ""))
             args = event.get("args") if isinstance(event.get("args"), dict) else {}
             detail = f"运行 {name}"
-            self.query_one(ThinkingIndicator).set_detail(detail)
+            source = "预读 @ 文件" if event.get("source") == "mention" else ""
+            self.query_one(ThinkingIndicator).start_phase(detail, source)
             self.query_one(WelcomeBanner).advance_activity(detail)
             card = self.query_one(ChatLog).add_tool_call(name, args, expanded=self._tool_cards_expanded)
             self._running_tool_cards.append(card)
@@ -628,7 +635,7 @@ class BunnyByteTuiApp(App):
         if event_type == "tool_result":
             self._finish_tool_card(event)
             self.query_one(ProgressPanel).update_agent(self.agent)
-            self.query_one(ThinkingIndicator).set_detail("工具完成，继续思考")
+            self.query_one(ThinkingIndicator).start_phase("思考中", "工具完成")
             self.query_one(WelcomeBanner).advance_activity("工具完成，继续思考")
             return
         if event_type == "worker_notification":

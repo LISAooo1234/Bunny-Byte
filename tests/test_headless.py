@@ -88,9 +88,9 @@ def test_json_mode_prints_one_result_object_even_if_something_prints(tmp_path, c
     agent = build_agent(tmp_path, [READ, "<final>文件里是 alpha。</final>"])
     real_run_turn = agent.engine.run_turn
 
-    def noisy(prompt):
+    def noisy(prompt, mention_text=None):
         print("stray output from a tool")
-        yield from real_run_turn(prompt)
+        yield from real_run_turn(prompt, mention_text=mention_text)
 
     agent.engine.run_turn = noisy
 
@@ -145,8 +145,8 @@ def test_provider_error_exits_1(tmp_path):
 def failing_after_start(agent, exc):
     real_run_turn = agent.engine.run_turn
 
-    def broken(prompt):
-        for event in real_run_turn(prompt):
+    def broken(prompt, mention_text=None):
+        for event in real_run_turn(prompt, mention_text=mention_text):
             yield event
             if event["type"] == "turn_started":
                 raise exc

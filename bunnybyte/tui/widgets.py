@@ -28,7 +28,10 @@ from ..branding import (
     mascot_visible_width,
 )
 from ..commands.slash import SlashCommand, suggest_commands
+from .file_completion import FileIndex, match_files, mention_at_cursor, mention_token
+from .input_paste import PasteAwareInput
 from .status import StatusBar
+from .thinking import ThinkingIndicator
 from .tool_cards import (
     COMPACT_TOOLS as READ_ONLY_DISPLAY_TOOLS,
     ToolCard,
@@ -40,6 +43,7 @@ from .tool_cards import (
 __all__ = [
     "READ_ONLY_DISPLAY_TOOLS",
     "StatusBar",
+    "ThinkingIndicator",
     "ToolCard",
     "_display_tool_name",
     "confirm_preview",
@@ -661,48 +665,6 @@ class ChatLog(VerticalScroll):
         return len(cards)
 
 
-class ThinkingIndicator(Static):
-    DEFAULT_CSS = """
-    ThinkingIndicator {
-        height: 1;
-        padding: 0 2;
-        color: #8b93a7;
-        background: #0f1117;
-    }
-    ThinkingIndicator.hidden {
-        display: none;
-    }
-    """
-
-    FRAMES = ("思考中", "思考中.", "思考中..", "思考中...")
-
-    def __init__(self) -> None:
-        super().__init__("")
-        self.frame = 0
-        self.detail = ""
-        self.add_class("hidden")
-
-    def show(self, detail: str = "") -> None:
-        self.detail = detail
-        self.remove_class("hidden")
-        self.advance()
-
-    def hide(self) -> None:
-        self.add_class("hidden")
-        self.update("")
-
-    def set_detail(self, detail: str) -> None:
-        self.detail = detail
-        self.advance()
-
-    def advance(self) -> None:
-        label = self.FRAMES[self.frame % len(self.FRAMES)]
-        self.frame += 1
-        if self.detail:
-            label = f"{label}  {self.detail}"
-        self.update(label)
-
-
 class SlashSuggestions(Static):
     DEFAULT_CSS = """
     SlashSuggestions {
@@ -724,10 +686,12 @@ class SlashSuggestions(Static):
         self.suggestions: list[SlashCommand] = []
         self.selected_index = 0
         self.visible = False
+        self.prefix = "/"
 
     def update_suggestions(
-        self, suggestions: list[SlashCommand], selected_index: int = 0
+        self, suggestions: list[SlashCommand], selected_index: int = 0, prefix: str = "/"
     ) -> None:
+        self.prefix = prefix
         self.suggestions = list(suggestions)
         self.selected_index = max(
             0, min(int(selected_index or 0), max(len(self.suggestions) - 1, 0))
@@ -748,7 +712,7 @@ class SlashSuggestions(Static):
             style = "bold cyan" if index == self.selected_index else "#a7a9bb"
             lines.append(
                 Text.assemble(
-                    Text(f"{marker} /{command.name:<15}", style=style),
+                    Text(f"{marker} {self.prefix}{command.name:<15}" + (" " if self.prefix == "@" else ""), style=style),
                     Text(command.description, style="#d8dcff"),
                 )
             )
@@ -806,7 +770,7 @@ class InputBar(Static):
 
     def __init__(self) -> None:
         super().__init__()
-        self.input = Input(placeholder=PROMPT_PLACEHOLDER)
+        self.input = PasteAwareInput(placeholder=PROMPT_PLACEHOLDER)
         self.stop_button = Button("Stop", id="stop-turn")
         self.stop_button.add_class("stoppable")
         self.history: list[str] = []
@@ -815,6 +779,11 @@ class InputBar(Static):
         self._slash_index = 0
         self._provider_profiles: list[tuple[str, str, str]] = []
         self._skill_commands: list[SlashCommand] = []
+        self._file_index = FileIndex()
+        # 正在补全的 `@` 提及：(`@` 在输入框里的下标, 已输入的片段)；None 表示弹层是斜杠命令。
+        self._mention: tuple[int, str] | None = None
+        self._recalling = False
+        self._mention_exact = False
 
     def compose(self):
         with Horizontal():
@@ -889,23 +858,40 @@ class InputBar(Static):
         if not self.history:
             return
         self.history_index = max(0, self.history_index - 1)
+        self._recalling = True
         self.input.value = self.history[self.history_index]
+        self.input.cursor_position = len(self.input.value)
 
     def history_next(self) -> None:
         if not self.history:
             return
         self.history_index = min(len(self.history), self.history_index + 1)
+        self._recalling = True
         self.input.value = (
             ""
             if self.history_index == len(self.history)
             else self.history[self.history_index]
         )
+        self.input.cursor_position = len(self.input.value)
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        if self._recalling:
+            # ↑/↓ 翻历史改了输入框：不弹 `@` 补全，否则下一次 ↑ 会被弹层吃掉、Enter 变成补全。
+            self._recalling = False
+            if not event.value.startswith("/"):
+                self.hide_slash_suggestions()
+                return
         self.update_slash_suggestions(event.value)
+
+    def set_workspace_root(self, root) -> None:
+        self._file_index.set_root(root)
 
     def update_slash_suggestions(self, text: str | None = None) -> None:
         text = self.input.value if text is None else str(text)
+        self._mention = None
+        if not text.startswith("/"):
+            self._update_mention_suggestions(text)
+            return
         provider_suggestions = self._provider_suggestions(text)
         if provider_suggestions:
             self._slash_suggestions = provider_suggestions
@@ -922,7 +908,51 @@ class InputBar(Static):
             self._slash_suggestions, self._slash_index
         )
 
+    def _update_mention_suggestions(self, text: str) -> None:
+        mention = mention_at_cursor(text, self.input.cursor_position)
+        files = self._file_index.files() if mention else []
+        paths = match_files(files, mention[1]) if mention else []
+        if mention and mention[1].strip('"') in files:
+            # 已经是一个完整、存在的路径：保留它当第一项，Enter 直接发送，Tab 才换成别的候选。
+            paths = [mention[1].strip('"'), *paths][:8]
+            self._mention_exact = True
+        else:
+            self._mention_exact = False
+        if mention and paths and paths != [mention[1]]:
+            self._mention = mention
+            self._slash_suggestions = [
+                SlashCommand(path, mention_token(path), "目录" if path.endswith("/") else "文件", "文件")
+                for path in paths
+            ]
+        else:
+            self._slash_suggestions = []
+        self._slash_index = 0
+        self.query_one(SlashSuggestions).update_suggestions(self._slash_suggestions, 0, prefix="@")
+
+    def mention_completion_pending(self) -> bool:
+        """`@` 补全弹层开着：Enter 先补全选中的文件，而不是发送半截路径。"""
+        if self._mention_exact and self._slash_index == 0:
+            return False
+        return self._mention is not None and bool(self._slash_suggestions)
+
+    def _complete_mention(self) -> bool:
+        command = self.selected_slash_suggestion()
+        if command is None or self._mention is None:
+            return False
+        start, query = self._mention
+        raw = self.input.value
+        end = start + 1 + len(query)
+        token = command.usage + ("" if command.name.endswith("/") else " ")
+        self.input.value = raw[:start] + token + raw[end:].lstrip(" ")
+        self.input.cursor_position = start + len(token)
+        if command.name.endswith("/"):
+            self.update_slash_suggestions()  # 选了目录：接着列它下面的文件
+        else:
+            self.hide_slash_suggestions()
+        return True
+
     def hide_slash_suggestions(self) -> None:
+        self._mention = None
         self._slash_suggestions = []
         self._slash_index = 0
         self.query_one(SlashSuggestions).hide_suggestions()
@@ -933,6 +963,8 @@ class InputBar(Static):
         return self._slash_suggestions[self._slash_index]
 
     def complete_slash_suggestion(self) -> bool:
+        if self._mention is not None:
+            return self._complete_mention()
         command = self.selected_slash_suggestion()
         if command is None:
             return False
@@ -958,7 +990,7 @@ class InputBar(Static):
             self._slash_suggestions
         )
         self.query_one(SlashSuggestions).update_suggestions(
-            self._slash_suggestions, self._slash_index
+            self._slash_suggestions, self._slash_index, prefix="@" if self._mention else "/"
         )
         return True
 
