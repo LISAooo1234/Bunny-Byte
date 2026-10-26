@@ -396,6 +396,25 @@ def resolve_project_verify_config(
     return replace(config, mode="ask")
 
 
+def resolve_project_hooks(*, start: str | Path = ".", config_path: str | None = None):
+    """读取 [hooks]。全局配置和 --config 指定的文件直接生效，仓库里的 .bunnybyte.toml 要先被信任。"""
+    from ..core.hooks import load_hooks
+
+    if config_path:
+        return load_hooks(_read_config_file(Path(config_path).expanduser()).get("hooks", {}), {})
+    global_raw = {}
+    if DEFAULT_CONFIG_PATH.exists():
+        global_raw = _read_config_file(DEFAULT_CONFIG_PATH).get("hooks", {})
+    project_path = find_project_config(start)
+    if not project_path or not project_path.exists() or project_path.resolve() == DEFAULT_CONFIG_PATH.resolve():
+        return load_hooks(global_raw, {})
+    if project_path.is_symlink():
+        # 信任记录按配置文件路径记，符号链接可以让别的仓库借用已被信任的配置路径
+        hookset = load_hooks(global_raw, {})
+        return replace(hookset, problems=hookset.problems + ("项目的 .bunnybyte.toml 是符号链接，里面的钩子不会运行",))
+    return load_hooks(global_raw, _read_config_file(project_path).get("hooks", {}), project_path)
+
+
 def normalize_provider_name(provider: str | None) -> str:
     normalized = (provider or DEFAULT_PROVIDER).strip().lower()
     return PROVIDER_ALIASES.get(normalized, normalized)
@@ -442,6 +461,7 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     verify = data.get("verify", {})
     if isinstance(verify, dict):
         values["verify"] = dict(verify)
+    values["hooks"] = data.get("hooks", {})  # 原样交给 core.hooks 校验，写成非表时才能报错
 
     for name in ("openai", "anthropic", "deepseek"):
         section = data.get(name, {})

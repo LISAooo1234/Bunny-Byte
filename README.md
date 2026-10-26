@@ -229,6 +229,7 @@ bunny bench             # 跑分基准（会调用真实模型）
 - `/fork <event|turn|#>`
 - `/rollback <event|turn|#>`
 - `/undo`、`/undo list`、`/undo --force`
+- `/hooks`、`/hooks trust`
 - `/plan <topic>`
 - `/plan-exit`
 - `/skills`
@@ -297,10 +298,11 @@ bunny -p "总结最近的改动" --output-format json | jq .result
 | 2 | 用法或配置错误（没有提示词、`--require-verified` 与 `--verify off` 同用、配置无效） |
 | 3 | 中途停止：步数上限、空转被拦、重试耗尽 |
 | 4 | 只在 `--require-verified` 下出现（3 优先于 4：中途停止的运行不会再报 4）：改了代码，但没有覆盖**当前文件内容**的通过回执（验证失败/超时/被拒绝/不可用/没跑，或验证之后文件又变了） |
+| 5 | 配置了 `on_final` 钩子，反馈轮次用完后它仍然拦截最终回答（见[钩子](#钩子hooks)；JSON 结果里的 `hooks.final_blocked` 为 true） |
 | 130 | 被 Ctrl-C 中断 |
 
 - `--require-verified` 把退出码和验证回执绑在一起：不是模型说“测试过了”，而是运行时真的跑过、并且跑的是当前这版文件。它隐含 `--verify auto`，不能与 `--verify off|ask` 同用（退出码 2）；没改文件或只改了文档不算需要验证（退出码 0）；worker 子 agent 改过的文件也算本次改动；项目里探测不到可跑的检查时，在 `.bunnybyte.toml` 的 `[verify].commands` 里配置。回执命令由你的项目决定，所以只在你信任的仓库里使用。
-- `--output-format text`（默认）：stdout 只有最终回答，进度（`› read_file ...`）和验证提示走 stderr，`-q` 关掉它们。`json`：stdout 是一个结果对象，字段有 `ok`、`exit_code`、`result`、`status`、`stop_reason`、`session_id`、`run_id`、`model`、`tool_steps`、`wasted_steps`、`permission_denials`、`duration_ms`、`usage`（输入/输出/缓存 token，provider 没上报则为 `null`）、`changed_paths`、`verification`（`verdict`、`status`、`commands`、`repairs`）。`stream-json`：每行一个事件（`system` 初始化行、`tool_call`、`tool_result`、`runtime_notice`、`final`…），最后一行是同样的结果对象。
+- `--output-format text`（默认）：stdout 只有最终回答，进度（`› read_file ...`）和验证提示走 stderr，`-q` 关掉它们。`json`：stdout 是一个结果对象，字段有 `ok`、`exit_code`、`result`、`status`、`stop_reason`、`session_id`、`run_id`、`model`、`tool_steps`、`wasted_steps`、`permission_denials`、`duration_ms`、`usage`（输入/输出/缓存 token，provider 没上报则为 `null`）、`changed_paths`、`verification`（`verdict`、`status`、`commands`、`repairs`）、`hooks`（`final_blocked`、`runs`）。`stream-json`：每行一个事件（`system` 初始化行、`tool_call`、`tool_result`、`runtime_notice`、`final`…），最后一行是同样的结果对象。
 - 无人值守时永远不会等人确认：审批策略 `ask` 等同 `never`（写文件、跑命令都会被拒绝，拒绝次数记在 `permission_denials` 并在 stderr 提示），需要放行请显式加 `--approval auto`；审批策略不是 `auto` 时只允许启动只读的 Explore 子 agent（写入型 worker 自带放行权限，会绕过拒绝）；`ask_user` 工具不可用；自动 dream、skill 进化等后台学习关闭。
 - 带参数提示词时不会读 stdin（避免被 cron 或其他 agent 的工具 shell 继承来的、永不关闭的 stdin 卡死）；只有没有参数提示词，或参数里有单独的 `-` 时才读（超过 20 万字符会截断并在 stderr 提示）。
 - 不支持斜杠命令和 skill 调用（`bunny -p "/status"` 退出码 2，请直接用自然语言描述任务）；以 `/` 开头的路径（如 `/tmp/app.py 有个 bug`）照常当提示词。可与 `--resume latest`、`--cwd`、`--provider` 等参数组合；`--resume` 找不到会话等启动错误退出码 2，json 格式下 stdout 仍是一个带 `error` 的结果对象。`--output-format`、`-q`、`--require-verified` 不带 `-p` 时报错。
@@ -320,6 +322,32 @@ bunny -p "总结最近的改动" --output-format json | jq .result
 AGENTS.md                    # 构建/测试命令、代码约定
 .bunnybyte/rules/10-api.md   # 按主题拆开的细则（不进 git 也可以，作为个人规则）
 ```
+
+## 钩子（hooks）
+
+在 `.bunnybyte.toml` 里写几行 shell 命令，把团队规矩变成**运行时强制执行**的东西，而不是祈祷模型照提示词做：
+
+```toml
+[[hooks.pre_tool]]                      # 工具执行前：退出码 2 = 拦截，理由原样给模型，连审批都不弹
+match = "write_file|patch_file"
+command = "python3 .bunnybyte/hooks/guard.py"
+
+[[hooks.post_tool]]                     # 写完文件后：格式化；lint 报错用退出码 2 塞回给模型
+match = "write_file|patch_file"
+command = "ruff format --quiet . && ruff check --quiet . || exit 2"
+
+[[hooks.on_final]]                      # 模型想交卷时：退出码 2 = 扣住最终回答，理由反馈给模型继续干
+command = "python3 .bunnybyte/hooks/before_done.py"
+only_if_changed = true
+```
+
+- 钩子从 stdin 拿到 JSON（字段名参考 Claude Code 的钩子，但工具名、路径字段不同，不能直接套用现成脚本，差异见文档），环境变量经过过滤，API key 不会漏进去。
+- 格式化钩子顺手改的文件照样计入本轮改动：`/undo` 能撤销，验证闸门能看到。
+- **仓库里的钩子默认不运行**：克隆来的 `.bunnybyte.toml` 可能藏着任意命令。启动时会提示，`/hooks` 查看，确认后 `/hooks trust` 启用；钩子配置一改信任就作废。无人值守时用 `BUNNYBYTE_TRUST_HOOKS=1`，或把钩子写进全局配置。
+- 钩子出错（崩溃、超时）默认放行并警告；真正的安全闸门写 `on_error = "block"`。每次运行都记入 trace 和 `report.json`，`bunny doctor` 有一行“钩子”。
+- 子 agent 同样受 `pre_tool` / `post_tool` 约束。
+
+完整协议、退出码表、边界和 4 个现成配方见 [docs/hooks.md](docs/hooks.md)。
 
 ## 仓库结构
 
@@ -351,3 +379,4 @@ tests/           # runtime / safety / TUI / acceptance / regression tests
 - [Memory](docs/memory.md)
 - [Sandbox](docs/sandbox.md)
 - [跑分基准](docs/benchmark.md)
+- [钩子](docs/hooks.md)

@@ -25,6 +25,8 @@ from .branding import (
     render_mascot_ansi_rows,
 )
 from .commands.slash import command_help_text, parse_subagent_args, resolve_command
+from .commands.hooks_commands import handle_hooks_command
+from .core.hook_runner import HookRunner
 from .commands.undo_commands import handle_undo_command
 from .config import (
     DEFAULT_CONFIG_PATH,
@@ -35,6 +37,7 @@ from .config import (
     list_provider_profiles,
     load_project_env,
     resolve_project_sandbox_config,
+    resolve_project_hooks,
     resolve_project_verify_config,
     resolve_provider_config,
     write_global_provider_config,
@@ -302,6 +305,7 @@ def build_agent(args):
         config_path=getattr(args, "config", None),
         mode=getattr(args, "verify", None),
     )
+    hookset = resolve_project_hooks(start=workspace.repo_root, config_path=getattr(args, "config", None))
     load_project_env(workspace.repo_root, override=False)
     configured_secret_names = _configured_secret_names(args)
     session_id = args.resume
@@ -332,6 +336,7 @@ def build_agent(args):
             ask_user_callback=ask_user_callback,
         )
         _attach_provider_switching(agent, args)
+        _attach_hooks(agent, hookset)
         return agent
     lazy_session = True
     agent = BunnyByte(
@@ -353,7 +358,22 @@ def build_agent(args):
         lazy_session=lazy_session,
     )
     _attach_provider_switching(agent, args)
+    _attach_hooks(agent, hookset)
     return agent
+
+
+def _attach_hooks(agent, hookset):
+    if not hookset:
+        return
+    agent.hooks = HookRunner(hookset)
+    if hookset.pending:
+        print(
+            f"⚠ 这个仓库的 .bunnybyte.toml 里有 {len(hookset.pending)} 条钩子，确认前不会运行。"
+            "用 /hooks 查看，/hooks trust 启用（脚本里用 BUNNYBYTE_TRUST_HOOKS=1）。",
+            file=sys.stderr,
+        )
+    for problem in hookset.problems:
+        print(f"⚠ 钩子配置：{problem}", file=sys.stderr)
 
 
 def _attach_provider_switching(agent, args):
@@ -903,6 +923,8 @@ def handle_repl_command(agent, user_input):
         )
     if command_name == "undo":
         return True, False, handle_undo_command(agent, command_args)
+    if command_name == "hooks":
+        return True, False, handle_hooks_command(agent, command_args)
     if command_name in {"fork", "rollback"}:
         target = command_args or "latest"
         try:

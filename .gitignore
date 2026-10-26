@@ -50,6 +50,7 @@ docs/**
 !docs/skills.md
 !docs/sandbox.md
 !docs/benchmark.md
+!docs/hooks.md
 
 # OS files
 .DS_Store

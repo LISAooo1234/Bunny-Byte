@@ -101,6 +101,8 @@ class BunnyByte(
     RuntimeSecretsMixin,
     RuntimeCheckpointsMixin,
 ):
+    hooks = None  # HookRunner；由 CLI 在启动时按配置挂上，测试里默认没有钩子
+
     def __init__(
         self,
         model_client,
@@ -836,6 +838,7 @@ class BunnyByte(
             "artifact_graph": dict(task_state.artifact_graph),
             "verifier_suggestions": list(task_state.verifier_suggestions),
             "verification": dict(task_state.verification),
+            "hooks": dict(task_state.hooks),
             "runtime_reminders": list(task_state.runtime_reminders),
             "todos": self.todo_ledger.to_dict(),
             "todo_changes": list(task_state.todo_changes),

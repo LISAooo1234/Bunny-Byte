@@ -120,6 +120,10 @@ max_repair_rounds = 1         # 验证失败后让模型修复的轮数，0-5；
 - 配置了 `[sandbox]` 时验证命令走同一个沙箱；`CI=1` 会注入环境。
 - 回执写入 `task_state.json`、`report.json` 的 `verification` 字段和 trace 的 `verification_run` 事件。
 
+## 钩子（`[[hooks.*]]`）
+
+`[[hooks.pre_tool]]`、`[[hooks.post_tool]]`、`[[hooks.on_final]]` 三类 shell 钩子，字段 `command`（必填）、`match`（工具名，`|` 分隔，支持 `*`）、`timeout`（1–300 秒，默认 10）、`on_error`（`allow` 默认 / `block`）、`only_if_changed`（仅 on_final）；`[hooks] max_final_rounds`（0–5，默认 2）。仓库里的 `.bunnybyte.toml` 的钩子要 `/hooks trust` 之后才运行，全局配置和 `--config` 直接生效。完整说明见 [hooks.md](hooks.md)。
+
 ## 项目规则
 
 没有配置项，放文件即可：仓库根目录（以及启动目录）下的 `AGENTS.md`、`CLAUDE.md`、`.bunnybyte/rules/*.md` 会进入提示词前缀。每个文件最多 6000 字、合计最多 12000 字，超出部分会提示去 `read_file`；`bunny doctor` 的“项目规则”一行显示实际读到的文件。规则不会放宽工具权限。详见 README「项目规则」。

@@ -19,7 +19,7 @@ def test_core_modules_stay_below_entropy_budget():
         "bunnybyte/core/permissions.py": 140,
         "bunnybyte/core/tool_policy.py": 90,
         "bunnybyte/core/plan_mode.py": 140,
-        "bunnybyte/core/tool_executor.py": 181,
+        "bunnybyte/core/tool_executor.py": 190,
         "bunnybyte/core/tool_profiles.py": 80,
         "bunnybyte/core/turn_history.py": 250,
         "bunnybyte/features/skills.py": 220,

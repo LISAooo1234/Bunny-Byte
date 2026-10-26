@@ -35,6 +35,7 @@ def build_child_runtime(parent, subagent_type, write_scope):
             "kind": "worker",
         },
     )
+    child.hooks = parent.hooks  # pre_tool / post_tool 对子 agent 同样生效；on_final 只在主 agent 上跑
     child.set_tool_profile("readonly" if subagent_type == "Explore" else "worker")
     child.refresh_prefix(force=True)
     return child

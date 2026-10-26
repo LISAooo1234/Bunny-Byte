@@ -19,6 +19,7 @@ from pathlib import Path
 from .config import (
     DEFAULT_CONFIG_PATH,
     find_project_config,
+    resolve_project_hooks,
     resolve_project_sandbox_config,
     resolve_provider_config,
 )
@@ -224,6 +225,31 @@ def check_project_rules(start, run=subprocess.run):
     )
 
 
+def check_hooks(start, config_path=None):
+    try:
+        hookset = resolve_project_hooks(start=start, config_path=config_path)
+    except ValueError as exc:
+        return DoctorCheck("钩子", "fail", str(exc), "检查 [hooks] 所在的配置文件语法。")
+    if not hookset:
+        return DoctorCheck("钩子", "skip", "未配置（.bunnybyte.toml 的 [[hooks.pre_tool]] 等，见 docs/hooks.md）")
+    counts = "、".join(
+        f"{event} {sum(1 for spec in hookset.specs if spec.event == event)}"
+        for event in ("pre_tool", "post_tool", "on_final")
+        if hookset.has(event)
+    )
+    detail = f"运行中：{counts or '无'}"
+    if hookset.pending:
+        return DoctorCheck(
+            "钩子",
+            "warn",
+            f"{detail}；项目里另有 {len(hookset.pending)} 条未信任，不会运行",
+            "确认内容后在会话里运行 /hooks trust（脚本环境设 BUNNYBYTE_TRUST_HOOKS=1）。",
+        )
+    if hookset.problems:
+        return DoctorCheck("钩子", "warn", f"{detail}；{len(hookset.problems)} 处配置有误：{hookset.problems[0]}", "修正后重新运行 bunny doctor。")
+    return DoctorCheck("钩子", "ok", detail)
+
+
 def _secret_exposure_checks(run, git_root):
     if git_root is None:
         return []
@@ -310,6 +336,7 @@ def run_doctor(
         checks.append(check_connectivity(config, client_factory))
     checks.extend(check_workspace(start, run=run))
     checks.append(check_project_rules(start, run=run))
+    checks.append(check_hooks(start, config_path))
     checks.append(check_sandbox(start, config_path, which=which))
     checks.extend(check_tools(which=which))
     return checks

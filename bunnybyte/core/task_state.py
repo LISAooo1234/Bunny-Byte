@@ -42,6 +42,7 @@ class TaskState:
     artifact_graph: dict = field(default_factory=dict)
     verifier_suggestions: list = field(default_factory=list)
     verification: dict = field(default_factory=dict)
+    hooks: dict = field(default_factory=dict)
     runtime_reminders: list = field(default_factory=list)
     todo_changes: list = field(default_factory=list)
 
@@ -70,6 +71,7 @@ class TaskState:
             artifact_graph=dict(data.get("artifact_graph", {}) or {}),
             verifier_suggestions=list(data.get("verifier_suggestions", [])),
             verification=dict(data.get("verification", {}) or {}),
+            hooks=dict(data.get("hooks", {}) or {}),
             runtime_reminders=list(data.get("runtime_reminders", [])),
             todo_changes=list(data.get("todo_changes", [])),
         )
@@ -129,6 +131,7 @@ class TaskState:
             "artifact_graph": dict(self.artifact_graph),
             "verifier_suggestions": list(self.verifier_suggestions),
             "verification": dict(self.verification),
+            "hooks": dict(self.hooks),
             "runtime_reminders": list(self.runtime_reminders),
             "todo_changes": list(self.todo_changes),
         }

@@ -236,6 +236,7 @@ bunny bench             # live benchmark (calls the real model)
 - `/fork <event|turn|#>`
 - `/rollback <event|turn|#>`
 - `/undo`, `/undo list`, `/undo --force`
+- `/hooks`, `/hooks trust`
 - `/plan <topic>`
 - `/plan-exit`
 - `/skills`
@@ -303,10 +304,11 @@ bunny -p "Summarize recent changes" --output-format json | jq .result
 | 2 | Usage or config error (no prompt, `--require-verified` with `--verify off`, invalid config) |
 | 3 | Stopped early: step limit, stall guard, retry limit |
 | 4 | Only with `--require-verified` (3 outranks 4: a run that stopped early never reports 4): code changed but there is no passing receipt covering the **current file contents** (verification failed / timed out / declined / unavailable / never ran, or files changed after it) |
+| 5 | An `on_final` hook still blocks the final answer after its feedback rounds ran out (see [Hooks](#hooks); `hooks.final_blocked` is true in the JSON result) |
 | 130 | Interrupted with Ctrl-C |
 
 - `--require-verified` ties the exit code to the verification receipt: not "the model says tests pass" but the runtime actually ran them against the current version of the files. It implies `--verify auto` and cannot be combined with `--verify off|ask` (exit 2); runs that changed nothing or only docs need no verification (exit 0); files changed by worker subagents count as changes of the run; when no check can be detected, set `[verify].commands` in `.bunnybyte.toml`. The receipt commands come from your project, so only use it in repositories you trust.
-- `--output-format text` (default): stdout is just the final answer; progress (`› read_file ...`) and verification notices go to stderr, `-q` silences them. `json`: stdout is one result object with `ok`, `exit_code`, `result`, `status`, `stop_reason`, `session_id`, `run_id`, `model`, `tool_steps`, `wasted_steps`, `permission_denials`, `duration_ms`, `usage` (input/output/cached tokens, `null` when the provider reports none), `changed_paths` and `verification` (`verdict`, `status`, `commands`, `repairs`). `stream-json`: one event per line (`system` init line, `tool_call`, `tool_result`, `runtime_notice`, `final`, ...) and the same result object as the last line.
+- `--output-format text` (default): stdout is just the final answer; progress (`› read_file ...`) and verification notices go to stderr, `-q` silences them. `json`: stdout is one result object with `ok`, `exit_code`, `result`, `status`, `stop_reason`, `session_id`, `run_id`, `model`, `tool_steps`, `wasted_steps`, `permission_denials`, `duration_ms`, `usage` (input/output/cached tokens, `null` when the provider reports none), `changed_paths`, `verification` (`verdict`, `status`, `commands`, `repairs`) and `hooks` (`final_blocked`, `runs`). `stream-json`: one event per line (`system` init line, `tool_call`, `tool_result`, `runtime_notice`, `final`, ...) and the same result object as the last line.
 - It never waits for a human: approval policy `ask` behaves like `never` (writes and shell commands are denied, the count lands in `permission_denials` and a note on stderr), so pass `--approval auto` to allow them; unless the policy is `auto` only read-only Explore subagents may be started (write-capable workers carry their own approval and would bypass the denial); the `ask_user` tool is unavailable; background learning (auto dream, skill evolution) is off.
 - With a prompt argument stdin is not read (a stdin inherited from cron or another agent's tool shell may be a pipe that never closes); it is read only when there is no prompt argument or the arguments contain a lone `-` (input beyond 200k characters is truncated, with a note on stderr).
 - Slash commands and skill invocations are not supported (`bunny -p "/status"` exits 2; describe the task in plain language); a prompt that starts with a path such as `/tmp/app.py has a bug` is fine. It combines with `--resume latest`, `--cwd`, `--provider` and the other flags; startup errors such as an unknown `--resume` session exit 2, and with a json format stdout still carries one result object with an `error` field. `--output-format`, `-q` and `--require-verified` are errors without `-p`.
@@ -321,6 +323,32 @@ Write the team's conventions into the repository and the agent sees them every t
 - The "项目规则" row of `bunny doctor` lists the files that were really loaded and warns when one was cut.
 - Rules are advisory text: they never widen tool permissions or skip approvals. But they are part of the system prompt and weigh more than a README: `AGENTS.md`, `CLAUDE.md` and `.bunnybyte/rules/` from a cloned repository are injected automatically, so look at them before running the agent in a repository you do not trust.
 - `.bunnybyte/` is usually gitignored (it holds runtime data); to share `rules/` with your team, ignore `.bunnybyte/*` and add `!.bunnybyte/rules/` (git cannot re-include a sub-directory of an ignored directory, so ignoring `.bunnybyte/` itself will not work).
+
+## Hooks
+
+Put a few shell commands in `.bunnybyte.toml` and turn team rules into something the runtime **enforces**, instead of hoping the model follows the prompt:
+
+```toml
+[[hooks.pre_tool]]                      # before a tool runs: exit 2 = block; the reason goes to the model, no approval prompt
+match = "write_file|patch_file"
+command = "python3 .bunnybyte/hooks/guard.py"
+
+[[hooks.post_tool]]                     # after a file write: format it; exit 2 feeds lint errors back to the model
+match = "write_file|patch_file"
+command = "ruff format --quiet . && ruff check --quiet . || exit 2"
+
+[[hooks.on_final]]                      # when the model wants to finish: exit 2 holds the answer back and sends the reason to the model
+command = "python3 .bunnybyte/hooks/before_done.py"
+only_if_changed = true
+```
+
+- A hook reads JSON on stdin (field names are modelled on Claude Code hooks, but tool names and path fields differ, so existing scripts need adapting; the differences are listed in the docs); its environment is filtered, so API keys do not leak into it.
+- Files a formatter hook touches still count as changed in that turn: `/undo` reverts them and the verification gate sees them.
+- **Hooks from the repository do not run by default**: a cloned `.bunnybyte.toml` could hide any command. Startup warns, `/hooks` lists them, `/hooks trust` enables them after you have read them, and any change to the hook config revokes that trust. Unattended runs use `BUNNYBYTE_TRUST_HOOKS=1`, or keep hooks in the global config.
+- A hook that crashes or times out is allowed through with a warning by default; use `on_error = "block"` for a real safety gate. Every run is recorded in the trace and `report.json`, and `bunny doctor` has a "钩子" row.
+- Subagents obey `pre_tool` / `post_tool` too.
+
+The full protocol, exit-code table, limits and four ready-made recipes are in [docs/hooks.md](docs/hooks.md) (Chinese).
 
 ## Repository Layout
 
@@ -352,3 +380,4 @@ tests/           # runtime / safety / TUI / acceptance / regression tests
 - [Memory](docs/memory.md)
 - [Sandbox](docs/sandbox.md)
 - [Benchmark](docs/benchmark.md) (Chinese)
+- [Hooks](docs/hooks.md) (Chinese)

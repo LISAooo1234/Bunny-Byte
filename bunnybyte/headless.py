@@ -19,6 +19,7 @@ EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_UNFINISHED = 3
 EXIT_UNVERIFIED = 4
+EXIT_HOOK_BLOCKED = 5
 EXIT_INTERRUPTED = 130
 
 OUTPUT_FORMATS = ("text", "json", "stream-json")
@@ -109,6 +110,7 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
     verdict = verification_verdict(agent, state) if state is not None else ""
     code = exit_code(state, verdict, require_verified, error)
     verification = dict(state.verification) if state is not None else {}
+    hook_state = dict(getattr(state, "hooks", None) or {})
     usage = {"input_tokens": None, "output_tokens": None, "cached_tokens": None}
     if state is not None:
         usage = trace_usage(agent.run_store.trace_path(state))
@@ -134,6 +136,10 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
             "commands": [item.get("command", "") for item in verification.get("receipts", [])],
             "repairs": int(verification.get("repairs", 0)),
         },
+        "hooks": {
+            "final_blocked": bool(hook_state.get("final_blocked")),
+            "runs": len(hook_state.get("runs", [])),
+        },
     }
     if error:
         result["error"] = error
@@ -149,6 +155,8 @@ def exit_code(state, verdict, require_verified, error=""):
         return EXIT_UNFINISHED
     if require_verified and verdict in {VERDICT_FAILED, VERDICT_UNVERIFIED}:
         return EXIT_UNVERIFIED
+    if (getattr(state, "hooks", None) or {}).get("final_blocked"):
+        return EXIT_HOOK_BLOCKED
     return EXIT_OK
 
 
@@ -246,5 +254,7 @@ def run_headless(
         err.write(f"bunny: {denials} 个工具调用因审批策略被拒绝（无人值守时 ask 等同 never；需要放行请加 --approval auto）。\n")
     if code == EXIT_UNVERIFIED:
         err.write(f"bunny: 代码有改动但没有覆盖当前内容的通过回执（{result['verification']['verdict']}），退出码 4。\n")
+    if code == EXIT_HOOK_BLOCKED:
+        err.write("bunny: on_final 钩子在反馈轮次用完后仍然拦截了最终回答，退出码 5。\n")
     err.flush()
     return code

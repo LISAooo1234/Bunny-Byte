@@ -1,5 +1,6 @@
 import re
 
+from .hook_runner import post_tool_hooks, pre_tool_hooks, render_notes
 from .read_ledger import read_stub_metadata, render_read_file_result
 from .tool_loop_guard import escalate_reply
 from .tool_policy import ToolPolicyChecker
@@ -36,6 +37,10 @@ def run_tool(agent, name, args):
         agent._last_tool_result_metadata = repeated_tool_call_metadata(tool)
         message = f"error: repeated identical tool call for {name}; choose a different tool or return a final answer"
         return escalate_reply(message, agent.session["history"], name, args)
+    blocked, hook_notes = pre_tool_hooks(agent, tool, args)
+    if blocked:
+        agent._last_tool_result_metadata = _tool_metadata(tool, "rejected", "hook_blocked")
+        return blocked
     decision = agent.permission_checker.check(tool, args)
     _emit_permission_decision(agent, tool, args, decision)
     if not decision.allowed:
@@ -55,6 +60,7 @@ def run_tool(agent, name, args):
     after_snapshot = before_snapshot
     try:
         full_result = tool.execute(args).content
+        hook_notes += post_tool_hooks(agent, tool, args, full_result)
         result, full_output_artifact = _render_tool_result(agent, name, full_result)
         after_snapshot = take_snapshot(agent, tool, args, "after") if tool.risky else before_snapshot
         affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
@@ -84,7 +90,7 @@ def run_tool(agent, name, args):
             full_output_artifact=full_output_artifact,
         )
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
-        return result
+        return result + render_notes(hook_notes)
     except Exception as exc:
         after_snapshot = take_snapshot(agent, tool, args, "after") if tool.risky else before_snapshot
         affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
@@ -101,7 +107,7 @@ def run_tool(agent, name, args):
             diff_summary=diff_summary,
         )
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
-        return f"error: tool {name} failed: {exc}"
+        return f"error: tool {name} failed: {exc}" + render_notes(hook_notes)
 
 
 def _argument_hint(agent, tool):

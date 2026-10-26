@@ -38,3 +38,18 @@ mode = "ask"
 # commands = ["pytest -q"]
 timeout = 120
 max_repair_rounds = 1
+
+# 钩子：在固定时机运行你自己的 shell 命令，退出码 2 表示拦截/反馈。说明见 docs/hooks.md。
+# 仓库里的钩子要先在会话里 /hooks trust 才会运行。
+# [[hooks.pre_tool]]
+# match = "write_file|patch_file"
+# command = "python3 .bunnybyte/hooks/guard.py"
+# on_error = "block"
+#
+# [[hooks.post_tool]]
+# match = "write_file|patch_file"
+# command = "ruff format --quiet . && ruff check --quiet . || exit 2"
+#
+# [[hooks.on_final]]
+# command = "python3 .bunnybyte/hooks/before_done.py"
+# only_if_changed = true

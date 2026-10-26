@@ -11,6 +11,7 @@ from .engine_helpers import (
     request_step_limit_summary,
     should_retry_model_error,
 )
+from .hook_gate import final_hook_gate
 from .model_errors import finish_model_error
 from .model_stream import complete_model_with_deltas
 from .provider_failover import failover_events
@@ -385,6 +386,9 @@ def run_turn(engine, user_message):
         if (yield from verification_gate(engine, task_state, final)):
             max_attempts += 1  # 修复轮次不挤占模型调用预算
             continue
+        if (yield from final_hook_gate(engine, task_state, final)):
+            max_attempts += 1
+            continue
         if agent.abort_requested:
             yield from finish_stopped_run(
                 engine, task_state, user_message, "Stopped after abort request.", "aborted", run_started_at
@@ -469,6 +473,7 @@ def run_turn(engine, user_message):
         task_state.stop_step_limit(final)
     # 预算耗尽的运行最需要回执：只记录结果，不再让模型继续改
     yield from verification_gate(engine, task_state, final, allow_repair=False)
+    yield from final_hook_gate(engine, task_state, final, allow_block=False)
     limit_notice = verification_notice(agent, task_state, final)
     if limit_notice:
         final = f"{final}\n\n{limit_notice}"
