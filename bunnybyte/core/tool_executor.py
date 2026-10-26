@@ -4,12 +4,14 @@ from .read_ledger import read_stub_metadata, render_read_file_result
 from .tool_loop_guard import escalate_reply
 from .tool_policy import ToolPolicyChecker
 from .tool_repetition import repeated_tool_call_metadata
+from .tool_snapshots import take_snapshot
 from .workspace import clip
 
 INLINE_TOOL_OUTPUT_LIMIT = 1000
 
 
 def run_tool(agent, name, args):
+    agent._tool_tree_hint = None
     tool = agent.tools.get(name)
     if tool is None:
         agent._last_tool_result_metadata = _tool_metadata(None, "rejected", "unknown_tool")
@@ -49,12 +51,12 @@ def run_tool(agent, name, args):
         )
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
         return policy.message
-    before_snapshot = agent.capture_workspace_snapshot() if tool.risky else {}
+    before_snapshot = take_snapshot(agent, tool, args, "before") if tool.risky else {}
     after_snapshot = before_snapshot
     try:
         full_result = tool.execute(args).content
         result, full_output_artifact = _render_tool_result(agent, name, full_result)
-        after_snapshot = agent.capture_workspace_snapshot() if tool.risky else before_snapshot
+        after_snapshot = take_snapshot(agent, tool, args, "after") if tool.risky else before_snapshot
         affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
         workspace_changed = bool(affected_paths)
         tool_status = "ok"
@@ -84,7 +86,7 @@ def run_tool(agent, name, args):
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
         return result
     except Exception as exc:
-        after_snapshot = agent.capture_workspace_snapshot() if tool.risky else before_snapshot
+        after_snapshot = take_snapshot(agent, tool, args, "after") if tool.risky else before_snapshot
         affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
         workspace_changed = bool(affected_paths)
         security_event_type = "path_escape" if "path escapes workspace" in str(exc) else ""

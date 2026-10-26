@@ -682,8 +682,8 @@
 │   │   RuntimeCheckpointsMixin:                                                   │  │
 │   │   ┌──────────────────────────────────────────────────────────────────────┐  │  │
 │   │   │  capture_workspace_snapshot()                                        │  │  │
-│   │   │  ├── 遍历 root 下所有文件 (排除 .git/.venv 等)                        │  │  │
-│   │   │  └── 生成 {relative_path: sha256} 映射                                │  │  │
+│   │   │  ├── 影子 git 库 (.bunnybyte/shadow.git) 快照 → tree id               │  │  │
+│   │   │  └── 无 git/有嵌套仓库时退回 {path: blob sha1} (带 stat 缓存)         │  │  │
 │   │   │                                                                       │  │  │
 │   │   │  diff_workspace_snapshots(before, after)                              │  │  │
 │   │   │  └── 返回 changed_paths + summaries (created/deleted/modified)        │  │  │

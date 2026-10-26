@@ -81,6 +81,7 @@ def _branch_runtime_session(runtime, target="latest", mode="fork"):
     child["memory"] = copy.deepcopy(parent.get("memory") or memorylib.default_memory_state())
     child["read_ledger"] = copy.deepcopy(parent.get("read_ledger") or {})
     child["workers"] = {"items": []}
+    child["undo_log"] = []
     child["todos"] = {"items": []}
     child["runtime_mode"] = {"mode": "default"}
     child.pop("_manual_turn_id", None)

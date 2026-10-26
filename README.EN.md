@@ -36,6 +36,7 @@ stored locally for recovery, review, and debugging.
 | Provider failover | When the primary provider returns 5xx / rate limits / timeouts, requests switch to the configured `fallback` chain; the switch is shown in the UI and recorded in the run trace. See [Configuration](docs/configuration.md). |
 | Tool calling | Uses provider-native tool calling when available and keeps a fallback path for legacy backends. |
 | Session lifecycle | Supports `/history`, `/resume`, `/fork`, `/rollback`, and `/compact`. |
+| Undo | `/undo` reverts the files the last turn changed (only those files; it refuses and lists conflicts if you edited them again afterwards). Snapshots live in a private git object store, so even large repos with `node_modules` stay in the millisecond-to-sub-second range. See "Undo and snapshots" below. |
 | Task orchestration | Includes plan mode, todo ledger, `ask_user`, and `Explore` / `worker` subagents. |
 | Memory | Includes working memory, daily logs, durable topics, `/remember`, and `/dream`. |
 | Verification receipts | Before the agent hands in a turn that changed code, the runtime actually runs the project's own tests, feeds failures back for repair, records a pass/fail receipt, and flags answers that claim "tests pass" without any evidence. See "Verification receipts" below. |
@@ -234,6 +235,7 @@ bunny bench             # live benchmark (calls the real model)
 - `/resume latest`
 - `/fork <event|turn|#>`
 - `/rollback <event|turn|#>`
+- `/undo`, `/undo list`, `/undo --force`
 - `/plan <topic>`
 - `/plan-exit`
 - `/skills`
@@ -251,6 +253,15 @@ First baseline (0.5.0, `deepseek-v4-flash`, 2 runs per task, step ceiling 50): 1
 With the stall guard (same task set, 2 runs per task, captured from an uncommitted working tree): still 16/16 passed; 0 of 16 runs hit the step ceiling (baseline: 1) and 1 run was ended early as stalled. Average model calls went 14.3 → 12.7 and total wall time 366s → 327s, but 16 runs are noisy and neither is a conclusion. Uncached input tokens actually rose 378k → 459k (about 25.9k → 30.7k tokens per passed task), so this is not a cost-saving feature. What is solid: the bench now counts repeated or no-new-information tool calls as wasted steps, 5.6 per task on average, about 30% of all steps, so the cheap model's waste is mostly re-reading rather than being unable to solve the task. Full results are in [`benchmarks/results/`](benchmarks/results/).
 
 There are 10 tasks, so one task is 10 percentage points and a single run can move by one task as noise; average steps and tokens are the more sensitive regression signals. The historical numbers above come from the original 8 tasks (a different task-set hash, so they are never compared with newer results). The 2 newer "ripple" tasks are traps built on purpose (the obvious fix breaks a test the prompt did not name) to exercise the verification gate; on `deepseek-v4-flash` they passed 12/12 even without the gate (6 runs each), so the trap did not bite this model and there is currently no measured "the gate raises the pass rate" number. Details: [Benchmark](docs/benchmark.md) (Chinese).
+
+## Undo and snapshots
+
+- `/undo` restores the files the latest agent turn changed to how they were before that turn; run it again to step back one more turn. `/undo list` shows every turn, the files it touched, and whether it was already undone.
+- Only files that turn touched are restored; files you created yourself or the agent never touched stay as they are. If a file the turn changed was modified again after the turn ended (for example by you), **nothing is written**, and the conflicting files are listed; use `/undo --force` to overwrite them.
+- After an undo, a system note tells the model that those files are back to their earlier content, so it does not assume what it just wrote is still there. If git's HEAD moved during the turn (a commit or branch switch) you get a reminder that undo restores working-tree files only, not commits. Undo is refused while a subagent is running.
+- Snapshots live in `.bunnybyte/shadow.git`, a private git object store driven through `GIT_DIR` (your own repository's index, refs, config and hooks are never touched). A snapshot is a git tree; `git add -A` through a private index only re-hashes files whose stat data changed, so the cost follows the number of changed files rather than the size of the repository. `.gitignore` is honored; `node_modules`, `.mypy_cache`, `.tox` and `.nox` are always skipped, and new untracked files over 8 MB are left out. CRLF, file modes, symlinks and non-ASCII paths round-trip byte for byte.
+- It also fixes a real performance problem: every tool call used to hash the whole workspace twice, and every checkpoint copied the whole workspace (silently giving up on rollback above 20 MB). In a repo with 800 source files plus a 15,000-file `node_modules`, a turn that writes one file went from 18.3 s of snapshot overhead and 187 MB of checkpoint copies to 0.6 s and under 1 MB. `/rollback` now restores from snapshot trees too, without the 20 MB cap; copy-style checkpoints written by older versions can still be rolled back (`.bunnybyte/checkpoints/*/workspace` can be deleted by hand).
+- Limits: files ignored by `.gitignore` are not in the snapshot, except explicit `write_file` / `patch_file` targets; changes a shell command makes to ignored paths such as `dist/` or `.env` cannot be undone and do not count as changed files for the turn. A workspace that contains a nested git repository (submodules, cloned dependencies), or has no git, falls back to per-file hashing (dependency directories skipped, unchanged files cached) and `/undo` is unavailable (`bunny doctor` warns when git is missing). `.bunnybyte/shadow.git` is not cleaned up automatically; delete it to reset (undo history is lost). `/rollback` to an older checkpoint never deletes files hidden by `.gitignore` (it only overwrites their content); once a nested repository is detected a `.bunnybyte/shadow.git/DISABLED` marker stops further attempts (delete `.bunnybyte/shadow.git` to reset); files a background subagent writes after the turn ended do not belong to that turn. Set `BUNNYBYTE_SHADOW=off` to disable the whole mechanism.
 
 ## Verification receipts
 

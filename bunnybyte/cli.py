@@ -25,6 +25,7 @@ from .branding import (
     render_mascot_ansi_rows,
 )
 from .commands.slash import command_help_text, parse_subagent_args, resolve_command
+from .commands.undo_commands import handle_undo_command
 from .config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_PROVIDER,
@@ -900,6 +901,8 @@ def handle_repl_command(agent, user_input):
             "New Session",
             [("Session id", session_id)],
         )
+    if command_name == "undo":
+        return True, False, handle_undo_command(agent, command_args)
     if command_name in {"fork", "rollback"}:
         target = command_args or "latest"
         try:

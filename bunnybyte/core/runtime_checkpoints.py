@@ -1,48 +1,25 @@
 """Runtime workspace snapshot and checkpoint helpers."""
 
-import hashlib
 import json
 import shutil
 import uuid
 
 from ..features import memory as memorylib
+from .shadow_snapshots import SNAPSHOT_SKIP_DIRS, ShadowError
 from .workspace import IGNORED_PATH_NAMES, clip, now
+from .workspace_snapshots import capture_snapshot, diff_snapshots, shadow_store
 
 CHECKPOINT_SCHEMA_VERSION = "phase1-v1"
 ROLLBACK_SNAPSHOT_MAX_BYTES = 20_000_000
+SKIPPED_NAMES = IGNORED_PATH_NAMES | set(SNAPSHOT_SKIP_DIRS)
 
 
 class RuntimeCheckpointsMixin:
-    def capture_workspace_snapshot(self):
-        snapshot = {}
-        for path in self.root.rglob("*"):
-            try:
-                relative_parts = path.relative_to(self.root).parts
-            except ValueError:
-                continue
-            if any(part in IGNORED_PATH_NAMES for part in relative_parts) or not path.is_file():
-                continue
-            try:
-                snapshot[path.relative_to(self.root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-            except Exception:
-                continue
-        return snapshot
+    def capture_workspace_snapshot(self, extra_paths=(), **options):
+        return capture_snapshot(self, extra_paths, **options)
 
-    @staticmethod
-    def diff_workspace_snapshots(before, after):
-        changed_paths = []
-        summaries = []
-        for path in sorted(set(before) | set(after)):
-            if before.get(path) == after.get(path):
-                continue
-            changed_paths.append(path)
-            if path not in before:
-                summaries.append(f"created:{path}")
-            elif path not in after:
-                summaries.append(f"deleted:{path}")
-            else:
-                summaries.append(f"modified:{path}")
-        return changed_paths, summaries
+    def diff_workspace_snapshots(self, before, after):
+        return diff_snapshots(self, before, after)
 
     def create_checkpoint(self, task_state, user_message, trigger):
         state = self.checkpoint_state()
@@ -73,7 +50,7 @@ class RuntimeCheckpointsMixin:
             "after_run_id": str(getattr(self, "current_run_id", "") or ""),
             "checkpoint_backend": "session",
         }
-        checkpoint.update(self.capture_rollback_snapshot(checkpoint_id))
+        checkpoint.update(self.capture_rollback_snapshot(checkpoint_id, reuse_tool_tree=trigger == "tool_executed"))
         state["items"][checkpoint_id] = checkpoint
         state["current_id"] = checkpoint_id
         task_state.checkpoint_id = checkpoint_id
@@ -81,7 +58,41 @@ class RuntimeCheckpointsMixin:
         self.session_path = self.session_store.save(self.session)
         return checkpoint
 
-    def capture_rollback_snapshot(self, checkpoint_id):
+    def capture_rollback_snapshot(self, checkpoint_id, reuse_tool_tree=False):
+        hint = self.__dict__.pop("_tool_tree_hint", None)
+        tree = hint if reuse_tool_tree and hint else self.capture_workspace_snapshot()
+        if isinstance(tree, str):
+            return self._record_tree_checkpoint(checkpoint_id, tree)
+        return self._copy_rollback_snapshot(checkpoint_id)
+
+    def _record_tree_checkpoint(self, checkpoint_id, tree):
+        store = shadow_store(self)
+        try:
+            files = store.file_count(tree)
+        except ShadowError:
+            files = 0
+        manifest_path = self.root / ".bunnybyte" / "checkpoints" / checkpoint_id / "manifest.json"
+        try:
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {"checkpoint_id": checkpoint_id, "created_at": now(), "shadow_tree": tree, "file_count": files},
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            return {"rollback_snapshot_available": False, "rollback_snapshot_truncated": True}
+        return {
+            "rollback_snapshot_available": True,
+            "rollback_snapshot_truncated": False,
+            "rollback_snapshot_path": f".bunnybyte/checkpoints/{checkpoint_id}/manifest.json",
+            "rollback_file_count": files,
+            "shadow_tree": tree,
+        }
+
+    def _copy_rollback_snapshot(self, checkpoint_id):
         snapshot_dir = self.root / ".bunnybyte" / "checkpoints" / checkpoint_id / "workspace"
         manifest_path = snapshot_dir.parent / "manifest.json"
         files = []
@@ -94,7 +105,7 @@ class RuntimeCheckpointsMixin:
                     relative = path.relative_to(self.root)
                 except ValueError:
                     continue
-                if any(part in IGNORED_PATH_NAMES for part in relative.parts) or not path.is_file():
+                if any(part in SKIPPED_NAMES for part in relative.parts) or not path.is_file():
                     continue
                 try:
                     size = path.stat().st_size
@@ -138,6 +149,8 @@ class RuntimeCheckpointsMixin:
             raise ValueError(f"checkpoint not found: {checkpoint_id}")
         if not checkpoint.get("rollback_snapshot_available"):
             return False
+        if checkpoint.get("shadow_tree"):
+            return self._restore_from_tree(checkpoint)
         manifest_path = self.root / str(checkpoint.get("rollback_snapshot_path", ""))
         if not manifest_path.is_file():
             return False
@@ -154,13 +167,31 @@ class RuntimeCheckpointsMixin:
         self.refresh_prefix(force=True)
         return True
 
+    def _restore_from_tree(self, checkpoint):
+        store = shadow_store(self)
+        target = str(checkpoint.get("shadow_tree", ""))
+        if not store.has_tree(target):
+            return False
+        current = store.snapshot()
+        if current is None:
+            return False
+        try:
+            result = store.apply(current, target, force=True, protect_ignored=True)
+        except ShadowError:
+            return False
+        self.refresh_prefix(force=True)
+        if result.failed:
+            listed = "、".join(result.failed[:10])
+            raise ValueError(f"回滚只完成了一部分，这些文件没能还原：{listed}（回滚前的状态已保存在 .bunnybyte/shadow.git）")
+        return True
+
     def _restore_workspace_from_snapshot(self, snapshot_dir, expected):
         for path in sorted(self.root.rglob("*"), reverse=True):
             try:
                 relative = path.relative_to(self.root)
             except ValueError:
                 continue
-            if any(part in IGNORED_PATH_NAMES for part in relative.parts):
+            if any(part in SKIPPED_NAMES for part in relative.parts):
                 continue
             relative_text = relative.as_posix()
             if path.is_file() and relative_text not in expected:
@@ -177,7 +208,7 @@ class RuntimeCheckpointsMixin:
                 relative = path.relative_to(self.root)
             except ValueError:
                 continue
-            if any(part in IGNORED_PATH_NAMES for part in relative.parts):
+            if any(part in SKIPPED_NAMES for part in relative.parts):
                 continue
             if path.is_dir():
                 try:
@@ -196,7 +227,7 @@ class RuntimeCheckpointsMixin:
                     relative = path.relative_to(self.root)
                 except ValueError:
                     continue
-                if any(part in IGNORED_PATH_NAMES for part in relative.parts) or not path.is_file():
+                if any(part in SKIPPED_NAMES for part in relative.parts) or not path.is_file():
                     continue
                 target = backup_dir / relative
                 target.parent.mkdir(parents=True, exist_ok=True)

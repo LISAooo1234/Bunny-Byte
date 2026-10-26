@@ -279,7 +279,7 @@ def check_tools(which=shutil.which):
     if which("git"):
         checks.append(DoctorCheck("git", "ok", which("git")))
     else:
-        checks.append(DoctorCheck("git", "warn", "未安装", "安装 git 以启用工作区快照与 diff。"))
+        checks.append(DoctorCheck("git", "warn", "未安装", "安装 git 以启用 /undo 撤销和快速的工作区快照（没有 git 时回退到逐文件哈希，工具调用会变慢）。"))
     if which("rg"):
         checks.append(DoctorCheck("ripgrep", "ok", which("rg")))
     else:
