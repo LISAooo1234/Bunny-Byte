@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -121,7 +122,11 @@ def _scenario_bugfix_pytest(output_dir, workspace):
             '<tool>{"name":"read_file","args":{"path":"tests/test_calculator.py","start":1,"end":20}}</tool>',
             '<tool>{"name":"read_file","args":{"path":"src/calculator.py","start":1,"end":20}}</tool>',
             '<tool name="patch_file" path="src/calculator.py"><old_text>return a - b</old_text><new_text>return a + b</new_text></tool>',
-            '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":60}}</tool>',
+            "<tool>"
+            + json.dumps(
+                {"name": "run_shell", "args": {"command": f"{shlex.quote(sys.executable)} -m pytest -q", "timeout": 60}}
+            )
+            + "</tool>",
             "<final>Bug fixed and tests pass.</final>",
         ],
         max_steps=6,
