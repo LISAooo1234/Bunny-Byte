@@ -94,17 +94,9 @@ def _git(*args):
 
 
 def package_version():
-    pyproject = PACKAGE_ROOT / "pyproject.toml"
-    if pyproject.exists():
-        match = re.search(r'^version = "([^"]+)"', pyproject.read_text(encoding="utf-8"), re.M)
-        if match:
-            return match.group(1)
-    try:
-        from importlib.metadata import version
+    from ..version import __version__
 
-        return version("bunnybyte-agent")
-    except Exception:
-        return "unknown"
+    return __version__
 
 
 def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False, critic=False):

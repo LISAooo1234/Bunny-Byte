@@ -55,6 +55,13 @@ Bunny Byte 可以嵌进团队已有的流程，而不只是一个聊天窗口：
 - **接入外部工具（MCP）**：GitHub、数据库、浏览器、内部系统等 MCP 服务器的工具直接交给模型。和多数客户端不同，MCP 工具改的文件同样计入本轮改动：`/undo` 能撤销，验证闸门和独立审查能看到；默认需要审批，后台 worker 只拿到免审批的工具。
 - **克隆来的仓库不能自作主张**：仓库 `.bunnybyte.toml` 里的钩子和 MCP 服务器都要用户看过内容、`/hooks trust` / `/mcp trust` 之后才运行，配置一改信任作废，仓库自带的 `.env` 不能给自己授信，子进程拿不到 shell 里的 API key。
 
+## 省钱与发布：看得见的花费、装得上的包（0.9.0）
+
+- **每一分钱都有账**：每次模型调用按实际服务它的模型和官网价目（Anthropic、DeepSeek 含高峰时段、OpenAI）换算成美元，主循环、独立审查、总结、压缩、子 agent、后台记忆整理都计入；TUI 状态栏、`/usage`、`bunny -p` JSON、`report.json` 和 `bunny bench`（每个通过任务的花费）都能看到。
+- **每轮预算**：`--max-cost 0.5` / `[budget] max_turn_cost`，到上限就停在当前进度（退出码 3，写 checkpoint，说「继续」接着做），不再有“一夜跑掉几十美元”的意外。
+- **一行装好**：`pipx install git+https://github.com/LISAooo1234/Bunny-Byte.git`（或 `uv tool install`），`bunny --version` 与 `bunny doctor` 显示版本；包元数据齐全，CI 每次提交都构建 wheel、装进干净环境跑一遍首次使用流程，推 `v*` 标签自动出 GitHub Release（PyPI 发布需维护者开启）。
+- **第一次运行不再撞墙**：没配 API key 时，`bunny`、`bunny -p`、`bunnybyte-tui` 在发请求之前就停下，说明缺哪个 provider 的 key、设哪个环境变量、运行 `bunny setup`（退出码 2，`-p --output-format json` 照样给脚本一个结果对象）；自建网关和本地模型（localhost）不拦截；key 被拒绝（401/403）时提示 `bunny doctor` / `bunny setup --force`。
+
 ## 界面示例
 
 ### TUI 体验升级（0.7.0）
@@ -205,11 +212,23 @@ flowchart TB
 
 ### 安装
 
+推荐用 `pipx` 或 `uv tool` 装到独立环境（命令 `bunny` 直接进 PATH，不污染系统 Python）：
+
+```bash
+pipx install git+https://github.com/LISAooo1234/Bunny-Byte.git
+```
+
+```bash
+uv tool install git+https://github.com/LISAooo1234/Bunny-Byte.git
+```
+
+指定版本在地址后面加 `@v0.9.0`；升级用 `pipx upgrade bunnybyte-agent` / `uv tool upgrade bunnybyte-agent`，卸载用 `pipx uninstall bunnybyte-agent` / `uv tool uninstall bunnybyte-agent`。`bunny --version` 查看当前版本。包名 `bunnybyte-agent` 还没有发布到 PyPI，发布后可以直接 `pipx install bunnybyte-agent`。也可以用一键脚本（克隆到 `~/.bunnybyte-agent` 并建 venv）：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/LISAooo1234/Bunny-Byte/main/install.sh | bash
 ```
 
-安装后初始化 provider 配置：
+安装后初始化 provider 配置（没配 key 时 `bunny` 会在发出任何请求之前停下，告诉你该运行哪条命令、设哪个环境变量）：
 
 ```bash
 bunny setup

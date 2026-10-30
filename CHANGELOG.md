@@ -1,6 +1,14 @@
 # Changelog
 
-## 未发布
+## 0.9.0
+
+M4「省钱 & 发布」完成：花费估算与每轮预算、密钥遮蔽，以及可以用 pipx / uv 安装的包。
+
+- 新增 `bunny --version` / `-V`（`bunnybyte-tui` 同样支持），`bunny doctor` 第一行显示版本；版本号只写在 `bunnybyte/version.py`，pyproject 通过 setuptools 读取，`bunny bench` 结果里的 `bunnybyte_version` 也取自这里（以前从 pyproject 文本里正则匹配）。
+- 没配 API key 时不再发出一个必然失败的请求再甩出 `auth_error` 的 JSON：`bunny`、`bunny -p`、`bunnybyte-tui` 在启动时就停下（退出码 2），说明缺哪个 provider 的 key、该设的环境变量，以及 `bunny setup`；`-p --output-format json` 输出启动失败的结果对象。只拦截官方地址（api.openai.com / api.anthropic.com / api.deepseek.com）；自建网关只打一行提示后继续（网关可能自己注入鉴权），localhost / 127.0.0.1 上的本地模型不受影响。
+- 模型返回 `auth_error`（401/403）时，错误信息后附一行建议：`bunny doctor` 查看当前 provider 和 key，或 `bunny setup --force` 换 key。
+- 打包：pyproject 补齐 readme、作者、关键词、分类、项目链接；README.EN.md 作为 PyPI 说明，图片改为绝对地址；README 安装一节改为推荐 `pipx install git+…` / `uv tool install git+…`，附升级、卸载和固定版本的写法。包名 `bunnybyte-agent` 尚未发布到 PyPI。
+- CI 新增 `package` 任务：构建 sdist + wheel，用 `scripts/smoke_wheel.sh` 装进干净 venv、空 HOME、无 key 的环境，检查 `--version`、`doctor` 版本行，以及无 key 的 `bunny -p` 退出码 2 并给出 setup 提示。新增 `.github/workflows/release.yml`：推 `v*` 标签时校验标签与版本一致、跑同一个冒烟脚本、上传到 GitHub Release；仓库变量 `PYPI_PUBLISH=true` 且在 PyPI 配好 trusted publishing 后才会发布到 PyPI。release.yml 还没有真正跑过（这一版没有推标签）。
 
 - 花费估算与每轮预算：每次模型调用按实际服务它的模型（故障切换后按备用模型）和内置官网价目（Anthropic、DeepSeek 含高峰时段、OpenAI，2026-10-31）换算成美元，累加到本轮与会话；网关模型名（`Claude Haiku 4.5`）和带日期的 id 都能匹配，`[pricing."模型名"]` 可覆盖或补充价格。主循环、独立审查、步数用尽 / 空转总结、历史压缩、回合索引、子 agent、记忆整理与技能演化的调用都计入（以前步数总结和回合索引的 token 不进任何统计）。TUI 状态栏新增 `cost` 分段，`/usage` 列出本轮、会话、按模型和按来源的花费，`bunny -p` JSON 与 `report.json` 新增 `cost`，`bunny bench` 报告总花费与每个通过任务的花费，会话累计跟着 session JSON 保存、`/resume` 后接着算。
 - 新增 `--max-cost USD` / `[budget] max_turn_cost`：每次调模型前检查，本轮花费估算到达上限就停在当前进度（`stop_reason: budget_exceeded`，`bunny -p` 退出码 3，写 checkpoint，说「继续」开始新一轮），到 80% 提示一次，到上限后不再做审查和步数总结这类额外付费调用；模型没有价格时明确提示上限无法生效。Anthropic 风格响应的 `cache_creation_input_tokens` 现在也会记录（按缓存写入价计）。

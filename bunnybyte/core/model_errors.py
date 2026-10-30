@@ -1,6 +1,7 @@
 """Model error finishing path for turn execution."""
 
 from ..providers.errors import ProviderError
+from .first_run import model_error_hint
 from .workspace import clip, now
 
 
@@ -28,7 +29,7 @@ def finish_model_error(engine, task_state, user_message, prompt_metadata, exc, d
             "或 /clear 开新 session。"
         )
     else:
-        final = f"模型错误：{code}（{clip(str(error.get('body_excerpt', '')), 200)}）"
+        final = f"模型错误：{code}（{clip(str(error.get('body_excerpt', '')), 200)}）{model_error_hint(code)}"
     task_state.stop_model_error(final)
     agent.record({"role": "assistant", "content": final, "created_at": now()})
     agent.emit_trace(

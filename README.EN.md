@@ -2,7 +2,7 @@
 
 # Bunny Byte
 
-[中文](README.md) | [English](README.EN.md)
+[中文](https://github.com/LISAooo1234/Bunny-Byte/blob/main/README.md) | [English](https://github.com/LISAooo1234/Bunny-Byte/blob/main/README.EN.md)
 
 [![CI](https://github.com/LISAooo1234/Bunny-Byte/actions/workflows/ci.yml/badge.svg)](https://github.com/LISAooo1234/Bunny-Byte/actions/workflows/ci.yml)
 
@@ -16,7 +16,7 @@ agent controllable, recoverable, and observable.
 </div>
 
 <p align="center">
-  <img src="assets/screenshots/bunnybyte-tui-intro.png" alt="Bunny Byte TUI intro screen" width="960">
+  <img src="https://raw.githubusercontent.com/LISAooo1234/Bunny-Byte/main/assets/screenshots/bunnybyte-tui-intro.png" alt="Bunny Byte TUI intro screen" width="960">
 </p>
 
 > BunnyByte is AI and can make mistakes. Please double-check responses.
@@ -33,7 +33,7 @@ stored locally for recovery, review, and debugging.
 | Capability | Summary |
 | --- | --- |
 | Model integration | Supports the OpenAI Responses API and Anthropic-style interfaces; `provider` selects configuration and `protocol` selects the request format. |
-| Provider failover | When the primary provider returns 5xx / rate limits / timeouts, requests switch to the configured `fallback` chain; the switch is shown in the UI and recorded in the run trace. See [Configuration](docs/configuration.md). |
+| Provider failover | When the primary provider returns 5xx / rate limits / timeouts, requests switch to the configured `fallback` chain; the switch is shown in the UI and recorded in the run trace. See [Configuration](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/configuration.md). |
 | Tool calling | Uses provider-native tool calling when available and keeps a fallback path for legacy backends. |
 | Session lifecycle | Supports `/history`, `/resume`, `/fork`, `/rollback`, and `/compact`. |
 | Undo | `/undo` reverts the files the last turn changed (only those files; it refuses and lists conflicts if you edited them again afterwards). Snapshots live in a private git object store, so even large repos with `node_modules` stay in the millisecond-to-sub-second range. See "Undo and snapshots" below. |
@@ -43,7 +43,7 @@ stored locally for recovery, review, and debugging.
 | Headless mode | `bunny -p` for scripts and CI: stdout carries only the result (text / json / stream-json) and the exit code says whether the job got done; `--require-verified` ties it to a verification receipt that really ran against the current files. See "Headless mode" below. |
 | Project rules | `AGENTS.md`, `CLAUDE.md` and `.bunnybyte/rules/*.md` from the repository are placed in the prompt prefix with their own budget, and a long file is cut with an explicit pointer to read the rest; `bunny doctor` lists what was actually loaded. See "Project rules" below. |
 | Stall guard | Cheap models often re-read a file that has not changed. Those "already read" / repeated-call replies no longer eat the step budget. Repeated waste first takes the repeated read-only tool away for a couple of calls, and a model that still loops is asked to report progress without tools and stopped early (`loop_stalled`) instead of burning all 50 steps. |
-| Benchmark | `bunny bench` scores the agent with a real model on 8 fixed tasks (pass rate, steps, tokens, wall time) and appends results to `benchmarks/results/`. See [Benchmark](docs/benchmark.md). |
+| Benchmark | `bunny bench` scores the agent with a real model on 8 fixed tasks (pass rate, steps, tokens, wall time) and appends results to `benchmarks/results/`. See [Benchmark](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/benchmark.md). |
 | MCP and hooks | Connect any MCP stdio server; its tools need approval by default and the files they change are covered by `/undo`. `pre_tool` / `post_tool` / `on_final` hooks turn team rules into runtime checks. Servers and hooks shipped by a repository must be trusted first. See "MCP servers" and "Hooks" below. |
 | Secret masking | A `.env` the agent reads, command output, or a key you paste is replaced with a `<secret:GITHUB_TOKEN#…>` placeholder before it reaches the model or `.bunnybyte/`; when the model copies a placeholder into `write_file` / `patch_file`, the real value is written back, so editing a config file does not replace the key with a placeholder. See "Secret masking" below. |
 | Cost and budget | Every model call is priced in USD by the model that actually served it, using official list prices (main loop, critic, summaries, compaction and subagents all count); see it in the TUI status bar, `/usage`, `bunny -p` JSON and `bunny bench`. `--max-cost 0.5` caps a turn and stops at the current progress. See "Cost estimate and budget" below. |
@@ -59,13 +59,20 @@ Bunny Byte fits into an existing team workflow, not just a chat window:
 - **External tools via MCP**: tools from GitHub, database, browser or in-house MCP servers go straight to the model. Unlike most clients, files an MCP tool changes count as changes of the turn: `/undo` reverts them and the verification gate and critic see them. Approval is required by default, and background workers only get approval-free tools.
 - **A cloned repository cannot act on its own**: hooks and MCP servers in a repository's `.bunnybyte.toml` only run after the user has read them and run `/hooks trust` / `/mcp trust`; any config change revokes trust, a repository `.env` cannot trust itself, and child processes do not get the API keys in your shell.
 
+## Cost and release: visible spend, installable package (0.9.0)
+
+- **Every call is priced**: each model call is converted to USD using the model that actually served it and the official price lists (Anthropic, DeepSeek including peak hours, OpenAI). The main loop, critic, summaries, compaction, subagents and background memory work all count. Spend shows in the TUI status bar, `/usage`, `bunny -p` JSON, `report.json` and `bunny bench` (cost per passed task).
+- **Per-turn budget**: `--max-cost 0.5` / `[budget] max_turn_cost` stops at the current progress when the estimate reaches the cap (exit code 3, checkpoint written, say "continue" to go on).
+- **One-line install**: `pipx install git+https://github.com/LISAooo1234/Bunny-Byte.git` (or `uv tool install`); `bunny --version` and `bunny doctor` show the version. The package has full metadata, CI builds the wheel on every push and runs the first-use flow from a clean environment, and a `v*` tag publishes a GitHub Release (PyPI upload is opt-in for the maintainer).
+- **No wall on first run**: without an API key, `bunny`, `bunny -p` and `bunnybyte-tui` stop before any request and say which provider key is missing, which environment variable to set, and to run `bunny setup` (exit code 2; `-p --output-format json` still returns a result object). Custom gateways and local models (localhost) are not blocked. A rejected key (401/403) now points to `bunny doctor` / `bunny setup --force`.
+
 ## Interface
 
 ### TUI upgrade (0.7.0)
 
 <p align="center">
-  <img src="assets/screenshots/bunnybyte-tui-theme-dark.png" alt="Bunny Byte TUI dark theme: tool cards and an inline diff from one bug-fix turn" width="720">
-  <img src="assets/screenshots/bunnybyte-tui-theme-light.png" alt="Bunny Byte TUI light theme" width="720">
+  <img src="https://raw.githubusercontent.com/LISAooo1234/Bunny-Byte/main/assets/screenshots/bunnybyte-tui-theme-dark.png" alt="Bunny Byte TUI dark theme: tool cards and an inline diff from one bug-fix turn" width="720">
+  <img src="https://raw.githubusercontent.com/LISAooo1234/Bunny-Byte/main/assets/screenshots/bunnybyte-tui-theme-light.png" alt="Bunny Byte TUI light theme" width="720">
 </p>
 
 One bug-fix turn (read, patch, run a check, answer) in the dark theme (top) and the light theme (bottom). What changed in the 0.7.0 TUI:
@@ -91,7 +98,7 @@ Input and live feedback:
 ### Planning and memory state
 
 <p align="center">
-  <img src="assets/screenshots/bunnybyte-tui-memory-skills.png" alt="Bunny Byte TUI planning and memory" width="960">
+  <img src="https://raw.githubusercontent.com/LISAooo1234/Bunny-Byte/main/assets/screenshots/bunnybyte-tui-memory-skills.png" alt="Bunny Byte TUI planning and memory" width="960">
 </p>
 
 Plan mode can display todo progress, subagent state, and memory-related context
@@ -115,7 +122,7 @@ flowchart TB
     R --> RE["trace / task_state / report / checkpoints"]
 ```
 
-See the full version in [Architecture](docs/architecture.md).
+See the full version in [Architecture](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/architecture.md).
 
 <details>
 <summary>Expand architecture preview</summary>
@@ -197,12 +204,12 @@ See the full version in [Architecture](docs/architecture.md).
 
 Rough code mapping:
 
-- [`bunnybyte/tui/`](bunnybyte/tui/): Textual terminal interface
-- [`bunnybyte/core/`](bunnybyte/core/): runtime, engine, context, session, checkpoints, workers
-- [`bunnybyte/tools/`](bunnybyte/tools/): tool registry, schemas, execution entrypoints
-- [`bunnybyte/features/`](bunnybyte/features/): memory, skills, sandbox
-- [`bunnybyte/providers/`](bunnybyte/providers/): model provider clients
-- [`bunnybyte/evaluation/`](bunnybyte/evaluation/): evaluation and run evidence
+- [`bunnybyte/tui/`](https://github.com/LISAooo1234/Bunny-Byte/blob/main/bunnybyte/tui/): Textual terminal interface
+- [`bunnybyte/core/`](https://github.com/LISAooo1234/Bunny-Byte/blob/main/bunnybyte/core/): runtime, engine, context, session, checkpoints, workers
+- [`bunnybyte/tools/`](https://github.com/LISAooo1234/Bunny-Byte/blob/main/bunnybyte/tools/): tool registry, schemas, execution entrypoints
+- [`bunnybyte/features/`](https://github.com/LISAooo1234/Bunny-Byte/blob/main/bunnybyte/features/): memory, skills, sandbox
+- [`bunnybyte/providers/`](https://github.com/LISAooo1234/Bunny-Byte/blob/main/bunnybyte/providers/): model provider clients
+- [`bunnybyte/evaluation/`](https://github.com/LISAooo1234/Bunny-Byte/blob/main/bunnybyte/evaluation/): evaluation and run evidence
 
 ## Quick Start
 
@@ -211,11 +218,23 @@ key.
 
 ### Install
 
+The recommended way is `pipx` or `uv tool`, which put `bunny` on your PATH in an isolated environment:
+
+```bash
+pipx install git+https://github.com/LISAooo1234/Bunny-Byte.git
+```
+
+```bash
+uv tool install git+https://github.com/LISAooo1234/Bunny-Byte.git
+```
+
+Append `@v0.9.0` to the URL to pin a version; upgrade with `pipx upgrade bunnybyte-agent` / `uv tool upgrade bunnybyte-agent` and remove with `pipx uninstall bunnybyte-agent` / `uv tool uninstall bunnybyte-agent`. `bunny --version` prints the installed version. The `bunnybyte-agent` package is not on PyPI yet; once it is published, `pipx install bunnybyte-agent` will work. The one-line script (clones into `~/.bunnybyte-agent` and creates a venv) still works:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/LISAooo1234/Bunny-Byte/main/install.sh | bash
 ```
 
-Then initialize provider settings:
+Then initialize provider settings (without a key, `bunny` stops before sending any request and tells you which command to run or which environment variable to set):
 
 ```bash
 bunny setup
@@ -284,9 +303,9 @@ Bunny Byte ships a live benchmark. `bunny bench` has a real model solve 8 tasks 
 
 First baseline (0.5.0, `deepseek-v4-flash`, 2 runs per task, step ceiling 50): 16/16 passed and 15/16 finished cleanly, but only 4/16 runs stayed within the efficient step budget: 19.7 steps on average against 2-5 for the reference solutions, and one run needed all 50 steps. The bottleneck is not whether the model can solve the task but that it keeps going after the work is done; that is exactly what the upcoming step-budget refund and verification receipts will be measured against.
 
-With the stall guard (same task set, 2 runs per task, captured from an uncommitted working tree): still 16/16 passed; 0 of 16 runs hit the step ceiling (baseline: 1) and 1 run was ended early as stalled. Average model calls went 14.3 → 12.7 and total wall time 366s → 327s, but 16 runs are noisy and neither is a conclusion. Uncached input tokens actually rose 378k → 459k (about 25.9k → 30.7k tokens per passed task), so this is not a cost-saving feature. What is solid: the bench now counts repeated or no-new-information tool calls as wasted steps, 5.6 per task on average, about 30% of all steps, so the cheap model's waste is mostly re-reading rather than being unable to solve the task. Full results are in [`benchmarks/results/`](benchmarks/results/).
+With the stall guard (same task set, 2 runs per task, captured from an uncommitted working tree): still 16/16 passed; 0 of 16 runs hit the step ceiling (baseline: 1) and 1 run was ended early as stalled. Average model calls went 14.3 → 12.7 and total wall time 366s → 327s, but 16 runs are noisy and neither is a conclusion. Uncached input tokens actually rose 378k → 459k (about 25.9k → 30.7k tokens per passed task), so this is not a cost-saving feature. What is solid: the bench now counts repeated or no-new-information tool calls as wasted steps, 5.6 per task on average, about 30% of all steps, so the cheap model's waste is mostly re-reading rather than being unable to solve the task. Full results are in [`benchmarks/results/`](https://github.com/LISAooo1234/Bunny-Byte/blob/main/benchmarks/results/).
 
-There are 10 tasks, so one task is 10 percentage points and a single run can move by one task as noise; average steps and tokens are the more sensitive regression signals. The historical numbers above come from the original 8 tasks (a different task-set hash, so they are never compared with newer results). The 2 newer "ripple" tasks are traps built on purpose (the obvious fix breaks a test the prompt did not name) to exercise the verification gate; on `deepseek-v4-flash` they passed 12/12 even without the gate (the trap did not bite that model), but on `Claude Haiku 4.5` `change_default_everywhere` went 0/5 without the gate and 4/4 with it (see "Verification receipts" below). Details: [Benchmark](docs/benchmark.md) (Chinese).
+There are 10 tasks, so one task is 10 percentage points and a single run can move by one task as noise; average steps and tokens are the more sensitive regression signals. The historical numbers above come from the original 8 tasks (a different task-set hash, so they are never compared with newer results). The 2 newer "ripple" tasks are traps built on purpose (the obvious fix breaks a test the prompt did not name) to exercise the verification gate; on `deepseek-v4-flash` they passed 12/12 even without the gate (the trap did not bite that model), but on `Claude Haiku 4.5` `change_default_everywhere` went 0/5 without the gate and 4/4 with it (see "Verification receipts" below). Details: [Benchmark](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/benchmark.md) (Chinese).
 
 ## Undo and snapshots
 
@@ -405,7 +424,7 @@ only_if_changed = true
 - A hook that crashes or times out is allowed through with a warning by default; use `on_error = "block"` for a real safety gate. Every run is recorded in the trace and `report.json`, and `bunny doctor` has a "钩子" row.
 - Subagents obey `pre_tool` / `post_tool` too.
 
-The full protocol, exit-code table, limits and four ready-made recipes are in [docs/hooks.md](docs/hooks.md) (Chinese).
+The full protocol, exit-code table, limits and four ready-made recipes are in [docs/hooks.md](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/hooks.md) (Chinese).
 
 ## MCP servers
 
@@ -499,10 +518,10 @@ tests/           # runtime / safety / TUI / acceptance / regression tests
 
 ## Documentation
 
-- [Configuration](docs/configuration.md)
-- [Architecture](docs/architecture.md)
-- [Skills](docs/skills.md)
-- [Memory](docs/memory.md)
-- [Sandbox](docs/sandbox.md)
-- [Benchmark](docs/benchmark.md) (Chinese)
-- [Hooks](docs/hooks.md) (Chinese)
+- [Configuration](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/configuration.md)
+- [Architecture](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/architecture.md)
+- [Skills](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/skills.md)
+- [Memory](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/memory.md)
+- [Sandbox](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/sandbox.md)
+- [Benchmark](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/benchmark.md) (Chinese)
+- [Hooks](https://github.com/LISAooo1234/Bunny-Byte/blob/main/docs/hooks.md) (Chinese)

@@ -28,6 +28,7 @@ from .core.project_rules import load_project_rules
 from .features.sandbox.checker import SandboxChecker
 from .providers.base import complete_model
 from .providers.errors import ProviderError, sanitize_url
+from .version import __version__
 
 STATUS_ICONS = {"ok": "✓", "warn": "!", "fail": "✗", "skip": "-"}
 PING_PROMPT = "Reply with exactly: pong"
@@ -325,7 +326,7 @@ def run_doctor(
     which=shutil.which,
     run=subprocess.run,
 ):
-    checks = [check_python()]
+    checks = [DoctorCheck("版本", "ok", f"bunny {__version__}"), check_python()]
     checks.extend(check_config_files(start, config_path))
     provider_checks, config = check_provider(start, provider, config_path)
     checks.extend(provider_checks)

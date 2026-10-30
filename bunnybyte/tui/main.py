@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 
 from bunnybyte.branding import DISPLAY_HANDLE
-from bunnybyte.cli import build_agent, build_arg_parser, prepare_tui_terminal_environment, tui_theme_choice
+from bunnybyte.cli import build_agent, build_arg_parser, key_check_passes, prepare_tui_terminal_environment, tui_theme_choice
 
 
 def main(argv=None):
@@ -16,6 +16,8 @@ def main(argv=None):
         )
         return 2
     agent = build_agent(args)
+    if not key_check_passes(agent):
+        return 2
     prepare_tui_terminal_environment()
     from bunnybyte.tui.app import BunnyByteTuiApp
 

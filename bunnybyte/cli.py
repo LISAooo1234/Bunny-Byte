@@ -31,6 +31,8 @@ from .core.mcp_tools import McpManager, register_mcp_tools
 from .core.hook_runner import HookRunner
 from .commands.undo_commands import handle_undo_command
 from .core.cost_meter import cost_rows
+from .core.first_run import missing_key_check
+from .version import __version__
 from .config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_PROVIDER,
@@ -496,6 +498,7 @@ def build_arg_parser():
         description="Minimal coding agent for provider profiles backed by OpenAI-compatible or Anthropic-compatible APIs.",
         epilog="First-time setup: bunny setup. Health check: bunny doctor. Benchmark: bunny bench. Config helpers: bunny config path, bunny config show.",
     )
+    parser.add_argument("-V", "--version", action="version", version=f"bunny {__version__}")
     parser.add_argument("prompt", nargs="*", help="可选的一次性提示词。")
     parser.add_argument("--cwd", default=".", help="工作区目录。")
     parser.add_argument(
@@ -1714,6 +1717,14 @@ def interaction_mode(args):
 SLASH_COMMAND_RE = re.compile(r"^/[A-Za-z][\w-]*(\s|$)")
 
 
+def key_check_passes(agent):
+    """交互入口（TUI / REPL / 一次性命令）共用：缺 key 时打印怎么配并返回 False，网关地址只提示。"""
+    level, message = missing_key_check(agent.model_client)
+    if message:
+        print(message, file=sys.stderr)
+    return level != "error"
+
+
 def run_print_mode(args):
     """bunny -p：见 headless.py。启动阶段的任何输出都挪到 stderr，stdout 只留给结果。"""
     from . import headless
@@ -1741,6 +1752,11 @@ def run_print_mode(args):
             agent = build_agent(args)
     except (ValueError, OSError) as exc:  # JSONDecodeError 是 ValueError；--resume 找不到会话是 FileNotFoundError
         return usage_error(f"{type(exc).__name__}: {exc}" if isinstance(exc, OSError) else str(exc))
+    level, message = missing_key_check(agent.model_client)
+    if level == "error":
+        return usage_error(message)
+    if level == "warn" and not args.quiet:
+        print(message, file=sys.stderr)
     headless.prepare_agent(agent)
     return headless.run_headless(
         agent,
@@ -1777,6 +1793,8 @@ def main(argv=None):
         agent = build_agent(args)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
+        return 2
+    if not key_check_passes(agent):
         return 2
 
     mode = interaction_mode(args)
