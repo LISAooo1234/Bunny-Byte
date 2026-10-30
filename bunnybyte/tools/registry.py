@@ -7,6 +7,7 @@ import subprocess
 import textwrap
 from functools import partial
 
+from ..core.transcript_fence import match_patch
 from ..core.workspace import IGNORED_PATH_NAMES
 from .base import RegisteredTool
 
@@ -198,7 +199,7 @@ def validate_core_tool(agent, name, args):
         if "new_text" not in args:
             raise ValueError("missing new_text")
         text = path.read_text(encoding="utf-8")
-        count = text.count(old_text)
+        count = text.count(match_patch(text, old_text, "")[0])
         if count != 1:
             raise ValueError(f"old_text must occur exactly once, found {count}")
         return
@@ -351,8 +352,9 @@ def tool_patch_file(agent, args):
     if "new_text" not in args:
         raise ValueError("missing new_text")
     text = path.read_text(encoding="utf-8")
+    old_text, new_text = match_patch(text, old_text, str(args["new_text"]))
     count = text.count(old_text)
     if count != 1:
         raise ValueError(f"old_text must occur exactly once, found {count}")
-    path.write_text(text.replace(old_text, str(args["new_text"]), 1), encoding="utf-8")
+    path.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
     return f"patched {path.relative_to(agent.root)}"

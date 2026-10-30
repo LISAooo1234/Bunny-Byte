@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..features import skills as skillslib
+from .transcript_fence import fence
 from .workspace import WorkspaceContext, clip, now
 
 SCHEMA_VERSION = 1
@@ -347,10 +348,10 @@ class SkillEvolutionManager:
             event_id = str(item.get("event_id", ""))
             if role == "tool":
                 name = str(item.get("name", "tool"))
-                content = clip(str(item.get("content", "")), 700)
+                content = fence(clip(str(item.get("content", "")), 700))
                 lines.append(f"[{event_id}] tool:{name}: {content}")
             else:
-                lines.append(f"[{event_id}] {role}: {clip(str(item.get('content', '')), 900)}")
+                lines.append(f"[{event_id}] {role}: {fence(clip(str(item.get('content', '')), 900))}")
         return clip("\n".join(lines), MAX_REVIEW_HISTORY_CHARS)
 
     def _run_isolated_agent(self, role, prompt):

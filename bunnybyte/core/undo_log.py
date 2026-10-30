@@ -158,6 +158,7 @@ def _tell_runtime(agent, entry, result):
                 f"{paths}。文件现在是改动之前的内容，请重新读取后再继续，不要假设之前写入的内容还在。）"
             ),
             "created_at": now(),
+            "source": "system_note",
         }
     )
     agent.session_event_bus.emit(

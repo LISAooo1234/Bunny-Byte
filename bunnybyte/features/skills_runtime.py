@@ -18,7 +18,7 @@ def invoke_skill(agent, name, arguments=""):
     if skill.disable_model_invocation:
         agent.session_event_bus.emit("skill_completed", _event_payload(skill, arguments, prompt, status="prompt_only"))
         return skill.render(arguments)
-    with _model_override(agent, skill.model), _skill_tool_profile(agent, skill):
+    with _model_override(agent, skill.model), _skill_tool_profile(agent, skill), _turn_source(agent, "skill"):
         answer = _run_fork(agent, skill, prompt) if skill.context == "fork" else agent.ask(prompt)
     agent.session_event_bus.emit("skill_completed", _event_payload(skill, arguments, prompt, status="completed", answer=answer))
     return answer
@@ -39,10 +39,20 @@ def _run_fork(agent, skill, prompt):
         secret_env_names=agent.secret_env_names,
         feature_flags=agent.feature_flags,
     )
-    with _model_override(child, skill.model), _skill_tool_profile(child, skill):
+    with _model_override(child, skill.model), _skill_tool_profile(child, skill), _turn_source(child, "skill"):
         answer = child.ask(prompt)
     agent.session_event_bus.emit("skill_fork_completed", {"skill": skill.name, "child_session_id": child.session["id"]})
     return answer
+
+
+@contextmanager
+def _turn_source(agent, source):
+    previous = getattr(agent, "turn_source", "")
+    agent.turn_source = source
+    try:
+        yield
+    finally:
+        agent.turn_source = previous
 
 
 def _skill_prompt(skill, arguments):

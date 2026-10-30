@@ -33,7 +33,7 @@ class Engine:
         agent = self.runtime
         notifications = agent.worker_manager.drain_notifications()
         for notification in notifications:
-            agent.record({"role": "user", "content": notification, "created_at": now()})
+            agent.record({"role": "user", "content": notification, "created_at": now(), "source": "worker_notification"})
             agent.session_event_bus.emit(
                 "worker_notification_drained",
                 {

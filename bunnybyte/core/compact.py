@@ -1,6 +1,9 @@
 """Non-destructive session compaction for model-facing context."""
 
 from .compact_support import build_summary, model_summary_text, new_compaction_id, summary_item
+from .transcript_fence import USER_MESSAGE_CHARS, collect_user_messages
+
+MAX_STORED_USER_MESSAGES = 60
 
 
 class CompactManager:
@@ -23,8 +26,11 @@ class CompactManager:
             self.agent.session_event_bus.emit("compaction_created", summary)
             return summary
         summary_text = model_summary_text(self.agent, compacted_items, self._group)
+        previous = (self.active_compaction() or {}).get("user_messages") or []
+        user_messages = [text[:USER_MESSAGE_CHARS] for text in collect_user_messages(compacted_items, previous)]
+        user_messages = user_messages[-MAX_STORED_USER_MESSAGES:]
         compaction_id = new_compaction_id(self.agent.session)
-        summary = summary_item(compaction_id, summary_text)
+        summary = summary_item(compaction_id, summary_text, user_messages=user_messages)
         preserved_event_ids = [str(item.get("event_id", "")) for item in kept_items if item.get("event_id")]
         summarized_event_ids = [str(item.get("event_id", "")) for item in compacted_items if item.get("event_id")]
         view_items = [summary, *kept_items]
@@ -34,6 +40,7 @@ class CompactManager:
                 "id": compaction_id,
                 "strategy": "model_summary_v1",
                 "summary": summary_text,
+                "user_messages": user_messages,
                 "summary_event_id": summary["event_id"],
                 "summarized_event_ids": summarized_event_ids,
                 "preserved_event_ids": preserved_event_ids,
@@ -51,7 +58,7 @@ class CompactManager:
         self.agent.session_path = self.agent.session_store.save(self.agent.session)
         self.agent.session_event_bus.emit(
             "compaction_created",
-            {key: value for key, value in payload.items() if key != "summary"},
+            {key: value for key, value in payload.items() if key not in {"summary", "user_messages"}},
         )
         if self.agent.current_task_state:
             self.agent.emit_trace(
@@ -62,7 +69,7 @@ class CompactManager:
             self.agent.emit_trace(
                 self.agent.current_task_state,
                 "compaction_finished",
-                {key: value for key, value in payload.items() if key != "summary"},
+                {key: value for key, value in payload.items() if key not in {"summary", "user_messages"}},
             )
         return payload
 
@@ -75,6 +82,7 @@ class CompactManager:
             str(compaction.get("id", "compact")),
             str(compaction.get("summary", "")).strip(),
             event_id=str(compaction.get("summary_event_id", "")) or None,
+            user_messages=compaction.get("user_messages") or (),
         )
         preserved_ids = {str(event_id) for event_id in compaction.get("preserved_event_ids", []) if str(event_id)}
         last_summarized = str(compaction.get("last_summarized_event_id", ""))

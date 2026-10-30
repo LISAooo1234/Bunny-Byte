@@ -83,7 +83,9 @@ def test_manual_compact_creates_summary_event_and_shortens_future_history(tmp_pa
     assert agent.session["context_view"]["active_compaction_id"] == summary["id"]
     assert "Compacted context summary:" in after_prompt
     assert "Detailed compact summary for old work." in after_prompt
-    assert "old request 0" not in after_prompt
+    assert "[user] old request 0" not in after_prompt
+    assert "- old request 0" in after_prompt  # 真实用户消息以原文附在摘要后
+    assert "old answer 0" not in after_prompt
     assert len(after_prompt) < len(before_prompt)
 
     events = read_jsonl(agent.session_event_bus.path)
@@ -130,7 +132,9 @@ def test_resume_uses_context_view_without_destroying_full_history(tmp_path):
     assert resumed.session["history"] == original_history
     prompt = resumed.prompt("continue")
     assert "Resume compact summary." in prompt
-    assert "resume old request 0" not in prompt
+    assert "[user] resume old request 0" not in prompt
+    assert "- resume old request 0" in prompt
+    assert "resume old answer 0" not in prompt
     assert "resume old request 5" in prompt
 
 
@@ -145,4 +149,6 @@ def test_compact_summary_failure_keeps_history_and_uses_fallback(tmp_path):
 
     assert agent.session["history"] == original_history
     assert summary["summary"].startswith("Compacted session summary:")
-    assert "fallback request 0" not in agent.prompt("continue")
+    prompt = agent.prompt("continue")
+    assert "[user] fallback request 0" not in prompt
+    assert "fallback answer 0" not in prompt

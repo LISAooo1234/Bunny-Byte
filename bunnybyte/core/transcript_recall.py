@@ -7,6 +7,7 @@ import re
 from collections import Counter, OrderedDict
 
 from ..providers.base import complete_model
+from .transcript_fence import fence
 from .workspace import clip, now
 
 DEFAULT_RECALL_LIMIT = 4
@@ -206,14 +207,19 @@ def render_prompt_recall(snippets, budget=DEFAULT_RECALL_BUDGET):
         lines.extend(
             [
                 f"- turn_id={snippet['turn_id']}{source} events={','.join(snippet['event_ids'][:5])}",
-                f"  keywords={', '.join(snippet.get('keywords', [])) or '-'}",
-                f"  summary={snippet.get('summary') or '-'}",
+                f"  keywords={_one_line(', '.join(snippet.get('keywords', []))) or '-'}",
+                f"  summary={_one_line(snippet.get('summary')) or '-'}",
             ]
         )
         for line in str(snippet.get("text", "")).splitlines():
             lines.append(f"  {line}")
     rendered = "\n".join(lines)
     return _hard_clip(rendered, max(0, int(budget)))
+
+
+def _one_line(text):
+    # summary / keywords 可能来自原始消息或模型，换行会让后半截落到行首冒充会话结构。
+    return " ".join(str(text or "").split())
 
 
 def render_cli_recall(snippets):
@@ -246,8 +252,8 @@ def _item_text(item):
     if role == "tool":
         args = item.get("args", {}) or {}
         arg_text = json.dumps(args, ensure_ascii=False, sort_keys=True)
-        return f"[tool:{item.get('name', '')}] {arg_text}\n{item.get('content', '')}"
-    return f"[{role}] {item.get('content', '')}"
+        return f"[tool:{item.get('name', '')}] {arg_text}\n{fence(item.get('content', ''))}"
+    return f"[{role}] {fence(item.get('content', ''))}"
 
 
 def _extract_entities(items, text):
@@ -366,9 +372,9 @@ def _render_items(items):
         if role == "tool":
             args = json.dumps(item.get("args", {}) or {}, ensure_ascii=False, sort_keys=True)
             lines.append(f"[tool:{item.get('name', '')} {event_id}] {args}")
-            lines.append(clip(str(item.get("content", "")), 700))
+            lines.append(fence(clip(str(item.get("content", "")), 700)))
         else:
-            lines.append(f"[{role} {event_id}] {clip(str(item.get('content', '')), 900)}")
+            lines.append(f"[{role} {event_id}] {fence(clip(str(item.get('content', '')), 900))}")
     return "\n".join(lines)
 
 

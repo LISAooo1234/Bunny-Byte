@@ -29,6 +29,14 @@ CHECKPOINT_PARTIAL_STALE_STATUS = "partial-stale"
 CHECKPOINT_WORKSPACE_MISMATCH_STATUS = "workspace-mismatch"
 
 
+def _turn_source(agent):
+    # 只有用户自己打的字算 "user"；技能展开的提示词和父 agent 派给子 agent 的任务不算。
+    source = str(getattr(agent, "turn_source", "") or "")
+    if source:
+        return source
+    return "delegated" if int(getattr(agent, "depth", 0) or 0) > 0 else "user"
+
+
 def _with_protocol_retry_notice(user_message, notice, native_tools=False):
     notice = str(notice or "").strip()
     if not notice:
@@ -101,7 +109,7 @@ def run_turn(engine, user_message, mention_text=None):
     yield {"type": "turn_started", "run_id": task_state.run_id, "task_id": task_state.task_id}
 
     agent.memory.set_task_summary(user_message)
-    agent.record({"role": "user", "content": user_message, "created_at": now()})
+    agent.record({"role": "user", "content": user_message, "created_at": now(), "source": _turn_source(agent)})
     agent.session_event_bus.emit("user_message", {"run_id": task_state.run_id, "content": clip(user_message, 300)})
     agent.emit_trace(
         task_state,

@@ -5,6 +5,8 @@ import json
 import re
 from collections import OrderedDict
 
+from .transcript_fence import fence
+
 CURRENT_TURN_KEEP_RECENT_ITEMS = 4
 CURRENT_TURN_SOFT_BUDGET_RATIO = 0.6
 CURRENT_TURN_SOFT_MIN_CHARS = 12_000
@@ -236,9 +238,9 @@ class TurnHistoryRenderer:
         if item.get("role") == "tool":
             prefix = f"[tool:{item.get('name', '')}] {json.dumps(item.get('args', {}), sort_keys=True)}"
             content = str(item.get("content", "")) if line_limit is None else tail_clip(item.get("content", ""), max(20, line_limit))
-            return [prefix, content]
+            return [prefix, fence(content)]
         content = str(item.get("content", "")) if line_limit is None else tail_clip(item.get("content", ""), line_limit)
-        return [f"[{item.get('role', '')}] {content}"]
+        return [f"[{item.get('role', '')}] {fence(content)}"]
 
     def _reusable_file_summary(self, path):
         memory = getattr(self.agent, "memory", None)
@@ -249,7 +251,7 @@ class TurnHistoryRenderer:
 
     def _summarize_current_turn_item(self, item, seen_read_paths):
         if self._is_worker_notification(item):
-            return self._summarize_worker_notification(item)
+            return fence(self._summarize_worker_notification(item))
         if item.get("role") != "tool":
             return ""
         if item.get("name") == "read_file":
