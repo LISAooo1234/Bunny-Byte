@@ -34,13 +34,17 @@ def build_tool_profiles(tools):
             "exit_plan_mode",
         }
     )
-    dream_tools = read_only | frozenset({"write_file", "patch_file"})
+    # MCP 工具不受 write_scope 约束，需要审批的那些不进后台 worker / dream 档位
+    mcp_tools = frozenset(name for name in tools if name.startswith("mcp__"))
+    risky_mcp = frozenset(name for name in mcp_tools if tools[name].risky)
+    dream_tools = (read_only - mcp_tools) | frozenset({"write_file", "patch_file"})
     worker_tools = (
         all_tools
         - coordinator_tools
         - mode_tools
         - interactive_tools
         - frozenset({"run_shell"})
+        - risky_mcp
     )
     return {
         "default": ToolSetProfile("default", all_tools),

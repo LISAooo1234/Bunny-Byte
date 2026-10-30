@@ -49,7 +49,7 @@ def native_tool_specs(tools: dict, protocol: str) -> list[dict]:
     rendered = []
     for name in sorted(tools):
         tool = tools[name]
-        parameters = tool_parameters_schema(tool.schema)
+        parameters = getattr(tool, "json_schema", None) or tool_parameters_schema(tool.schema)
         description = str(tool.description or "")
         if protocol == "anthropic":
             rendered.append(

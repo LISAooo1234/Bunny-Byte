@@ -18,6 +18,7 @@ class RegisteredTool:
     risky: bool
     runner: Callable[[dict], str]
     parallel_safe: bool = False
+    json_schema: dict | None = None  # MCP 等外部工具自带的 JSON Schema，原生工具调用时原样传给 provider
 
     @property
     def read_only(self):

@@ -438,6 +438,30 @@ def resolve_project_hooks(*, start: str | Path = ".", config_path: str | None = 
     return load_hooks(global_raw, _read_config_file(project_path).get("hooks", {}), project_path)
 
 
+def resolve_project_mcp(*, start: str | Path = ".", config_path: str | None = None):
+    """读取 [mcp.servers]。和钩子一样：全局配置和 --config 直接生效，仓库里的 .bunnybyte.toml 要先被信任。"""
+    from ..core.mcp_config import load_mcp_config
+
+    if config_path:
+        return load_mcp_config(_read_raw_section(Path(config_path).expanduser(), "mcp"), {})
+    global_raw = _read_raw_section(DEFAULT_CONFIG_PATH, "mcp") if DEFAULT_CONFIG_PATH.exists() else {}
+    project_path = find_project_config(start)
+    if not project_path or not project_path.exists() or project_path.resolve() == DEFAULT_CONFIG_PATH.resolve():
+        return load_mcp_config(global_raw, {})
+    if project_path.is_symlink():
+        config = load_mcp_config(global_raw, {})
+        return replace(config, problems=config.problems + ("项目的 .bunnybyte.toml 是符号链接，里面的 MCP 服务器不会启动",))
+    return load_mcp_config(global_raw, _read_raw_section(project_path, "mcp"), project_path)
+
+
+def _read_raw_section(path: Path, name: str):
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle).get(name, {})
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"could not read BunnyByte config file {path}: {exc}") from exc
+
+
 def normalize_provider_name(provider: str | None) -> str:
     normalized = (provider or DEFAULT_PROVIDER).strip().lower()
     return PROVIDER_ALIASES.get(normalized, normalized)

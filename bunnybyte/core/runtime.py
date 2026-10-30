@@ -49,6 +49,7 @@ from .verification import VerifyConfig
 from .worker_manager import WorkerManager
 from ..tools import registry as toolkit
 from ..tools.schema import native_tool_specs
+from .mcp_tools import validate_mcp_args
 from .workspace import WorkspaceContext, now
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
@@ -449,6 +450,7 @@ class BunnyByte(
                     "schema": tool["schema"],
                     "risky": tool["risky"],
                     "description": tool["description"],
+                    **({"json_schema": tool.json_schema} if getattr(tool, "json_schema", None) else {}),
                 }
             )
         return hashlib.sha256(
@@ -856,6 +858,8 @@ class BunnyByte(
     def validate_tool(self, name, args):
         """把通用工具校验和 runtime 级额外约束串起来。"""
         toolkit.validate_tool(self, name, args)
+        if str(name).startswith("mcp__"):
+            validate_mcp_args(self, name, args)
 
     def tool_run_shell(self, args):
         return toolkit.tool_run_shell(self, args)

@@ -38,6 +38,9 @@ ICONS = {"running": ("…", "info"), "success": ("✓", "success"), "error": ("�
 
 
 def tool_title(name: str) -> str:
+    if name.startswith("mcp__") and "__" in name[5:]:
+        server, tool = name[5:].split("__", 1)  # 服务器名里不允许 "__"，第一个分隔符就是边界
+        return f"MCP {server}/{tool}"
     return TOOL_TITLES.get(name, name.replace("_", " "))
 
 

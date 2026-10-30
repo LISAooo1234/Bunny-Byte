@@ -26,6 +26,8 @@ from .branding import (
 )
 from .commands.slash import command_help_text, parse_subagent_args, resolve_command
 from .commands.hooks_commands import handle_hooks_command
+from .commands.mcp_commands import handle_mcp_command
+from .core.mcp_tools import McpManager, register_mcp_tools
 from .core.hook_runner import HookRunner
 from .commands.undo_commands import handle_undo_command
 from .config import (
@@ -38,6 +40,7 @@ from .config import (
     load_project_env,
     resolve_project_sandbox_config,
     resolve_project_hooks,
+    resolve_project_mcp,
     resolve_project_verify_config,
     resolve_project_critic_config,
     resolve_provider_config,
@@ -326,6 +329,7 @@ def build_agent(args):
         mode=getattr(args, "critic", None),
     )
     hookset = resolve_project_hooks(start=workspace.repo_root, config_path=getattr(args, "config", None))
+    mcp_config = resolve_project_mcp(start=workspace.repo_root, config_path=getattr(args, "config", None))
     load_project_env(workspace.repo_root, override=False)
     configured_secret_names = _configured_secret_names(args)
     session_id = args.resume
@@ -358,6 +362,7 @@ def build_agent(args):
         )
         _attach_provider_switching(agent, args)
         _attach_hooks(agent, hookset)
+        _attach_mcp(agent, mcp_config)
         _attach_critic(agent, args, critic_config)
         return agent
     lazy_session = True
@@ -382,6 +387,7 @@ def build_agent(args):
     )
     _attach_provider_switching(agent, args)
     _attach_hooks(agent, hookset)
+    _attach_mcp(agent, mcp_config)
     _attach_critic(agent, args, critic_config)
     return agent
 
@@ -391,6 +397,29 @@ def _attach_critic(agent, args, critic_config):
     if not critic_config.enabled or not critic_config.profile:
         return
     agent.critic_client = _build_model_client(args, provider=critic_config.profile, include_cli_overrides=False)
+
+
+def _attach_mcp(agent, mcp_config):
+    """启动 [mcp.servers] 里的服务器并把工具注册给主 agent；某个服务器起不来只打一行警告，不影响启动。"""
+    if not mcp_config:
+        return
+    manager = McpManager(mcp_config, agent.root, env_allowlist=agent.shell_env_allowlist)
+    agent.mcp = manager
+    if mcp_config.servers:
+        manager.start()
+        register_mcp_tools(agent, manager)
+    for state in manager.failures():
+        print(f"⚠ MCP 服务器 {state.spec.name} 启动失败：{state.error}", file=sys.stderr)
+    if mcp_config.pending:
+        print(
+            f"⚠ 这个仓库的 .bunnybyte.toml 里声明了 {len(mcp_config.pending)} 个 MCP 服务器，确认前不会启动。"
+            "用 /mcp 查看，/mcp trust 启动（脚本里用 BUNNYBYTE_TRUST_MCP=1）。",
+            file=sys.stderr,
+        )
+    for problem in mcp_config.problems:
+        print(f"⚠ MCP 配置：{problem}", file=sys.stderr)
+    if manager.running() and getattr(agent.sandbox_config, "mode", "off") != "off":
+        print("⚠ MCP 服务器不在 sandbox 里运行：它们的工具调用不受 [sandbox] 限制（仍需审批）。", file=sys.stderr)
 
 
 def _attach_hooks(agent, hookset):
@@ -972,6 +1001,8 @@ def handle_repl_command(agent, user_input):
         return True, False, handle_undo_command(agent, command_args)
     if command_name == "hooks":
         return True, False, handle_hooks_command(agent, command_args)
+    if command_name == "mcp":
+        return True, False, handle_mcp_command(agent, command_args)
     if command_name in {"fork", "rollback"}:
         target = command_args or "latest"
         try:
