@@ -55,6 +55,12 @@ Bunny Byte 可以嵌进团队已有的流程，而不只是一个聊天窗口：
 - **接入外部工具（MCP）**：GitHub、数据库、浏览器、内部系统等 MCP 服务器的工具直接交给模型。和多数客户端不同，MCP 工具改的文件同样计入本轮改动：`/undo` 能撤销，验证闸门和独立审查能看到；默认需要审批，后台 worker 只拿到免审批的工具。
 - **克隆来的仓库不能自作主张**：仓库 `.bunnybyte.toml` 里的钩子和 MCP 服务器都要用户看过内容、`/hooks trust` / `/mcp trust` 之后才运行，配置一改信任作废，仓库自带的 `.env` 不能给自己授信，子进程拿不到 shell 里的 API key。
 
+## 可追溯：每一轮改了什么、做了什么，事后都看得到（0.10.0）
+
+- **按轮看 diff**：`/diff` 显示最近一轮 agent 改动的 unified diff，`/diff 2` 看更早一轮（序号与 `/undo list` 相同），`--stat` 只看文件和增删行数，后面跟路径只看那几个文件。diff 来自每轮前后的影子快照，所以不依赖你的 git 提交，也包括 agent 改过的被 `.gitignore` 忽略的目标文件（例如 `.env`），显示前先做密钥遮蔽。
+- **重看一次运行**：`bunny replay` 把 `.bunnybyte/runs/` 里的一次运行渲染成时间线：每次模型调用的耗时和 token、每个工具调用的参数、结果、耗时和改动的文件，验证、审查、钩子、故障切换、空转保护，最后是改动文件和最终回答；`--list` 列出最近的运行，`--diff` 附上那一轮的改动。被中断的运行（只有 trace）也能看，记忆整理、子 agent 这些内部运行默认不混进列表。
+- **撤销之前先看清**：`/undo` 能还原一轮，`/diff` 先告诉你那一轮到底动了哪些行；回合结束后 `report.json` 记下前后快照，`bunny replay --diff` 在会话关掉之后仍能还原出 diff。
+
 ## 省钱与发布：看得见的花费、装得上的包（0.9.0）
 
 - **每一分钱都有账**：每次模型调用按实际服务它的模型和官网价目（Anthropic、DeepSeek 含高峰时段、OpenAI）换算成美元，主循环、独立审查、总结、压缩、子 agent、后台记忆整理都计入；TUI 状态栏、`/usage`、`bunny -p` JSON、`report.json` 和 `bunny bench`（每个通过任务的花费）都能看到。
@@ -269,6 +275,7 @@ bunny "修复当前仓库里最先失败的测试"
 bunny doctor            # 环境自检
 bunny -p "修好失败的测试" --approval auto --require-verified   # 无人值守，退出码绑验证回执
 bunny bench             # 跑分基准（会调用真实模型）
+bunny replay --list     # 最近的运行；bunny replay 1 --diff 看时间线和改动
 ```
 
 ### TUI Slash Commands
@@ -279,6 +286,7 @@ bunny bench             # 跑分基准（会调用真实模型）
 - `/fork <event|turn|#>`
 - `/rollback <event|turn|#>`
 - `/undo`、`/undo list`、`/undo --force`
+- `/diff`、`/diff 2`、`/diff --stat`、`/diff 1 src/`
 - `/hooks`、`/hooks trust`
 - `/mcp`、`/mcp trust`
 - `/banner`（展开/收起顶部横幅；`Ctrl+O` 展开/收起全部工具卡片）
@@ -310,6 +318,13 @@ Bunny Byte 自带实测跑分：`bunny bench` 在 10 个临时 git 仓库里让�
 - 快照存在 `.bunnybyte/shadow.git`，一个私有的 git 对象库（用 `GIT_DIR` 驱动，不碰你自己仓库的 index、refs、配置和 hook）。快照 = 一个 git tree，`git add -A` 通过私有 index 只重新哈希改过的文件，所以开销跟改动量而不是仓库大小成正比；遵守 `.gitignore`，另外跳过 `node_modules`、`.mypy_cache`、`.tox`、`.nox`，8 MB 以上的新增未跟踪大文件不入库。CRLF、文件模式、软链接、中文路径按字节原样往返。
 - 这同时修掉了一个真实的性能问题：以前每次工具调用要把整个工作区逐文件哈希两遍，每个检查点还把整个工作区拷贝一份（超过 20 MB 就悄悄放弃回滚）。在一个 800 个源文件、外加 15,000 个文件的 `node_modules` 的仓库里，一个只写一个文件的回合，快照开销从 18.3 秒、187 MB 检查点拷贝降到 0.6 秒、不到 1 MB。`/rollback` 现在也从快照 tree 恢复，不再有 20 MB 上限；旧版本留下的拷贝式检查点仍可回滚（`.bunnybyte/checkpoints/*/workspace` 可手动删除）。
 - 限制：被 `.gitignore` 忽略的文件不进快照——`write_file` / `patch_file` 点名写入的目标除外，但 shell 命令写进 `dist/`、`.env` 之类忽略路径的改动撤销不了，也不会算进本回合的改动文件；工作区里有嵌套 git 仓库（子模块、克隆进来的依赖）或没有 git 时，快照自动退回逐文件哈希（已跳过依赖目录并缓存未改文件），`/undo` 不可用（没有 git 时 `bunny doctor` 会提示）；`.bunnybyte/shadow.git` 不会自动清理，想重置直接删掉它（撤销历史随之失效）；`/rollback` 恢复到旧检查点时不会删除被 `.gitignore` 忽略的文件（只会覆盖内容）；检测到嵌套仓库后会在 `.bunnybyte/shadow.git/DISABLED` 留下标记，之后不再重试（删掉 `.bunnybyte/shadow.git` 可重置）；后台子任务在那一轮结束之后才写入的文件不属于那一轮。设置环境变量 `BUNNYBYTE_SHADOW=off` 可整体关闭。
+
+## 查看改动与重看运行
+
+- `/diff [n] [--stat] [路径...]`：第 n 轮（默认 1 = 最近一轮，与 `/undo list` 同序）改动的文件表（新增 / 修改 / 删除、+/− 行数）和 unified diff。已撤销的轮次会标注；回合进行中查看时只到最近一次工具调用为止。单个文件最多显示 200 行、总共 400 行，超出部分写明省略了多少；二进制文件只显示“binary file changed”，只改了文件权限的显示“only file mode changed”；超过 2 万行的文件不做比较（只列文件名），单行超过 400 字符截断。
+- `bunny replay [run_id|序号|latest] [--list] [--diff] [--all] [--cwd 目录]`：读取 `.bunnybyte/runs/<run_id>/` 的 `trace.jsonl`、`report.json`、`task_state.json`，按相对时间打印时间线。run id 可只写开头；序号 1 是最近一次。`--all` 把子 agent、记忆整理、技能演化这些内部运行也列出来（标 `[内部]`）。检查点、记忆整理这类事件汇总成一行“其他 N 个事件”。
+- 密钥：`/diff` 用当前会话的遮蔽规则（已知的 key、名字像密钥的环境变量、`sk-` / `ghp_` 等格式、`.env` 行），遮蔽作用于整份文件内容（所以 `api_key = "…"` 配置行和 PEM 私钥块在 diff 里也认得出），再截断。trace 写入时已经遮蔽过；`bunny replay --diff` 只认得名字像密钥的环境变量、各 provider 配置里的 `api_key` 和按格式识别的令牌。按格式识别有漏网的写法（例如 `DATABASE_URL=postgres://user:pw@…` 里的密码、`KEY = "…"` 等号两边带空格），所以别把 diff 输出当成可以随便贴出去的东西。
+- 限制：diff 依赖影子快照（没有 git 或有嵌套仓库时不可用）；shell 写进被忽略路径的改动、8 MB 以上的新增未跟踪文件不在快照里；后台子任务在回合结束之后才写的文件不算进那一轮；0.10.0 之前的运行没有记录快照 tree，`--diff` 只能列出改过的文件名。
 
 ## 验证回执
 

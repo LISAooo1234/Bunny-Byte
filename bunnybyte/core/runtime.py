@@ -28,6 +28,7 @@ from .project_rules import inject_rules
 from .permissions import PermissionChecker
 from .read_ledger import ReadLedger
 from .run_store import RunStore
+from .turn_diff import turn_changes_record
 from .runtime_context import RuntimeContextMixin
 from .runtime_consumers import default_runtime_consumers
 from .runtime_checkpoints import RuntimeCheckpointsMixin
@@ -833,6 +834,9 @@ class BunnyByte(
         return {
             "run_id": task_state.run_id,
             "task_id": task_state.task_id,
+            "session_id": str(self.session.get("id", "")),
+            "session_kind": str(self.session.get("kind", "") or "main"),
+            "depth": self.depth,
             "status": task_state.status,
             "stop_reason": task_state.stop_reason,
             "final_answer": task_state.final_answer,
@@ -855,6 +859,7 @@ class BunnyByte(
             "hooks": dict(task_state.hooks),
             "critic": dict(task_state.critic),
             "cost": self.cost_meter.turn_snapshot(),
+            "changes": turn_changes_record(self),
             "runtime_reminders": list(task_state.runtime_reminders),
             "todos": self.todo_ledger.to_dict(),
             "todo_changes": list(task_state.todo_changes),

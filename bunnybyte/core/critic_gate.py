@@ -4,7 +4,6 @@
 写回会话让模型修复，最多 `max_rounds` 轮；修复轮不占模型调用预算，但修复时的工具调用照常计入 max_steps；审查出错、回复不是 JSON 都按通过处理并记下原因。
 """
 
-import difflib
 import re
 import time
 
@@ -12,14 +11,14 @@ from ..providers.base import complete_model
 from .cost_meter import budget_stop_needed, record_call
 from .critic import VERDICT_ACCEPT, VERDICT_OBJECT, build_prompt, parse_review, render_review, repair_message
 from .project_rules import render_rules
-from .shadow_snapshots import _LOCK, ShadowError, ShadowStore
+from .shadow_snapshots import ShadowError, ShadowStore
 from .tool_loop_guard import current_turn_history
+from .turn_diff import current_turn_entry, text_or_none, tree_changes, unified
 from .verification import changes_fingerprint
 from .workspace import clip, now
 
 MIN_STEPS_LEFT = 3  # 修复要用工具步数；预算快用完时审查只会把一次成功收尾变成撞上限
 MAX_REVIEWS_KEPT = 6
-BINARY_SNIFF = 8000
 MAX_CHECK_LINES = 10
 EXIT_RE = re.compile(r"exit_code:\s*(-?\d+)")
 
@@ -34,42 +33,12 @@ def _gate_allowed(agent, config):
     )
 
 
-def _text(data):
-    if data is None:
-        return None
-    if b"\0" in data[:BINARY_SNIFF]:
-        return None
-    return data.decode("utf-8", "replace")
-
-
-def _unified(path, old, new):
-    old_text, new_text = _text(old), _text(new)
-    if (old is not None and old_text is None) or (new is not None and new_text is None):
-        return f"--- {path}\n(binary file changed)\n"
-    lines = difflib.unified_diff(
-        (old_text or "").splitlines(keepends=True),
-        (new_text or "").splitlines(keepends=True),
-        fromfile="/dev/null" if old is None else f"a/{path}",
-        tofile="/dev/null" if new is None else f"b/{path}",
-        n=3,
-    )
-    return "".join(line if line.endswith("\n") else line + "\n" for line in lines)
-
-
-def _turn_entry(agent):
-    turn_id = str(getattr(agent, "current_turn_id", "") or "")
-    for entry in reversed(agent.session.get("undo_log") or []):
-        if entry.get("turn_id") == turn_id:
-            return entry
-    return None
-
-
 def _shadow_diff(agent):
     """本轮改动的 unified diff：本轮第一个快照（回合开始前）对比此刻磁盘上的内容。
 
     返回 (diff 文本, 仓库文件列表, 此刻的快照 tree)；快照不可用时返回 None，由调用方退回直接读文件。
     """
-    entry = _turn_entry(agent)
+    entry = current_turn_entry(agent)
     store = ShadowStore.for_root(agent.root)
     if entry is None or not store.available:
         return None
@@ -77,19 +46,11 @@ def _shadow_diff(agent):
     if not tree:
         return None
     try:
-        changes = store.diff(entry["before_tree"], tree)
+        changes = tree_changes(store, entry["before_tree"], tree)
         files = sorted(store.tree_blobs(tree))
-        wanted = [item[key] for item in changes for key in ("old_oid", "oid") if set(item[key]) != {"0"}]
-        with _LOCK:
-            blobs = store._read_blobs(wanted) if wanted else {}
     except (ShadowError, OSError, KeyError, ValueError):
         return None
-    parts = []
-    for item in sorted(changes, key=lambda change: change["path"]):
-        old = None if item["status"] == "A" else blobs.get(item["old_oid"])
-        new = None if item["status"] == "D" else blobs.get(item["oid"])
-        parts.append(_unified(item["path"], old, new))
-    return "".join(parts), files, tree
+    return "".join(unified(path, old, new) for _, path, old, new in changes), files, tree
 
 
 def _fallback_diff(agent, paths):
@@ -101,7 +62,7 @@ def _fallback_diff(agent, paths):
             data = target.read_bytes() if target.is_file() else None
         except OSError:
             data = None
-        text = _text(data) if data is not None else None
+        text = text_or_none(data) if data is not None else None
         body = "(deleted)" if data is None else ("(binary)" if text is None else text)
         parts.append(f"=== {path} (current content; no diff available) ===\n{body}\n")
     return "".join(parts)

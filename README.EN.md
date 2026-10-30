@@ -59,6 +59,12 @@ Bunny Byte fits into an existing team workflow, not just a chat window:
 - **External tools via MCP**: tools from GitHub, database, browser or in-house MCP servers go straight to the model. Unlike most clients, files an MCP tool changes count as changes of the turn: `/undo` reverts them and the verification gate and critic see them. Approval is required by default, and background workers only get approval-free tools.
 - **A cloned repository cannot act on its own**: hooks and MCP servers in a repository's `.bunnybyte.toml` only run after the user has read them and run `/hooks trust` / `/mcp trust`; any config change revokes trust, a repository `.env` cannot trust itself, and child processes do not get the API keys in your shell.
 
+## Traceable: see what every turn changed and did, after the fact (0.10.0)
+
+- **Per-turn diffs**: `/diff` shows the unified diff of the latest agent turn, `/diff 2` an older one (same numbering as `/undo list`), `--stat` only files and line counts, and trailing paths narrow it down. Diffs come from the shadow snapshots taken before and after each turn, so they do not depend on your git commits and include gitignored files the agent wrote by name (such as `.env`); output is secret-masked first.
+- **Replay a run**: `bunny replay` renders a run from `.bunnybyte/runs/` as a timeline: duration and tokens of every model call; arguments, result, duration and changed files of every tool call; verification, critic, hooks, provider failover and stall guard events; then the changed files and the final answer. `--list` shows recent runs and `--diff` adds the turn's diff. Interrupted runs (trace only) work too, and internal runs such as memory consolidation and subagents stay out of the list by default.
+- **Look before you undo**: `/undo` reverts a turn, `/diff` first shows exactly which lines it touched; `report.json` keeps the before/after trees, so `bunny replay --diff` can rebuild the diff after the session is gone.
+
 ## Cost and release: visible spend, installable package (0.9.0)
 
 - **Every call is priced**: each model call is converted to USD using the model that actually served it and the official price lists (Anthropic, DeepSeek including peak hours, OpenAI). The main loop, critic, summaries, compaction, subagents and background memory work all count. Spend shows in the TUI status bar, `/usage`, `bunny -p` JSON, `report.json` and `bunny bench` (cost per passed task).
@@ -275,6 +281,7 @@ bunny "Fix the first failing test in the current repository"
 bunny doctor            # environment self-check
 bunny -p "Fix the failing tests" --approval auto --require-verified   # headless, exit code tied to a verification receipt
 bunny bench             # live benchmark (calls the real model)
+bunny replay --list     # recent runs; bunny replay 1 --diff shows a timeline and its diff
 ```
 
 ### TUI Slash Commands
@@ -285,6 +292,7 @@ bunny bench             # live benchmark (calls the real model)
 - `/fork <event|turn|#>`
 - `/rollback <event|turn|#>`
 - `/undo`, `/undo list`, `/undo --force`
+- `/diff`, `/diff 2`, `/diff --stat`, `/diff 1 src/`
 - `/banner` (toggle the welcome banner; `Ctrl+O` toggles all tool cards)
 - `/theme`, `/theme dark|light|auto` (switch colors without restarting)
 - `/hooks`, `/hooks trust`
@@ -315,6 +323,13 @@ There are 10 tasks, so one task is 10 percentage points and a single run can mov
 - Snapshots live in `.bunnybyte/shadow.git`, a private git object store driven through `GIT_DIR` (your own repository's index, refs, config and hooks are never touched). A snapshot is a git tree; `git add -A` through a private index only re-hashes files whose stat data changed, so the cost follows the number of changed files rather than the size of the repository. `.gitignore` is honored; `node_modules`, `.mypy_cache`, `.tox` and `.nox` are always skipped, and new untracked files over 8 MB are left out. CRLF, file modes, symlinks and non-ASCII paths round-trip byte for byte.
 - It also fixes a real performance problem: every tool call used to hash the whole workspace twice, and every checkpoint copied the whole workspace (silently giving up on rollback above 20 MB). In a repo with 800 source files plus a 15,000-file `node_modules`, a turn that writes one file went from 18.3 s of snapshot overhead and 187 MB of checkpoint copies to 0.6 s and under 1 MB. `/rollback` now restores from snapshot trees too, without the 20 MB cap; copy-style checkpoints written by older versions can still be rolled back (`.bunnybyte/checkpoints/*/workspace` can be deleted by hand).
 - Limits: files ignored by `.gitignore` are not in the snapshot, except explicit `write_file` / `patch_file` targets; changes a shell command makes to ignored paths such as `dist/` or `.env` cannot be undone and do not count as changed files for the turn. A workspace that contains a nested git repository (submodules, cloned dependencies), or has no git, falls back to per-file hashing (dependency directories skipped, unchanged files cached) and `/undo` is unavailable (`bunny doctor` warns when git is missing). `.bunnybyte/shadow.git` is not cleaned up automatically; delete it to reset (undo history is lost). `/rollback` to an older checkpoint never deletes files hidden by `.gitignore` (it only overwrites their content); once a nested repository is detected a `.bunnybyte/shadow.git/DISABLED` marker stops further attempts (delete `.bunnybyte/shadow.git` to reset); files a background subagent writes after the turn ended do not belong to that turn. Set `BUNNYBYTE_SHADOW=off` to disable the whole mechanism.
+
+## Diffs and run replay
+
+- `/diff [n] [--stat] [paths...]`: a table of the files turn n changed (default 1 = newest, same order as `/undo list`; added / modified / deleted, +/- lines) and the unified diff. Undone turns are labelled; during a running turn it only covers up to the latest tool call. Up to 200 lines per file and 400 in total, with a note on what was left out; binary files show "binary file changed", permission-only changes "only file mode changed"; files over 20,000 lines are not compared (name only) and lines over 400 characters are cut.
+- `bunny replay [run_id|N|latest] [--list] [--diff] [--all] [--cwd DIR]`: reads `trace.jsonl`, `report.json` and `task_state.json` from `.bunnybyte/runs/<run_id>/` and prints the timeline with relative times. A run id prefix is enough; N = 1 is the newest run. `--all` also lists subagent, memory consolidation and skill evolution runs (marked `[内部]`). Checkpoints and memory bookkeeping are folded into one "other N events" line.
+- Secrets: `/diff` uses the session's masking rules (known keys, secret-looking environment variables, `sk-` / `ghp_` style tokens, `.env` lines) and masks whole file contents (so `api_key = "..."` config lines and PEM blocks are caught inside a diff) before truncating. Traces are masked when written; `bunny replay --diff` only knows secret-looking environment variables, the `api_key` of configured providers and format-detected tokens. Format detection misses some forms (the password in `DATABASE_URL=postgres://user:pw@...`, `KEY = "..."` with spaces around `=`), so do not treat diff output as safe to paste anywhere.
+- Limits: diffs need the shadow snapshots (unavailable without git or with nested repositories); shell writes to ignored paths and new untracked files over 8 MB are not captured; files a background worker writes after the turn ended are not part of that turn; runs from before 0.10.0 have no recorded trees, so `--diff` can only list the changed file names.
 
 ## Verification receipts
 

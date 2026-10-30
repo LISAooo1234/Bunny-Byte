@@ -29,6 +29,7 @@ from .commands.hooks_commands import handle_hooks_command
 from .commands.mcp_commands import handle_mcp_command
 from .core.mcp_tools import McpManager, register_mcp_tools
 from .core.hook_runner import HookRunner
+from .commands.diff_commands import handle_diff_command
 from .commands.undo_commands import handle_undo_command
 from .core.cost_meter import cost_rows
 from .core.first_run import missing_key_check
@@ -496,7 +497,7 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description="Minimal coding agent for provider profiles backed by OpenAI-compatible or Anthropic-compatible APIs.",
-        epilog="First-time setup: bunny setup. Health check: bunny doctor. Benchmark: bunny bench. Config helpers: bunny config path, bunny config show.",
+        epilog="First-time setup: bunny setup. Health check: bunny doctor. Benchmark: bunny bench. Run timeline: bunny replay. Config helpers: bunny config path, bunny config show.",
     )
     parser.add_argument("-V", "--version", action="version", version=f"bunny {__version__}")
     parser.add_argument("prompt", nargs="*", help="可选的一次性提示词。")
@@ -1034,6 +1035,8 @@ def handle_repl_command(agent, user_input):
         )
     if command_name == "undo":
         return True, False, handle_undo_command(agent, command_args)
+    if command_name == "diff":
+        return True, False, handle_diff_command(agent, command_args)
     if command_name == "hooks":
         return True, False, handle_hooks_command(agent, command_args)
     if command_name == "mcp":
@@ -1778,6 +1781,10 @@ def main(argv=None):
         return run_config_command(argv[1:])
     if argv and argv[0] == "doctor":
         return run_doctor_command(argv[1:])
+    if argv and argv[0] == "replay":
+        from .replay import run_replay_command
+
+        return run_replay_command(argv[1:])
     if argv and argv[0] == "bench":
         from .bench.cli import run_bench_command
 

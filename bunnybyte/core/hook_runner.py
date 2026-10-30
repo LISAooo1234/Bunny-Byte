@@ -57,6 +57,7 @@ class HookOutcome:
     def to_record(self, tool_name=""):
         record = {
             "event": self.spec.event,
+            "hook_event": self.spec.event,  # trace 里的 "event" 会被改写成 hook_run
             "command": self.spec.command,
             "source": self.spec.source,
             "status": self.status,
