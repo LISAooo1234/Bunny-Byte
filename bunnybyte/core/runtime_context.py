@@ -6,6 +6,7 @@ import json
 import re
 import textwrap
 
+from .cost_meter import record_call
 from .memory_scope import render_memory_scope, set_memory_scope
 from .transcript_recall import (
     refine_turn_index_with_model,
@@ -118,6 +119,7 @@ class RuntimeContextMixin:
                     turn_id,
                     index,
                     max_new_tokens=self.max_new_tokens,
+                    on_usage=lambda metadata: record_call(self, metadata, source="turn_index"),
                 )
                 self.session.setdefault("turn_index", {})[str(turn_id)] = index
             except Exception as exc:

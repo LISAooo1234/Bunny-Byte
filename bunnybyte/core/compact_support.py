@@ -3,6 +3,7 @@
 import re
 
 from ..providers.base import complete_model
+from .cost_meter import record_call
 from .context_usage import estimate_tokens
 from .workspace import clip, now
 
@@ -62,6 +63,7 @@ def model_summary_text(agent, items, group_items):
             prompt,
             compact_output_tokens(getattr(agent, "max_new_tokens", None)),
         )
+        record_call(agent, getattr(result, "metadata", None), source="compaction")
         summary = extract_summary(result.text)
         if summary:
             return summary

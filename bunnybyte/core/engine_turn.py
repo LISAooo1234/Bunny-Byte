@@ -12,6 +12,7 @@ from .engine_helpers import (
     should_retry_model_error,
 )
 from .file_mentions import preload_mentions
+from .cost_meter import STOP_REASON_BUDGET_EXCEEDED, budget_stop_needed, cost_notices, record_call
 from .critic_gate import critic_gate
 from .hook_gate import final_hook_gate
 from .model_errors import finish_model_error
@@ -89,6 +90,7 @@ def run_turn(engine, user_message, mention_text=None):
     )
     task_state.resume_status = agent.resume_state.get("status", CHECKPOINT_NONE_STATUS)
     agent.current_task_state = task_state
+    agent.cost_meter.start_turn(agent)
     agent.current_turn_id = task_state.task_id
     agent.current_run_id = task_state.run_id
     agent.current_run_dir = agent.run_store.start_run(task_state)
@@ -129,6 +131,11 @@ def run_turn(engine, user_message, mention_text=None):
             )
             return
         yield from engine._drain_worker_notification_events()
+        if budget_stop_needed(agent):  # 先查后调：越过上限的那次调用已经花了，之后不再发请求
+            yield from finish_stopped_run(
+                engine, task_state, user_message, agent.cost_meter.stop_text(), STOP_REASON_BUDGET_EXCEEDED, run_started_at
+            )
+            return
         attempts += 1
         task_state.record_attempt()
         agent.run_store.write_task_state(task_state)
@@ -273,6 +280,8 @@ def run_turn(engine, user_message, mention_text=None):
         raw = result.text
         result_tool_calls = list(getattr(result, "tool_calls", []) or [])
         completion_metadata = dict(result.metadata or getattr(agent.model_client, "last_completion_metadata", {}) or {})
+        record_call(agent, completion_metadata)
+        yield from cost_notices(agent, task_state)
         metadata_tool_calls = list(completion_metadata.get("tool_calls", []) or [])
         if not result_tool_calls and metadata_tool_calls:
             result_tool_calls = metadata_tool_calls
@@ -470,7 +479,11 @@ def run_turn(engine, user_message, mention_text=None):
         final = "Stopped after too many malformed model responses without a valid tool call or final answer."
         task_state.stop_retry_limit(final)
     else:
-        summary = request_step_limit_summary(engine, task_state, user_message) if tool_steps > 0 else None
+        summary = (
+            request_step_limit_summary(engine, task_state, user_message)
+            if tool_steps > 0 and not budget_stop_needed(agent)
+            else None
+        )
         if summary:
             final = (
                 summary

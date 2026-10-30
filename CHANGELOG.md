@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- 花费估算与每轮预算：每次模型调用按实际服务它的模型（故障切换后按备用模型）和内置官网价目（Anthropic、DeepSeek 含高峰时段、OpenAI，2026-10-31）换算成美元，累加到本轮与会话；网关模型名（`Claude Haiku 4.5`）和带日期的 id 都能匹配，`[pricing."模型名"]` 可覆盖或补充价格。主循环、独立审查、步数用尽 / 空转总结、历史压缩、回合索引、子 agent、记忆整理与技能演化的调用都计入（以前步数总结和回合索引的 token 不进任何统计）。TUI 状态栏新增 `cost` 分段，`/usage` 列出本轮、会话、按模型和按来源的花费，`bunny -p` JSON 与 `report.json` 新增 `cost`，`bunny bench` 报告总花费与每个通过任务的花费，会话累计跟着 session JSON 保存、`/resume` 后接着算。
+- 新增 `--max-cost USD` / `[budget] max_turn_cost`：每次调模型前检查，本轮花费估算到达上限就停在当前进度（`stop_reason: budget_exceeded`，`bunny -p` 退出码 3，写 checkpoint，说「继续」开始新一轮），到 80% 提示一次，到上限后不再做审查和步数总结这类额外付费调用；模型没有价格时明确提示上限无法生效。Anthropic 风格响应的 `cache_creation_input_tokens` 现在也会记录（按缓存写入价计）。
 - 密钥遮蔽：agent 读到的 `.env`、命令输出、粘贴进对话的 key，在发给模型和写进 `.bunnybyte/`（session JSON、事件、trace、`task_state`、报告、大段 shell 输出文件）之前换成 `<secret:名字#nonce-N>` 占位符。以前只遮蔽名字像密钥的环境变量，而且只在 trace / 报告里：`read_file .env` 的原文会进入下一次模型请求和 session JSON，只写在 `.bunnybyte.toml` 里的 `api_key` 从来不遮。现在额外识别 provider 配置的 `api_key`（主 / 备用 / 审查）、`sk-` / `sk-ant-` / `ghp_` / `github_pat_` / `AKIA` / `xox?-` / `AIza` / `sk_live_` / PEM 私钥、`.env` / YAML 风格的 `XXX_TOKEN=…` 行（含 search、git diff、`cat -n` 的输出格式）、`aws_secret_access_key` 与配置里的 `api_key = "…"`；短的普通单词（如 `postgres`）不按子串替换。
 - 模型照抄占位符做 `write_file` / `patch_file` 时落盘前换回真实值；`run_shell` 命令里出现占位符直接拒绝；占位符带进程随机 nonce，`/resume` 之后的旧占位符拒绝写入，仓库里字面写着的占位符原样保留；子 agent 共用占位符；写进 `.bunnybyte/` 的内容不换回真实值；已是占位符的文本不会再遮一次。trace 里原来的 `<redacted>` 值改为占位符（按键名遮蔽的字段仍是 `<redacted>`）。
 

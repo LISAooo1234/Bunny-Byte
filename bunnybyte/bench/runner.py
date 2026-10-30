@@ -200,6 +200,7 @@ def run_task(
     keep_dir=None,
     verify_gate=False,
     critic=False,
+    prices=None,
 ):
     """在全新的临时仓库里跑一次任务，返回一行可序列化的结果。
 
@@ -222,6 +223,7 @@ def run_task(
         "input_tokens": None,
         "output_tokens": None,
         "cached_tokens": None,
+        "cost_usd": None,
         "wall_seconds": 0.0,
         "stop_reason": "",
         "timed_out": False,
@@ -250,6 +252,7 @@ def run_task(
                 verify_config=BENCH_VERIFY if verify_gate else None,
                 critic_config=BENCH_CRITIC if critic else None,
             )
+            agent.cost_meter.prices = dict(prices or {})
             answer, error, stuck = _drive(agent, task.prompt, timeout, result)
     except Exception as exc:
         error = exc
@@ -265,6 +268,9 @@ def run_task(
         result["verify_rounds"] = int(state.verification.get("rounds", 0))
         result["verify_repairs"] = int(state.verification.get("repairs", 0))
         result.update(trace_usage(agent.run_store.trace_path(state)))
+        turn = agent.cost_meter.turn
+        if turn["calls"] and not turn["unpriced_calls"]:
+            result["cost_usd"] = round(turn["usd"], 6)  # 有一次调用没价格就整题不报，免得把偏低的数当真
     problems = []
     if stuck:
         problems.append(f"超过 {timeout}s 墙钟上限，且中止请求未能生效")
@@ -304,6 +310,7 @@ def run_bench(
     on_result=None,
     verify_gate=False,
     critic=False,
+    prices=None,
 ):
     results = []
     for task in tasks:
@@ -316,6 +323,7 @@ def run_bench(
                 max_steps=max_steps,
                 verify_gate=verify_gate,
                 critic=critic,
+                prices=prices,
             )
             results.append(row)
             if on_result is not None:

@@ -42,6 +42,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 跑分基准 | `bunny bench` 用真实模型在 10 个固定任务上打分（通过率、步数、token、耗时），结果与历史写入 `benchmarks/results/`；详见 [跑分基准](docs/benchmark.md)。 |
 | MCP 与钩子 | 接入任意 MCP stdio 服务器，工具默认要审批、改的文件进 `/undo`；`pre_tool` / `post_tool` / `on_final` 钩子把团队规矩变成运行时强制；仓库自带的服务器和钩子要先信任；详见下文「MCP 服务器」「钩子」。 |
 | 密钥遮蔽 | 读到的 `.env`、命令输出、粘贴进来的 key 在发给模型和写进 `.bunnybyte/` 之前换成 `<secret:GITHUB_TOKEN#…>` 占位符；模型照抄占位符做 `write_file` / `patch_file` 时落盘前换回真实值，改配置文件不会把密钥写成占位符；详见下文「密钥遮蔽」。 |
+| 花费与预算 | 每次模型调用按实际服务它的模型和官网价目估算美元花费（主循环、审查、总结、压缩、子 agent 都算），TUI 状态栏、`/usage`、`bunny -p` JSON、`bunny bench` 都能看到；`--max-cost 0.5` 给一轮设上限，到了就停在当前进度；详见下文「花费估算与预算」。 |
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
 
@@ -353,7 +354,7 @@ bunny -p "总结最近的改动" --output-format json | jq .result
 | 0 | 正常做完 |
 | 1 | 运行出错（模型/provider 报错、异常） |
 | 2 | 用法或配置错误（没有提示词、`--require-verified` 与 `--verify off` 同用、配置无效） |
-| 3 | 中途停止：步数上限、空转被拦、重试耗尽 |
+| 3 | 中途停止：步数上限、空转被拦、重试耗尽、花费到达 `--max-cost` |
 | 4 | 只在 `--require-verified` 下出现（3 优先于 4：中途停止的运行不会再报 4）：改了代码，但没有覆盖**当前文件内容**的通过回执（验证失败/超时/被拒绝/不可用/没跑，或验证之后文件又变了） |
 | 5 | 配置了 `on_final` 钩子，反馈轮次用完后它仍然拦截最终回答（见[钩子](#钩子hooks)；JSON 结果里的 `hooks.final_blocked` 为 true） |
 | 130 | 被 Ctrl-C 中断 |
@@ -445,6 +446,34 @@ agent 读 `.env`、跑 `env`、`cat ~/.aws/credentials`，或你把 key 粘进�
 - **`run_shell` 不换回真实值**：命令里出现占位符直接拒绝，避免把密钥交给 `git commit -m`、`curl -d`、`echo`；需要时请在命令里用环境变量。子 agent 与主 agent 共用占位符。写进 `.bunnybyte/`（记忆、计划）的内容保留占位符，不换回真实值。
 
 边界：这是防止密钥**泄露给 provider 和留在磁盘记录里**，不是防模型的沙箱——模型仍然可以 `curl -d @.env` 把文件内容发出去（用 approval policy / sandbox 管）。只认上面列出的格式，自定义格式的密钥可以用 `--secret-env-name` / `BUNNYBYTE_SECRET_ENV_NAMES` 声明成环境变量；MCP 工具的参数不会换回真实值。界面上的工具输出同样是遮蔽后的，想看真实值请直接打开文件。
+
+## 花费估算与预算
+
+以前只看得到 token 数，看不到钱。现在每次模型调用都按**实际服务它的模型**（provider 故障切换后按备用模型）和官网价目换算成美元，累加到本轮和整个会话：
+
+```
+cost $0.0420/$0.500 · 会话 $0.310        ← TUI 状态栏：本轮 / 本轮上限 · 会话累计
+```
+
+- **哪里能看到**：TUI 状态栏；`/usage` 列出本轮、会话、每个模型的调用次数 / token / 金额和价格来源、按来源（主循环、审查、总结、压缩、回合索引、子 agent）拆分；`bunny -p --output-format json` 多一个 `cost` 字段；`report.json` 里也有；`bunny bench` 报告给出总花费和“每个通过任务的花费”。会话累计写在 session JSON 里，`/resume` 后接着算。
+- **算进去的调用**：主循环、独立审查、步数用尽或空转时的总结、历史压缩、回合索引、子 agent（worker / Explore）、记忆整理和技能演化的后台调用。provider 没有上报 token 的调用不计。
+- **价目表**：内置 Anthropic（Claude 4.x / 5.x 各型号，含缓存读写价、Haiku 5.5 超过 10 万 token 的长提示价）、DeepSeek（`deepseek-v4-flash` / `deepseek-flash` / `deepseek-v4-pro`，按 UTC 周一到周五 01–04、06–10 点的高峰价，其余时间半价）、OpenAI（gpt-5.4 / 5.5 / 5.6 系列）的公开价格，日期 2026-10-31。网关返回的 `Claude Haiku 4.5`、带日期的 `claude-haiku-4-5-20251001` 都能认出来；`claude-sonnet-5` 和 `claude-sonnet-5-5` 分开计价。不认识的模型记为“没有价格”的调用，单独列出。自己的模型或网关价格可以在配置里写：
+
+```toml
+# .bunnybyte.toml 或 ~/.config/bunnybyte/config.toml，美元 / 百万 token
+[pricing."my-gateway-model"]
+input = 0.4
+output = 1.6
+cached_input = 0.04   # 可选：缓存命中的输入
+cache_write = 0.5     # 可选：写入缓存的输入（Anthropic 风格）
+
+[budget]
+max_turn_cost = 0.5   # 每轮上限，等同 --max-cost 0.5
+```
+
+- **每轮上限**：`--max-cost 0.5` 或 `[budget] max_turn_cost`。每次调模型之前检查，本轮花费估算达到上限就停下（`stop_reason` 为 `budget_exceeded`，`bunny -p` 退出码 3），写好 checkpoint，已经做的改动都保留，说「继续」开始新的一轮、重新计算预算。到 80% 时提示一次。设了上限但模型没有价格时会明确提示“上限无法生效”，而不是悄悄不管。
+
+边界：这是**估算**。上限在调用之前检查，已经发出的调用照样计费：越过上限的那次主循环调用、紧跟着它的历史压缩、还在跑的子 agent 各自的当前调用，所以实际花费会超过上限一点；记忆整理和技能演化这类后台调用计入会话花费，但不占用每轮的预算；花费到了上限之后不再做审查、步数总结这类额外的付费调用。经网关（如 OneAPI）转发时以网关账单为准；网关不回报缓存命中时按全价计，会偏高；DeepSeek 的中国法定节假日也是半价，这里无法知道，会偏高；OpenAI 超过 272K 上下文的长提示价和 gpt-5.6 的缓存写入价没有计入，会偏低。`/fork` 出来的会话花费从零算起。价格会变，内置表标了日期，以官网为准。
 
 ## 仓库结构
 

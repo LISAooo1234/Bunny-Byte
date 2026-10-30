@@ -19,6 +19,7 @@ from ..features import memory as memorylib, skills as skillslib
 from ..branding import DISPLAY_NAME, SUBTITLE
 from ..features.sandbox import SandboxConfig, SandboxRunner
 from .compact import CompactManager
+from .cost_meter import STOP_REASON_BUDGET_EXCEEDED, CostMeter
 from .context_manager import ContextManager
 from .engine import Engine
 from . import model_output, tool_executor
@@ -193,6 +194,8 @@ class BunnyByte(
             "memory": memorylib.default_memory_state(),
         }
         self._ensure_session_shape()
+        self.cost_meter = CostMeter(owner=self)  # 子 agent / 记忆整理会换成父 agent 的计量器
+        self.cost_meter.bind_session(self.session)
         self.session_event_bus = SessionEventBus(
             self.session["id"], self.session_store.event_path(self.session["id"]),
             redact=self.redact_artifact, defer=self._lazy_session_requested,
@@ -683,7 +686,7 @@ class BunnyByte(
     def infer_next_step(self, task_state):
         if task_state.status == "completed":
             return "No next step recorded."
-        if task_state.stop_reason in {"step_limit_reached", "loop_stalled"}:
+        if task_state.stop_reason in {"step_limit_reached", "loop_stalled", STOP_REASON_BUDGET_EXCEEDED}:
             return "Resume from the latest checkpoint and continue the task."
         if task_state.last_tool:
             return f"Decide the next action after {task_state.last_tool}."
@@ -851,6 +854,7 @@ class BunnyByte(
             "verification": dict(task_state.verification),
             "hooks": dict(task_state.hooks),
             "critic": dict(task_state.critic),
+            "cost": self.cost_meter.turn_snapshot(),
             "runtime_reminders": list(task_state.runtime_reminders),
             "todos": self.todo_ledger.to_dict(),
             "todo_changes": list(task_state.todo_changes),

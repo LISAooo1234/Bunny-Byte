@@ -404,6 +404,14 @@ def resolve_project_critic_config(
     return resolve_critic_config(_load_config_values(start=start, explicit_path=config_path), mode=mode)
 
 
+def resolve_project_budget_config(
+    *, start: str | Path = ".", config_path: str | None = None, max_cost: float | None = None
+):
+    from ..core.cost_meter import resolve_budget_config
+
+    return resolve_budget_config(_load_config_values(start=start, explicit_path=config_path), max_cost=max_cost)
+
+
 def resolve_tui_theme(
     *, start: str | Path = ".", config_path: str | None = None, cli_value: str | None = None, env=None
 ) -> str:
@@ -515,6 +523,10 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     tui = data.get("tui", {})
     if isinstance(tui, dict):
         values["tui"] = dict(tui)
+    if "budget" in data:
+        values["budget"] = data["budget"]  # 原样交给 core.cost_meter 校验
+    if "pricing" in data:
+        values["pricing"] = data["pricing"]
 
     for name in ("openai", "anthropic", "deepseek"):
         section = data.get(name, {})
@@ -598,6 +610,12 @@ def _merge_config_values(target: dict[str, Any], incoming: dict[str, Any]) -> No
     target.setdefault("verify", {}).update(incoming.get("verify", {}))
     target.setdefault("critic", {}).update(incoming.get("critic", {}))
     target.setdefault("tui", {}).update(incoming.get("tui", {}))
+    for name in ("budget", "pricing"):
+        section = incoming.get(name)
+        if isinstance(section, dict) and isinstance(target.get(name, {}), dict):
+            target.setdefault(name, {}).update(section)  # 项目配置按模型名覆盖全局配置里的价格
+        elif name in incoming:
+            target[name] = section
     for name, section in incoming.get("providers", {}).items():
         target["providers"].setdefault(name, {}).update(section)
 

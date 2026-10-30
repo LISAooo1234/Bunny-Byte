@@ -66,6 +66,7 @@ def _branch_runtime_session(runtime, target="latest", mode="fork"):
     child["workspace_root"] = runtime.workspace.repo_root
     child["topic"] = _fork_topic(parent, child_history)
     child["parent_session_id"] = parent.get("id", "")
+    child.pop("cost", None)  # 花费从零算起，否则父会话和每个分叉都把同一笔钱算一遍
     child["fork"] = {
         "parent_session_id": parent.get("id", ""),
         "forked_from_event_id": target_item.get("event_id", ""),

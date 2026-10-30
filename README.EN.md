@@ -46,6 +46,7 @@ stored locally for recovery, review, and debugging.
 | Benchmark | `bunny bench` scores the agent with a real model on 8 fixed tasks (pass rate, steps, tokens, wall time) and appends results to `benchmarks/results/`. See [Benchmark](docs/benchmark.md). |
 | MCP and hooks | Connect any MCP stdio server; its tools need approval by default and the files they change are covered by `/undo`. `pre_tool` / `post_tool` / `on_final` hooks turn team rules into runtime checks. Servers and hooks shipped by a repository must be trusted first. See "MCP servers" and "Hooks" below. |
 | Secret masking | A `.env` the agent reads, command output, or a key you paste is replaced with a `<secret:GITHUB_TOKEN#…>` placeholder before it reaches the model or `.bunnybyte/`; when the model copies a placeholder into `write_file` / `patch_file`, the real value is written back, so editing a config file does not replace the key with a placeholder. See "Secret masking" below. |
+| Cost and budget | Every model call is priced in USD by the model that actually served it, using official list prices (main loop, critic, summaries, compaction and subagents all count); see it in the TUI status bar, `/usage`, `bunny -p` JSON and `bunny bench`. `--max-cost 0.5` caps a turn and stops at the current progress. See "Cost estimate and budget" below. |
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
 
@@ -358,7 +359,7 @@ bunny -p "Summarize recent changes" --output-format json | jq .result
 | 0 | Finished normally |
 | 1 | Run error (model/provider error, exception) |
 | 2 | Usage or config error (no prompt, `--require-verified` with `--verify off`, invalid config) |
-| 3 | Stopped early: step limit, stall guard, retry limit |
+| 3 | Stopped early: step limit, stall guard, retry limit, `--max-cost` reached |
 | 4 | Only with `--require-verified` (3 outranks 4: a run that stopped early never reports 4): code changed but there is no passing receipt covering the **current file contents** (verification failed / timed out / declined / unavailable / never ran, or files changed after it) |
 | 5 | An `on_final` hook still blocks the final answer after its feedback rounds ran out (see [Hooks](#hooks); `hooks.final_blocked` is true in the JSON result) |
 | 130 | Interrupted with Ctrl-C |
@@ -445,6 +446,34 @@ When the agent read `.env`, ran `env` or `cat ~/.aws/credentials`, or you pasted
 - **`run_shell` never gets the real value**: a command containing a placeholder is refused, so the secret cannot flow into `git commit -m`, `curl -d` or `echo`; use an environment variable in the command instead. Subagents share the parent's placeholders. Content written under `.bunnybyte/` (memory, plans) keeps the placeholder.
 
 Limits: this keeps secrets **away from the provider and out of on-disk records**; it is not a sandbox against the model, which can still `curl -d @.env` (use approval policy / sandbox for that). Only the formats above are recognised; declare custom secrets as env vars with `--secret-env-name` / `BUNNYBYTE_SECRET_ENV_NAMES`. MCP tool arguments never get real values restored. Tool output in the UI is masked too; open the file yourself to see the real value.
+
+## Cost estimate and budget
+
+Before, you could see token counts but not money. Now every model call is converted to USD by **the model that actually served it** (after a provider failover, the fallback model) at official list prices, and summed per turn and per session:
+
+```
+cost $0.0420/$0.500 · 会话 $0.310        <- TUI status bar: this turn / turn cap · session total
+```
+
+- **Where you see it**: the TUI status bar; `/usage` lists this turn, the session, calls / tokens / cost per model with the price source, and a split by source (main loop, critic, summary, compaction, turn index, worker); `bunny -p --output-format json` gets a `cost` field; it is also in `report.json`; `bunny bench` reports total cost and cost per passed task. The session total is stored in the session JSON and keeps counting after `/resume`.
+- **Calls that count**: the main loop, critic review, the summary written when steps run out or the loop stalls, history compaction, turn indexing, subagents (worker / Explore), and the background memory-consolidation and skill-evolution runs. Calls whose provider reports no tokens are not counted.
+- **Price table**: built-in public prices for Anthropic (Claude 4.x / 5.x, including cache read/write prices and the Haiku 5.5 tier for prompts over 100k tokens), DeepSeek (`deepseek-v4-flash` / `deepseek-flash` / `deepseek-v4-pro`, peak price Mon–Fri 01–04 and 06–10 UTC, half price otherwise) and OpenAI (gpt-5.4 / 5.5 / 5.6), dated 2026-10-31. Gateway names like `Claude Haiku 4.5` and dated ids like `claude-haiku-4-5-20251001` are recognised; `claude-sonnet-5` and `claude-sonnet-5-5` are priced separately. Unknown models are counted as unpriced calls and listed separately. Add your own model or gateway prices in config:
+
+```toml
+# .bunnybyte.toml or ~/.config/bunnybyte/config.toml, USD per million tokens
+[pricing."my-gateway-model"]
+input = 0.4
+output = 1.6
+cached_input = 0.04   # optional: cache-hit input
+cache_write = 0.5     # optional: cache-write input (Anthropic style)
+
+[budget]
+max_turn_cost = 0.5   # per-turn cap, same as --max-cost 0.5
+```
+
+- **Per-turn cap**: `--max-cost 0.5` or `[budget] max_turn_cost`. It is checked before each model call; once the turn's estimated cost reaches the cap the run stops (`stop_reason` `budget_exceeded`, exit code 3 under `bunny -p`), a checkpoint is written and all changes so far are kept; say "continue" to start a new turn with a fresh budget. You get one notice at 80%. If a cap is set but the model has no price, you are told the cap cannot apply instead of it being silently ignored.
+
+Limits: these are **estimates**. The cap is checked before a call, and calls already in flight are still billed: the main-loop call that crosses the cap, a history compaction that follows it, and the current call of each running subagent, so real spend can end up somewhat above the cap. Background memory consolidation and skill evolution count toward the session total but not toward the per-turn cap; after the cap is reached, extra paid calls such as the critic review and the step-limit summary are skipped. Through a gateway (e.g. OneAPI) the gateway's bill is what counts; when a gateway does not report cache hits, full price is assumed, so the estimate is high. DeepSeek's Chinese public holidays are off-peak, which cannot be known here, so the estimate can be high on those days. OpenAI's >272K long-context prices and gpt-5.6 cache-write prices are not modelled, so those calls are underestimated. A session created by `/fork` starts its cost at zero. Prices change; the built-in table is dated, the official pages win.
 
 ## Repository Layout
 

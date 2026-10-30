@@ -37,6 +37,7 @@ def clear_runtime_session(runtime):
 
 def _rebind(runtime, emit_started):
     runtime._ensure_session_shape()
+    runtime.cost_meter.bind_session(runtime.session)  # 会话累计花费跟着会话走；本轮计数不受影响
     runtime.session_event_bus = SessionEventBus(
         runtime.session["id"],
         runtime.session_store.event_path(runtime.session["id"]),

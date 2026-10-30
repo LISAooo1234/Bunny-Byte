@@ -36,6 +36,7 @@ def build_child_runtime(parent, subagent_type, write_scope):
             "kind": "worker",
         },
     )
+    child.cost_meter = parent.cost_meter  # worker 花的钱算进父 agent 的本轮和会话
     child.secret_vault = parent.secret_vault  # 同一个密钥在父子 agent 里是同一个占位符
     child.hooks = parent.hooks  # pre_tool / post_tool 对子 agent 同样生效；on_final 只在主 agent 上跑
     if getattr(parent, "mcp", None) is not None:

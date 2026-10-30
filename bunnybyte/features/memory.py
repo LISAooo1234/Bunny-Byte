@@ -561,6 +561,8 @@ def run_dream(agent, quiet=False, session_ids=None):
         memory_dir=agent.memory_dir,
         auto_dream=False,
     )
+    if getattr(agent, "cost_meter", None) is not None:
+        dream_agent.cost_meter = agent.cost_meter.background(dream_agent)  # 计入会话花费，不占用户这一轮的预算
     dream_agent.set_tool_profile("dream")
     dream_agent.refresh_prefix(force=True)
     result = dream_agent.ask(dream_prompt)

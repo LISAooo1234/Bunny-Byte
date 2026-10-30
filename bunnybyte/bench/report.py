@@ -8,6 +8,8 @@ import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..core.pricing import format_usd
+
 SCHEMA_VERSION = 1
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 NOISE_NOTE = "每题 = {step:.1f} 个百分点；单次结果上下浮动 1 题属于噪声，需要看多次历史才能下结论。"
@@ -33,6 +35,19 @@ def _per_pass(rows, keys):
     return round(sum(totals) / passed)
 
 
+def _cost_per_pass(rows):
+    total, passed = _cost_total(rows), sum(1 for row in rows if row["passed"])
+    return round(total / passed, 6) if total is not None and passed else None
+
+
+def _cost_total(rows):
+    """每题都有价格时才给总花费；有一题缺价格就返回 None（部分求和会偏低）。"""
+    values = [row.get("cost_usd") for row in rows]
+    if not values or any(not isinstance(value, (int, float)) for value in values):
+        return None
+    return round(sum(values), 6)
+
+
 def summarize(rows):
     runs = len(rows)
     passed = sum(1 for row in rows if row["passed"])
@@ -54,6 +69,8 @@ def summarize(rows):
         "input_tokens": _total(rows, "input_tokens"),
         "output_tokens": _total(rows, "output_tokens"),
         "cached_tokens": _total(rows, "cached_tokens"),
+        "cost_usd": _cost_total(rows),
+        "cost_per_pass": _cost_per_pass(rows),
         "verify_rounds": sum(row.get("verify_rounds", 0) for row in rows),
         "verify_repairs": sum(row.get("verify_repairs", 0) for row in rows),
         "false_claims": sum(1 for row in rows if row.get("false_claim")),
@@ -224,6 +241,7 @@ def render_record(record, previous=None):
         f"通过率：{summary['passed']}/{summary['runs']} = {summary['pass_rate'] * 100:.1f}%    正常收尾 {summary['clean_finish']}/{summary['runs']}    步数达标 {summary['within_budget']}/{summary['runs']}",
         f"平均步数 {_fmt(summary['avg_steps'])}，平均模型调用 {_fmt(summary['avg_model_calls'])}，总耗时 {summary['total_wall_seconds']}s",
         f"Token：{_tokens(summary, record.get('protocol', ''))}",
+        *_cost_lines(summary),
         *_waste_lines(summary),
         *_verify_lines(record),
         *_critic_lines(record),
@@ -231,6 +249,14 @@ def render_record(record, previous=None):
         NOISE_NOTE.format(step=100 / max(len(record["task_ids"]) * record["repeat"], 1)),
     ]
     return "\n".join(lines)
+
+
+def _cost_lines(summary):
+    if summary.get("cost_usd") is None:
+        return []  # 模型不在价目表里，或旧结果文件没有这一列
+    per_pass = summary.get("cost_per_pass")
+    tail = f"，每个通过任务 {format_usd(per_pass)}" if per_pass is not None else ""
+    return [f"花费估算：{format_usd(summary['cost_usd'])}{tail}（按官网价目，经网关转发时以实际账单为准）"]
 
 
 def _waste_lines(summary):

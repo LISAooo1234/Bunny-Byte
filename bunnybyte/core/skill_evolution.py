@@ -389,6 +389,8 @@ class SkillEvolutionManager:
                 "kind": "internal_skill_evolution",
             },
         )
+        if getattr(self.runtime, "cost_meter", None) is not None:
+            child.cost_meter = self.runtime.cost_meter.background(child)  # 后台评审计入会话花费，不占用户这一轮的预算
         answer = child.ask(prompt)
         return answer, child.session["id"]
 

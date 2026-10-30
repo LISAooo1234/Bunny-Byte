@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from ..providers.base import complete_model
 from ..providers.errors import ProviderError
+from .cost_meter import budget_stop_needed, record_call
 from .workspace import clip, now
 
 MAX_PARALLEL_TOOLS = 4
@@ -338,12 +339,15 @@ def request_step_limit_summary(
     the caller decides whether to record the resulting final.
     """
     agent = engine.runtime
+    if budget_stop_needed(agent):
+        return None  # 花费已到上限：总结也是一次付费调用，直接用固定文案收尾
     started_at = time.monotonic()
     try:
         prompt, _ = agent._build_prompt_and_metadata(notice)
         result = complete_model(
             agent.model_client, prompt, agent.max_new_tokens
         )
+        record_call(agent, getattr(result, "metadata", None), source="summary")
     except Exception as exc:
         agent.emit_trace(
             task_state,
@@ -360,7 +364,12 @@ def request_step_limit_summary(
     agent.emit_trace(
         task_state,
         event,
-        {"kind": kind, "duration_ms": duration_ms, "produced": bool(kind == "final")},
+        {
+            "kind": kind,
+            "duration_ms": duration_ms,
+            "produced": bool(kind == "final"),
+            "completion_metadata": dict(getattr(result, "metadata", None) or {}),  # 这次总结也计入 token 用量
+        },
     )
     if kind == "final" and payload:
         return str(payload).strip()

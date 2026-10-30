@@ -248,6 +248,9 @@ def _extract_anthropic_usage_details(data):
     if isinstance(cache_read, int) and not isinstance(cache_read, bool):
         details["cached_tokens"] = cache_read
         details["cache_hit"] = cache_read > 0
+    cache_creation = usage.get("cache_creation_input_tokens")
+    if isinstance(cache_creation, int) and not isinstance(cache_creation, bool):
+        details["cache_creation_tokens"] = cache_creation  # 写入缓存的输入另计，价格比普通输入高
     return details
 
 

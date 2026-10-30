@@ -126,7 +126,7 @@ def update_turn_index(session, turn_id):
     return index
 
 
-def refine_turn_index_with_model(model_client, history, turn_id, index, max_new_tokens=None):
+def refine_turn_index_with_model(model_client, history, turn_id, index, max_new_tokens=None, on_usage=None):
     items = [item for item in history if str(item.get("turn_id", "")) == str(turn_id)]
     if not items or not index:
         return index
@@ -138,6 +138,8 @@ def refine_turn_index_with_model(model_client, history, turn_id, index, max_new_
     if max_new_tokens is not None:
         output_tokens = min(TURN_INDEX_MODEL_MAX_OUTPUT_TOKENS, max(64, int(max_new_tokens)))
     result = complete_model(model_client, prompt, output_tokens)
+    if on_usage is not None:
+        on_usage(getattr(result, "metadata", None))
     parsed = _parse_model_index(result.text)
     if not parsed:
         return index

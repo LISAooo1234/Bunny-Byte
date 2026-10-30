@@ -1,6 +1,6 @@
 """无人值守模式（bunny -p）：不提问、不弹界面，stdout 只给结果，退出码说明这次到底做完没有。
 
-退出码：0 完成；1 运行出错；2 用法/配置错误（由 CLI 返回）；3 中途停止（步数上限、空转、重试耗尽）；
+退出码：0 完成；1 运行出错；2 用法/配置错误（由 CLI 返回）；3 中途停止（步数上限、空转、重试耗尽、花费到达 --max-cost）；
 4 只在 --require-verified 下出现：改了代码，但没有覆盖当前文件内容的通过回执；130 被中断。
 """
 
@@ -9,7 +9,9 @@ import json
 import sys
 import time
 
+from .core.cost_meter import STOP_REASON_BUDGET_EXCEEDED
 from .core.critic_gate import critic_summary
+from .core.pricing import format_usd
 from .core.run_usage import trace_usage
 from .core.task_state import STATUS_COMPLETED, STATUS_FAILED, STATUS_RUNNING
 from .core.verification_verdict import VERDICT_FAILED, VERDICT_UNVERIFIED, verification_verdict
@@ -130,6 +132,7 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
         "permission_denials": denials,
         "duration_ms": int((time.monotonic() - started) * 1000),
         "usage": usage,
+        "cost": agent.cost_meter.turn_snapshot() if state is not None else {},
         "changed_paths": list(state.changed_paths) if state is not None else [],
         "verification": {
             "verdict": verdict,
@@ -258,6 +261,8 @@ def run_headless(
         err.write(f"bunny: {denials} 个工具调用因审批策略被拒绝（无人值守时 ask 等同 never；需要放行请加 --approval auto）。\n")
     if code == EXIT_UNVERIFIED:
         err.write(f"bunny: 代码有改动但没有覆盖当前内容的通过回执（{result['verification']['verdict']}），退出码 4。\n")
+    if state is not None and state.stop_reason == STOP_REASON_BUDGET_EXCEEDED:
+        err.write(f"bunny: 本轮花费估算 {format_usd(result['cost'].get('usd'))} 达到上限 {format_usd(result['cost'].get('limit_usd'))}，已停止，退出码 3。\n")
     if code == EXIT_HOOK_BLOCKED:
         err.write("bunny: on_final 钩子在反馈轮次用完后仍然拦截了最终回答，退出码 5。\n")
     err.flush()

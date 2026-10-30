@@ -30,6 +30,7 @@ from .commands.mcp_commands import handle_mcp_command
 from .core.mcp_tools import McpManager, register_mcp_tools
 from .core.hook_runner import HookRunner
 from .commands.undo_commands import handle_undo_command
+from .core.cost_meter import cost_rows
 from .config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_PROVIDER,
@@ -42,6 +43,7 @@ from .config import (
     resolve_project_hooks,
     resolve_project_mcp,
     resolve_project_verify_config,
+    resolve_project_budget_config,
     resolve_project_critic_config,
     resolve_provider_config,
     write_global_provider_config,
@@ -328,6 +330,11 @@ def build_agent(args):
         config_path=getattr(args, "config", None),
         mode=getattr(args, "critic", None),
     )
+    budget_config = resolve_project_budget_config(
+        start=workspace.repo_root,
+        config_path=getattr(args, "config", None),
+        max_cost=getattr(args, "max_cost", None),
+    )
     hookset = resolve_project_hooks(start=workspace.repo_root, config_path=getattr(args, "config", None))
     mcp_config = resolve_project_mcp(start=workspace.repo_root, config_path=getattr(args, "config", None))
     load_project_env(workspace.repo_root, override=False)
@@ -364,6 +371,7 @@ def build_agent(args):
         _attach_hooks(agent, hookset)
         _attach_mcp(agent, mcp_config)
         _attach_critic(agent, args, critic_config)
+        _attach_budget(agent, budget_config)
         return agent
     lazy_session = True
     agent = BunnyByte(
@@ -389,7 +397,14 @@ def build_agent(args):
     _attach_hooks(agent, hookset)
     _attach_mcp(agent, mcp_config)
     _attach_critic(agent, args, critic_config)
+    _attach_budget(agent, budget_config)
     return agent
+
+
+def _attach_budget(agent, budget_config):
+    agent.cost_meter.configure(budget_config)
+    for problem in budget_config.problems:
+        print(f"⚠ 预算 / 价格配置：{problem}", file=sys.stderr)
 
 
 def _attach_critic(agent, args, critic_config):
@@ -592,6 +607,13 @@ def build_arg_parser():
         help="每个请求最多允许的工具/模型迭代次数。",
     )
     parser.add_argument(
+        "--max-cost",
+        type=_positive_usd,
+        default=None,
+        metavar="USD",
+        help="每轮模型花费估算上限（美元，按内置价目表或 [pricing] 估算）；到了就停在当前进度。也可在配置里写 [budget] max_turn_cost。",
+    )
+    parser.add_argument(
         "--max-new-tokens",
         type=int,
         default=None,
@@ -635,6 +657,16 @@ def build_arg_parser():
         help="-p 下不向 stderr 输出进度与验证提示。",
     )
     return parser
+
+
+def _positive_usd(text):
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"不是数字：{text}") from exc
+    if not value > 0 or value == float("inf"):
+        raise argparse.ArgumentTypeError("必须是大于 0 的美元金额，例如 0.5")
+    return value
 
 
 def build_setup_parser():
@@ -1254,6 +1286,7 @@ def _format_usage(agent):
             ("History summarized tools", history_usage.get("summarized_tool_count", "-")),
             ("History duplicate reads collapsed", history_usage.get("collapsed_duplicate_reads", "-")),
             ("History budget clipped", history_usage.get("budget_clipped", "-")),
+            *cost_rows(agent),
         ],
     )
 

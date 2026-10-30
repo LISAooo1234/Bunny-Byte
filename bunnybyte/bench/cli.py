@@ -103,9 +103,14 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         if args.history:
             print(render_history(load_history(out_dir)), file=stream)
             return 0
+        prices = {}
         if client_factory is None:
             client, provider, model, protocol = live_client(args)
             client_factory = lambda _task: client  # noqa: E731
+            from ..config import resolve_project_budget_config
+
+            # 只取 [pricing]，不取 [budget]：bench 不设花费上限，否则分数会受预算影响
+            prices = resolve_project_budget_config(start=args.cwd, config_path=args.config).prices
         else:
             provider, model, protocol = "scripted", "oracle", ""
     except ValueError as exc:
@@ -126,6 +131,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         on_result=lambda row: print(render_row(row), file=progress, flush=True),
         verify_gate=args.verify,
         critic=args.critic,
+        prices=prices,
     )
     record = build_record(
         rows,

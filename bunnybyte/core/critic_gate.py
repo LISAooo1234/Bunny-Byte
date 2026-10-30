@@ -9,6 +9,7 @@ import re
 import time
 
 from ..providers.base import complete_model
+from .cost_meter import budget_stop_needed, record_call
 from .critic import VERDICT_ACCEPT, VERDICT_OBJECT, build_prompt, parse_review, render_review, repair_message
 from .project_rules import render_rules
 from .shadow_snapshots import _LOCK, ShadowError, ShadowStore
@@ -135,6 +136,9 @@ def critic_gate(engine, task_state, final):
         return False  # 修复轮次用完，或者模型没再改文件、只是在回答里反驳：都不再审
     if agent.abort_requested:
         return False
+    if budget_stop_needed(agent):
+        state.update(skipped="本轮花费已到上限，跳过审查")
+        return False
     if agent.max_steps - task_state.tool_steps < MIN_STEPS_LEFT:
         state.update(skipped="步数预算所剩无几，跳过审查")
         return False
@@ -159,6 +163,7 @@ def critic_gate(engine, task_state, final):
     try:
         result = complete_model(client, prompt, agent.max_new_tokens)
         metadata = dict(getattr(result, "metadata", None) or {})
+        record_call(agent, metadata, source="critic", client=client)
         verdict, objections, reason = parse_review(getattr(result, "text", ""))
     except Exception as exc:  # 审查只是锦上添花：provider 出错不能让一个已经做完的回合失败
         verdict, objections, reason = VERDICT_ACCEPT, [], f"审查调用失败：{clip(str(exc), 160)}"

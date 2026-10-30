@@ -7,6 +7,7 @@ import time
 from rich.text import Text
 from textual.widgets import Static
 
+from ..core.pricing import format_usd
 from .theme import palette
 
 SEPARATOR = " · "
@@ -81,6 +82,30 @@ def token_segment(tokens: dict | None) -> Text | None:
     return text
 
 
+def cost_segment(meter) -> Text | None:
+    """花费估算：本轮 / 会话；设了上限时显示本轮占上限的比例，80% 起变色。没有任何计价调用时不显示。"""
+    if meter is None:
+        return None
+    turn, session = meter.turn, meter.session_totals
+    if not session.get("calls") and not turn.get("calls"):
+        return None
+    colors = palette()
+    usd = float(turn.get("usd", 0.0) or 0.0)
+    style = colors.accent
+    limit = getattr(meter, "limit", None)
+    if limit:
+        ratio = usd / limit
+        style = colors.error if ratio >= 1 else (colors.warning if ratio >= 0.8 else colors.accent)
+    text = Text("cost ", style=colors.muted)
+    text.append(format_usd(usd), style=style)
+    if limit:
+        text.append(f"/{format_usd(limit)}", style=colors.muted)
+    text.append(f" · 会话 {format_usd(session.get('usd', 0.0))}", style=colors.muted)
+    if turn.get("unpriced_calls") or session.get("unpriced_calls"):
+        text.append(" ?", style=colors.warning)  # 有调用的模型没有价格，金额偏低
+    return text
+
+
 def labeled(label: str, value: str, style: str | None = None) -> Text:
     colors = palette()
     text = Text(f"{label} ", style=colors.muted)
@@ -132,6 +157,7 @@ class StatusBar(Static):
         self.workers_total = 0
         self.usage: dict = {}
         self.tokens: dict | None = None
+        self.cost_meter = None
         self.busy = False
         self.stopping = False
         self.turn_started_at: float | None = None
@@ -146,6 +172,7 @@ class StatusBar(Static):
         self.model = str(getattr(agent.model_client, "model", "") or "")
         self.mode = str(getattr(agent, "runtime_mode", "default") or "default")
         self.approval = str(getattr(agent, "approval_policy", "") or "")
+        self.cost_meter = getattr(agent, "cost_meter", None)
         workers = list((agent.session.get("workers", {}) or {}).get("items", []) or [])
         self.workers_total = len(workers)
         self.workers_running = sum(1 for item in workers if item.get("status") in {"running", "stopping"})
@@ -213,6 +240,7 @@ class StatusBar(Static):
             (3, labeled("mode", self.mode, style=colors.success if self.mode == "default" else colors.warning)),
             (2, context_segment(self.usage)),
             (4, token_segment(self.tokens)),
+            (4, cost_segment(self.cost_meter)),
         ]
         if self.workers_total:
             segments.append((3, labeled("agents", f"{self.workers_running}/{self.workers_total}")))
