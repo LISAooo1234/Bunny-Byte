@@ -1271,11 +1271,13 @@ async def test_tui_stop_button_sets_stopping_state_while_agent_turn_is_still_run
 
         def __init__(self):
             self.started = threading.Event()
+            self.release = threading.Event()
             self.abort_called = False
 
         def complete(self, messages, max_new_tokens=None, **kwargs):
             self.started.set()
-            threading.Event().wait(timeout=1)
+            # 一直卡到测试点完“停止”并检查完状态；固定 1 秒在慢的 CI runner 上会先自己结束
+            self.release.wait(timeout=10)
             return "<final>late</final>"
 
         def abort(self):
@@ -1292,13 +1294,14 @@ async def test_tui_stop_button_sets_stopping_state_while_agent_turn_is_still_run
         await pilot.press("enter")
         await pilot.pause(delay=0.1)
 
-        assert client.started.wait(timeout=1)
+        assert client.started.wait(timeout=5)
         await pilot.click("#stop-turn")
         await pilot.pause(delay=0.1)
 
         assert client.abort_called is True
         assert bar.stop_button.disabled is True
         assert bar.stop_button.has_class("stopping")
+        client.release.set()
 
 
 @pytest.mark.asyncio
