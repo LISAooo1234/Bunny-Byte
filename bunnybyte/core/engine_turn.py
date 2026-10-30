@@ -12,6 +12,7 @@ from .engine_helpers import (
     should_retry_model_error,
 )
 from .file_mentions import preload_mentions
+from .critic_gate import critic_gate
 from .hook_gate import final_hook_gate
 from .model_errors import finish_model_error
 from .model_stream import complete_model_with_deltas
@@ -391,6 +392,9 @@ def run_turn(engine, user_message, mention_text=None):
             continue
         if (yield from verification_gate(engine, task_state, final)):
             max_attempts += 1  # 修复轮次不挤占模型调用预算
+            continue
+        if (yield from critic_gate(engine, task_state, final)):
+            max_attempts += 1
             continue
         if (yield from final_hook_gate(engine, task_state, final)):
             max_attempts += 1

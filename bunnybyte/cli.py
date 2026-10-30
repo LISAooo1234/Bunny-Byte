@@ -39,6 +39,7 @@ from .config import (
     resolve_project_sandbox_config,
     resolve_project_hooks,
     resolve_project_verify_config,
+    resolve_project_critic_config,
     resolve_provider_config,
     write_global_provider_config,
 )
@@ -319,6 +320,11 @@ def build_agent(args):
         config_path=getattr(args, "config", None),
         mode=getattr(args, "verify", None),
     )
+    critic_config = resolve_project_critic_config(
+        start=workspace.repo_root,
+        config_path=getattr(args, "config", None),
+        mode=getattr(args, "critic", None),
+    )
     hookset = resolve_project_hooks(start=workspace.repo_root, config_path=getattr(args, "config", None))
     load_project_env(workspace.repo_root, override=False)
     configured_secret_names = _configured_secret_names(args)
@@ -347,10 +353,12 @@ def build_agent(args):
             model_client_factory=model_client_factory,
             sandbox_config=sandbox_config,
             verify_config=verify_config,
+            critic_config=critic_config,
             ask_user_callback=ask_user_callback,
         )
         _attach_provider_switching(agent, args)
         _attach_hooks(agent, hookset)
+        _attach_critic(agent, args, critic_config)
         return agent
     lazy_session = True
     agent = BunnyByte(
@@ -368,12 +376,21 @@ def build_agent(args):
         model_client_factory=model_client_factory,
         sandbox_config=sandbox_config,
         verify_config=verify_config,
+        critic_config=critic_config,
         ask_user_callback=ask_user_callback,
         lazy_session=lazy_session,
     )
     _attach_provider_switching(agent, args)
     _attach_hooks(agent, hookset)
+    _attach_critic(agent, args, critic_config)
     return agent
+
+
+def _attach_critic(agent, args, critic_config):
+    """[critic].profile 指定了别的 provider 时单独建一个 client；没指定就审查时用当前主模型。"""
+    if not critic_config.enabled or not critic_config.profile:
+        return
+    agent.critic_client = _build_model_client(args, provider=critic_config.profile, include_cli_overrides=False)
 
 
 def _attach_hooks(agent, hookset):
@@ -507,6 +524,12 @@ def build_arg_parser():
         choices=("off", "ask", "auto"),
         default=None,
         help="交卷前自动运行项目测试并留下验证回执：off 关闭，ask 遵循审批策略（默认），auto 不再询问。",
+    )
+    parser.add_argument(
+        "--critic",
+        choices=("off", "auto"),
+        default=None,
+        help="交卷前让独立审查模型对照需求和本轮 diff 挑错，有证据的意见退回修复 1 轮：off 关闭（默认），auto 开启。",
     )
     parser.add_argument(
         "--theme",

@@ -44,6 +44,7 @@ from .tool_repetition import is_repeated_tool_call
 from .tool_profiles import build_tool_profiles
 from .todo_ledger import TodoLedger
 from .turn_history import TurnHistoryBuilder
+from .critic import CriticConfig
 from .verification import VerifyConfig
 from .worker_manager import WorkerManager
 from ..tools import registry as toolkit
@@ -129,8 +130,11 @@ class BunnyByte(
         ask_user_callback=None,
         lazy_session=False,
         verify_config=None,
+        critic_config=None,
     ):
         self.verify_config = verify_config or VerifyConfig()
+        self.critic_config = critic_config or CriticConfig()
+        self.critic_client = None  # [critic].profile 指定的独立 client；None 表示用当前主模型
         self.model_client = model_client
         self.model_client_factory = model_client_factory
         self.abort_requested = False
@@ -839,6 +843,7 @@ class BunnyByte(
             "verifier_suggestions": list(task_state.verifier_suggestions),
             "verification": dict(task_state.verification),
             "hooks": dict(task_state.hooks),
+            "critic": dict(task_state.critic),
             "runtime_reminders": list(task_state.runtime_reminders),
             "todos": self.todo_ledger.to_dict(),
             "todo_changes": list(task_state.todo_changes),

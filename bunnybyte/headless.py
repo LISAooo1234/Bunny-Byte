@@ -9,6 +9,7 @@ import json
 import sys
 import time
 
+from .core.critic_gate import critic_summary
 from .core.run_usage import trace_usage
 from .core.task_state import STATUS_COMPLETED, STATUS_FAILED, STATUS_RUNNING
 from .core.verification_verdict import VERDICT_FAILED, VERDICT_UNVERIFIED, verification_verdict
@@ -136,6 +137,7 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
             "commands": [item.get("command", "") for item in verification.get("receipts", [])],
             "repairs": int(verification.get("repairs", 0)),
         },
+        "critic": critic_summary(state) if state is not None else {},
         "hooks": {
             "final_blocked": bool(hook_state.get("final_blocked")),
             "runs": len(hook_state.get("runs", [])),

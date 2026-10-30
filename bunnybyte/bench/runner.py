@@ -13,9 +13,11 @@ import time
 from pathlib import Path
 from unittest import mock
 
+from ..core.critic import CriticConfig
 from ..core.run_usage import trace_usage
 from ..core.runtime import BunnyByte
 from ..core.session_store import SessionStore
+from ..core.shadow_snapshots import _LOCK, ShadowError, ShadowStore
 from ..core.verification import VerifyConfig, claims_verified
 from ..core.workspace import WorkspaceContext
 from .tasks import PY
@@ -23,6 +25,7 @@ from .tasks import PY
 VERIFY_TIMEOUT = 60
 DEFAULT_TASK_TIMEOUT = 300
 BENCH_VERIFY = VerifyConfig(mode="auto", timeout=60, max_repair_rounds=1)  # 单次闸门远小于单题墙钟上限
+BENCH_CRITIC = CriticConfig(mode="auto", max_rounds=1)
 ABORT_GRACE_SECONDS = 5  # 请求中止后再等多久；agent 只在步与步之间检查中止标志
 DEFAULT_MAX_STEPS = 50  # 与正常 CLI 的 --max-steps 默认值一致，分数才代表真实使用
 IGNORED_PARTS = {".git", ".bunnybyte", "__pycache__"}
@@ -139,6 +142,34 @@ def scrub(text, root, home):
     return text
 
 
+def materialize_tree(root, tree, target):
+    """把影子快照里的某个 tree 原样写到 target，用来回答“审查提意见那一刻，这份代码能不能过判分”。"""
+    store = ShadowStore.for_root(root)
+    blobs = store.tree_blobs(tree)
+    with _LOCK:
+        data = store._read_blobs(list(blobs.values())) if blobs else {}
+    for relative, oid in blobs.items():
+        path = Path(target) / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data[oid])
+
+
+def grade_objections(task, root, state, answer, before):
+    """对每次“提出反对”的审查，用当时的快照重跑判分：本来就能过的，说明这条反对是多余的（不一定错，但没帮上忙）。"""
+    passing = 0
+    for review in (state.critic or {}).get("reviews", []):
+        if review.get("verdict") != "object" or not review.get("tree"):
+            continue
+        with tempfile.TemporaryDirectory(prefix="bunny-bench-critic-") as scratch:
+            try:
+                materialize_tree(root, review["tree"], scratch)
+            except (ShadowError, OSError, KeyError):
+                continue
+            if not verify(task, scratch, answer, before):
+                passing += 1
+    return passing
+
+
 def _drive(agent, prompt, timeout, result):
     """在工作线程里跑 agent.ask：超时先请求中止，宽限期后仍不返回就放弃该线程。"""
     outcome = {}
@@ -168,6 +199,7 @@ def run_task(
     max_steps=DEFAULT_MAX_STEPS,
     keep_dir=None,
     verify_gate=False,
+    critic=False,
 ):
     """在全新的临时仓库里跑一次任务，返回一行可序列化的结果。
 
@@ -197,6 +229,11 @@ def run_task(
         "verify_rounds": 0,
         "verify_repairs": 0,
         "false_claim": False,
+        "critic_rounds": 0,
+        "critic_objections": 0,
+        "objection_on_passing": 0,
+        "critic_regression": False,
+        "critic_issues": [],
     }
     started = time.monotonic()
     agent = None
@@ -211,6 +248,7 @@ def run_task(
                 max_steps=max_steps,
                 auto_dream=False,
                 verify_config=BENCH_VERIFY if verify_gate else None,
+                critic_config=BENCH_CRITIC if critic else None,
             )
             answer, error, stuck = _drive(agent, task.prompt, timeout, result)
     except Exception as exc:
@@ -239,6 +277,18 @@ def run_task(
     result["failure"] = scrub("；".join(problems), root, real_home)
     result["passed"] = not result["failure"]
     result["false_claim"] = bool(not result["passed"] and claims_verified(answer))  # 声称已验证，判分却没过
+    if state is not None and state.critic:
+        result["critic_rounds"] = int(state.critic.get("rounds", 0))
+        result["critic_objections"] = int(state.critic.get("objections", 0))
+        result["critic_issues"] = [
+            scrub(f"{item['file']}: {item['issue']}", root, real_home)[:160]
+            for review in state.critic.get("reviews", [])
+            for item in review.get("objections", [])
+        ][:5]
+        if result["critic_objections"] and not stuck and error is None:
+            result["objection_on_passing"] = grade_objections(task, root, state, answer, before)
+            # 审查前本来能过、照着意见改完反而不过：这是审查真正的代价
+            result["critic_regression"] = bool(result["objection_on_passing"] and not result["passed"])
     if keep_dir is None:
         shutil.rmtree(root, ignore_errors=True)
     return result
@@ -253,6 +303,7 @@ def run_bench(
     max_steps=DEFAULT_MAX_STEPS,
     on_result=None,
     verify_gate=False,
+    critic=False,
 ):
     results = []
     for task in tasks:
@@ -264,6 +315,7 @@ def run_bench(
                 timeout=timeout,
                 max_steps=max_steps,
                 verify_gate=verify_gate,
+                critic=critic,
             )
             results.append(row)
             if on_result is not None:

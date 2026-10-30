@@ -43,6 +43,7 @@ class TaskState:
     verifier_suggestions: list = field(default_factory=list)
     verification: dict = field(default_factory=dict)
     hooks: dict = field(default_factory=dict)
+    critic: dict = field(default_factory=dict)
     runtime_reminders: list = field(default_factory=list)
     todo_changes: list = field(default_factory=list)
 
@@ -72,6 +73,7 @@ class TaskState:
             verifier_suggestions=list(data.get("verifier_suggestions", [])),
             verification=dict(data.get("verification", {}) or {}),
             hooks=dict(data.get("hooks", {}) or {}),
+            critic=dict(data.get("critic", {}) or {}),
             runtime_reminders=list(data.get("runtime_reminders", [])),
             todo_changes=list(data.get("todo_changes", [])),
         )
@@ -132,6 +134,7 @@ class TaskState:
             "verifier_suggestions": list(self.verifier_suggestions),
             "verification": dict(self.verification),
             "hooks": dict(self.hooks),
+            "critic": dict(self.critic),
             "runtime_reminders": list(self.runtime_reminders),
             "todo_changes": list(self.todo_changes),
         }

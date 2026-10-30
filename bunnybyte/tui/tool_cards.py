@@ -23,6 +23,7 @@ TOOL_TITLES = {
     "task_stop": "停止任务",
     "verify": "验证",
     "hook": "钩子",
+    "critic": "审查",
 }
 COMPACT_TOOLS = {"read_file", "search", "list_files"}
 DIFF_TOOLS = {"write_file", "patch_file"}
@@ -64,6 +65,8 @@ def clip_cells(text: str, limit: int = ARGS_CELLS) -> str:
 
 def card_args_summary(name: str, args: dict | None) -> str:
     args = args or {}
+    if name == "critic":
+        return clip_cells(str(args.get("model", "")))
     if name in {"run_shell", "verify", "hook"}:
         commands = args.get("commands")
         if isinstance(commands, list) and commands:
@@ -133,7 +136,7 @@ def summarize_tool_output(name: str, output: str, args: dict | None = None) -> s
     if name == "patch_file":
         added, removed = diff_counts(str(args.get("old_text", "")), str(args.get("new_text", "")))
         return f"+{added} −{removed}"
-    if name in {"verify", "hook"}:
+    if name in {"verify", "hook", "critic"}:
         return clip_cells(text.splitlines()[0], 60)
     return ""
 
@@ -242,7 +245,7 @@ class ToolCard(Static):
         self.add_class("-running")
         if self.compact:
             self.add_class("compact")
-        if tool_name == "verify":
+        if tool_name in {"verify", "critic"}:
             self.add_class("-verify")
         self.expanded = bool(expanded)
         self.force_expanded = bool(expanded)

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- 新增独立审查 `--critic auto` / `[critic]`（默认关闭）：交卷前另起一次不带工具的模型调用，对照用户请求、项目规则、文件列表、本轮 diff 和本回合跑过的命令逐条核对，有文件和证据的意见退回给模型修复（默认 1 轮）；审查出错、回复不是 JSON、只说“无法验证”的意见一律放行并记下原因。结果写入 `task_state` / `report.json` 的 `critic`、trace 的 `critic_review`（token 计入用量），`bunny -p` JSON 有 `critic` 字段，TUI 显示“审查”卡片。
+- `bunny bench --suite spec`：3 道“测试全绿、另一半需求写在 AGENTS.md 里”的任务（不进默认 10 题，基线指纹不变），`--critic` 开关和审查指标（反对次数、反对时代码已能通过判分的次数、照意见修改后反而不通过的题数）。实测 `Claude Haiku 4.5` 每题 3 次：不开审查 4/9，开审查 9/9，每次运行输入 token 1.31 倍；默认 10 题开审查 9/10，与基线相同。
+
 ## 0.7.0
 
 M1.5「TUI 体验升级」完成：本版本包含下面全部 TUI 改动。

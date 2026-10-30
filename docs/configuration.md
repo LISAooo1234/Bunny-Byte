@@ -120,6 +120,23 @@ max_repair_rounds = 1         # 验证失败后让模型修复的轮数，0-5；
 - 配置了 `[sandbox]` 时验证命令走同一个沙箱；`CI=1` 会注入环境。
 - 回执写入 `task_state.json`、`report.json` 的 `verification` 字段和 trace 的 `verification_run` 事件。
 
+## 独立审查（`[critic]`）
+
+模型改了代码、准备交卷时，另起一次不带工具的模型调用，对照用户请求、项目规则（AGENTS.md 等）和本轮 diff 逐条核对，有证据的意见退回给模型修复（说明见 README「独立审查」）。默认关闭。
+
+```toml
+[critic]
+mode = "auto"                 # off（默认）| auto，也可用 --critic 覆盖
+profile = "oneapi"            # 可选：审查用的 provider 配置名；不写就用当前主模型
+max_rounds = 1                # 有反对意见时退回修复的轮数，1-3
+max_diff_chars = 12000        # 发给审查模型的 diff 上限（超出部分会告诉它看不到）
+```
+
+- 在验证闸门之后、`on_final` 钩子之前运行；只对主 agent 生效，子 agent、plan mode、只读模式、本回合没改文件时不触发；剩余步数不足 3 步时跳过（修复需要工具步数）。
+- 修复轮不占模型调用预算；模型没再改文件、只在回答里反驳时不会再审一遍。审查调用出错、回复不是 JSON、反对意见没写文件和证据，一律按通过处理并记下原因。
+- 发出去的 diff 先按 secret 环境变量脱敏；`profile` 指向别的 provider 时，diff 会发给那个 provider。
+- 结果写入 `task_state.json` / `report.json` 的 `critic` 字段和 trace 的 `critic_review` 事件（含 token，`bunny bench` 与 `bunny -p` 的用量统计会算进去）。
+
 ## 钩子（`[[hooks.*]]`）
 
 `[[hooks.pre_tool]]`、`[[hooks.post_tool]]`、`[[hooks.on_final]]` 三类 shell 钩子，字段 `command`（必填）、`match`（工具名，`|` 分隔，支持 `*`）、`timeout`（1–300 秒，默认 10）、`on_error`（`allow` 默认 / `block`）、`only_if_changed`（仅 on_final）；`[hooks] max_final_rounds`（0–5，默认 2）。仓库里的 `.bunnybyte.toml` 的钩子要 `/hooks trust` 之后才运行，全局配置和 `--config` 直接生效。完整说明见 [hooks.md](hooks.md)。

@@ -58,11 +58,23 @@ def all_tasks():
     return [*FIX_TASKS, *BUILD_TASKS, *RIPPLE_TASKS]
 
 
-def select_tasks(ids=None):
-    tasks = all_tasks()
+def spec_tasks():
+    """单独的“需求遗漏”套件：不进默认任务集，默认基线的任务集指纹因此不变。"""
+    from .catalog_spec import SPEC_TASKS
+
+    return list(SPEC_TASKS)
+
+
+SUITES = {"core": all_tasks, "spec": spec_tasks}
+
+
+def select_tasks(ids=None, suite="core"):
+    if suite not in SUITES:
+        raise ValueError(f"未知的 bench 套件：{suite}；可用：{', '.join(SUITES)}")
+    tasks = SUITES[suite]()
     if not ids:
         return tasks
-    by_id = {task.id: task for task in tasks}
+    by_id = {task.id: task for task in [*all_tasks(), *spec_tasks()]}
     unknown = [item for item in ids if item not in by_id]
     if unknown:
         raise ValueError(f"未知的 bench 任务：{', '.join(unknown)}；可用：{', '.join(by_id)}")

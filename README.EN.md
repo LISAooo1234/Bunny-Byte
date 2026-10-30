@@ -310,6 +310,26 @@ timeout = 120                      # per-command seconds
 max_repair_rounds = 1              # repair attempts after a failed check
 ```
 
+## Critic review
+
+The test gate only catches problems that turn a test red. A common half-done result passes every test and still misses part of the request: a bug fixed without the regression test, no CHANGELOG line although the team rules ask for one, an option renamed and the old spelling users still rely on removed. With `--critic auto`, before the model's final answer is accepted, a separate tool-less model call gets the user request, the project rules (AGENTS.md / CLAUDE.md / `.bunnybyte/rules`), the file list, this turn's diff and the verification receipts, and checks them item by item. Objections that name a file and evidence go back into the session for one repair round (default); the review itself uses no tool steps, but the repair's tool calls count toward `max_steps` as usual.
+
+**Measured** (`bunny bench --suite spec`, `Claude Haiku 4.5`, 3 tasks whose second requirement lives in AGENTS.md, × 3 runs): critic off **4/9**, critic on **9/9**. Cost: input tokens per run about 115k → 151k (1.31×), while tokens per passed task dropped from 263k to 153k (failed runs count as cost); average steps 11.1 → 13.1, time per task 24s → 33s. The critic objected in 6 of 9 reviews; none was raised on code that already passed grading, and following an objection never turned a pass into a fail. On the default 10 tasks the critic run also scored 9/10 (same as the 10-26 baseline; the only failure is still the `change_default_everywhere` test trap, which the critic does not look at), input tokens 976k → 1277k (1.31×); its 3 objections were all unneeded ("cannot verify the count") and such objections are now dropped. The sample is small (one model, 9–10 runs per condition) and the spec suite was built for exactly this failure, so it does not generalize to everyday pass rates.
+
+- Runs after the verification gate and before `on_final` hooks; the repaired change is verified again. If the model only argues back without editing, there is no second review.
+- A failed review call, a non-JSON reply, or an objection without file and evidence lets the answer through and records why.
+- Main agent only; skipped with no edits, in plan mode, read-only mode, for subagents, and with fewer than 3 steps left.
+- Recorded as `critic` in `task_state` / `report.json`, `critic_review` in the trace (with tokens, counted in usage), a `critic` field in `bunny -p` JSON, and a "审查" card in the UI.
+- The diff is redacted for secret env values before it is sent; `profile` lets a different model review (the diff is sent to that provider).
+
+```toml
+# .bunnybyte.toml
+[critic]
+mode = "auto"          # off (default) | auto; override with --critic
+profile = "oneapi"     # optional provider profile for the reviewer; defaults to the main model
+max_rounds = 1
+```
+
 ## Headless mode
 
 `bunny -p` (`--print`) plugs Bunny Byte into scripts and CI: no UI, no questions, no banner. stdout carries only the result, and **the exit code says whether the job really got done**.

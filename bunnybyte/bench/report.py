@@ -57,6 +57,10 @@ def summarize(rows):
         "verify_rounds": sum(row.get("verify_rounds", 0) for row in rows),
         "verify_repairs": sum(row.get("verify_repairs", 0) for row in rows),
         "false_claims": sum(1 for row in rows if row.get("false_claim")),
+        "critic_rounds": sum(row.get("critic_rounds", 0) for row in rows),
+        "critic_objections": sum(row.get("critic_objections", 0) for row in rows),
+        "objections_on_passing": sum(row.get("objection_on_passing", 0) for row in rows),
+        "critic_regressions": sum(1 for row in rows if row.get("critic_regression")),
     }
 
 
@@ -86,7 +90,7 @@ def package_version():
         return "unknown"
 
 
-def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False):
+def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False, critic=False):
     return {
         "schema_version": SCHEMA_VERSION,
         "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -101,6 +105,7 @@ def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=No
         "repeat": repeat,
         "max_steps": max_steps,
         "verify": bool(verify),
+        "critic": bool(critic),
         "summary": summarize(rows),
         "runs": rows,
     }
@@ -150,6 +155,7 @@ def previous_comparable(record, history):
         for item in history
         if all(item.get(key) == record.get(key) for key in keys)
         and bool(item.get("verify")) == bool(record.get("verify"))
+        and bool(item.get("critic")) == bool(record.get("critic"))
         and item["captured_at"] < record["captured_at"]
     ]
     return older[-1] if older else None
@@ -195,6 +201,8 @@ def render_row(row):
     budget = " (超预算)" if row.get("over_budget") else ""
     gate = f"  [验证 {row['verify_status']}{'·修复' + str(row['verify_repairs']) if row.get('verify_repairs') else ''}]" if row.get("verify_status") else ""
     wasted = f"，空转 {row['wasted_steps']}" if row.get("wasted_steps") else ""
+    if row.get("critic_rounds"):
+        gate += f"  [审查 {row['critic_rounds']} 次·反对 {row.get('critic_objections', 0)}]"
     return f"{mark} {row['task']} #{row['attempt']}  {row['steps']} 步{wasted}{budget}  {row['wall_seconds']}s{tokens}{gate}{note}"
 
 
@@ -218,6 +226,7 @@ def render_record(record, previous=None):
         f"Token：{_tokens(summary, record.get('protocol', ''))}",
         *_waste_lines(summary),
         *_verify_lines(record),
+        *_critic_lines(record),
         _delta(record, previous),
         NOISE_NOTE.format(step=100 / max(len(record["task_ids"]) * record["repeat"], 1)),
     ]
@@ -236,6 +245,17 @@ def _waste_lines(summary):
     return [
         f"空转：平均每题 {_fmt(summary['avg_wasted_steps'])} 步是重复/无新信息的调用（不计入步数上限）；"
         f"撞步数上限 {summary['step_limit_stops']} 次，被判空转提前收尾 {summary['loop_stalled']} 次{cost}"
+    ]
+
+
+def _critic_lines(record):
+    if not record.get("critic"):
+        return []
+    summary = record["summary"]
+    return [
+        f"独立审查：审查 {summary.get('critic_rounds', 0)} 次，提出反对 {summary.get('critic_objections', 0)} 次；"
+        f"其中 {summary.get('objections_on_passing', 0)} 次反对时代码本来已能通过判分，"
+        f"照意见修改后反而不通过 {summary.get('critic_regressions', 0)} 题"
     ]
 
 

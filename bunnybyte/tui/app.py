@@ -692,6 +692,8 @@ class BunnyByteTuiApp(App):
             self._running_tool_cards.append(card)
             return
         if event_type == "tool_result":
+            if event.get("name") == "critic":  # 审查也是一次模型调用；只累计输出，上下文占用仍看主模型
+                self.query_one(StatusBar).record_model_usage(None, event.get("output_tokens"))
             self._finish_tool_card(event)
             self.query_one(ProgressPanel).update_agent(self.agent)
             self.query_one(ThinkingIndicator).start_phase("思考中", "工具完成")

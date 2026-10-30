@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+USAGE_EVENTS = {"model_parsed", "critic_review"}  # 独立审查也是一次模型调用，token 要算进去
+
 
 def trace_usage(trace_path):
     """汇总 trace 里每次模型调用上报的 token；provider 没上报就返回 None，而不是 0。"""
@@ -15,7 +17,7 @@ def trace_usage(trace_path):
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if event.get("event") != "model_parsed":
+        if event.get("event") not in USAGE_EVENTS:
             continue
         metadata = event.get("completion_metadata") or {}
         for key in totals:

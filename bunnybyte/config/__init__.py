@@ -396,6 +396,14 @@ def resolve_project_verify_config(
     return replace(config, mode="ask")
 
 
+def resolve_project_critic_config(
+    *, start: str | Path = ".", config_path: str | None = None, mode: str | None = None
+):
+    from ..core.critic import resolve_critic_config
+
+    return resolve_critic_config(_load_config_values(start=start, explicit_path=config_path), mode=mode)
+
+
 def resolve_tui_theme(
     *, start: str | Path = ".", config_path: str | None = None, cli_value: str | None = None, env=None
 ) -> str:
@@ -476,6 +484,9 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     verify = data.get("verify", {})
     if isinstance(verify, dict):
         values["verify"] = dict(verify)
+    critic = data.get("critic", {})
+    if isinstance(critic, dict):
+        values["critic"] = dict(critic)
     values["hooks"] = data.get("hooks", {})  # 原样交给 core.hooks 校验，写成非表时才能报错
     tui = data.get("tui", {})
     if isinstance(tui, dict):
@@ -561,6 +572,7 @@ def _merge_config_values(target: dict[str, Any], incoming: dict[str, Any]) -> No
     target["top"].update(incoming.get("top", {}))
     target["sandbox"].update(incoming.get("sandbox", {}))
     target.setdefault("verify", {}).update(incoming.get("verify", {}))
+    target.setdefault("critic", {}).update(incoming.get("critic", {}))
     target.setdefault("tui", {}).update(incoming.get("tui", {}))
     for name, section in incoming.get("providers", {}).items():
         target["providers"].setdefault(name, {}).update(section)
