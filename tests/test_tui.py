@@ -28,6 +28,26 @@ def rendered_text(widget) -> str:
     return getattr(rendered, "plain", str(rendered))
 
 
+async def wait_until(pilot, condition, timeout=10.0):
+    """Poll instead of sleeping a fixed time: slow CI runners need longer for a turn's worker thread."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            if condition():
+                return
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"condition not met within {timeout}s")
+        await pilot.pause(delay=0.05)
+
+
+def has_widget(app, widget_type) -> bool:
+    return bool(list(app.query(widget_type)))
+
+
 def test_assistant_message_stores_fork_target():
     from bunnybyte.tui.widgets import AssistantMessage
 
@@ -1349,9 +1369,7 @@ async def test_tui_stop_button_cancels_running_command_task(tmp_path, monkeypatc
         bar = app.query_one(InputBar)
         bar.input.value = "ship it"
         await pilot.press("enter")
-        await pilot.pause(delay=0.3)
-
-        assert "Done from TUI." in "\n".join(assistant_contents(app))
+        await wait_until(pilot, lambda: "Done from TUI." in "\n".join(assistant_contents(app)))
 
 
 @pytest.mark.asyncio
@@ -1372,7 +1390,7 @@ async def test_tui_renders_tool_card_result(tmp_path):
         bar = app.query_one(InputBar)
         bar.input.value = "write a file"
         await pilot.press("enter")
-        await pilot.pause(delay=0.5)
+        await wait_until(pilot, lambda: "Wrote it." in "\n".join(assistant_contents(app)))
 
         cards = list(app.query(ToolCard))
         assert cards
@@ -1399,15 +1417,11 @@ async def test_tui_approval_prompt_controls_risky_tool(tmp_path):
         bar = app.query_one(InputBar)
         bar.input.value = "write a file"
         await pilot.press("enter")
-        await pilot.pause(delay=0.2)
-
-        assert app.query_one(ConfirmPrompt)
+        await wait_until(pilot, lambda: has_widget(app, ConfirmPrompt))
 
         await pilot.press("right")
         await pilot.press("enter")
-        await pilot.pause(delay=0.5)
-
-        assert "Wrote it." in "\n".join(assistant_contents(app))
+        await wait_until(pilot, lambda: "Wrote it." in "\n".join(assistant_contents(app)))
         assert (tmp_path / "notes" / "result.txt").read_text(encoding="utf-8") == "ok\n"
 
 
@@ -1429,15 +1443,11 @@ async def test_tui_ask_user_prompt_returns_selected_choice(tmp_path):
         bar = app.query_one(InputBar)
         bar.input.value = "ask before shipping"
         await pilot.press("enter")
-        await pilot.pause(delay=0.2)
-
-        assert app.query_one(AskUserPrompt)
+        await wait_until(pilot, lambda: has_widget(app, AskUserPrompt))
 
         await pilot.press("right")
         await pilot.press("enter")
-        await pilot.pause(delay=0.5)
-
-        assert "User chose yes." in "\n".join(assistant_contents(app))
+        await wait_until(pilot, lambda: "User chose yes." in "\n".join(assistant_contents(app)))
 
 
 @pytest.mark.asyncio
@@ -1449,7 +1459,7 @@ async def test_tui_prompts_memory_scope_for_new_session(tmp_path):
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        await pilot.pause(delay=0.2)
+        await wait_until(pilot, lambda: has_widget(app, AskUserPrompt))
 
         prompt = app.query_one(AskUserPrompt)
         assert "长期记忆范围" in rendered_text(prompt)
@@ -1461,7 +1471,7 @@ async def test_tui_prompts_memory_scope_for_new_session(tmp_path):
 @pytest.mark.asyncio
 async def test_tui_memory_scope_prompt_can_select_saved_session(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import MemoryScopeSessionPrompt
+    from bunnybyte.tui.widgets import AskUserPrompt, MemoryScopeSessionPrompt
 
     agent = build_agent(tmp_path, [], lazy_session=True)
     agent.session_store.save(
@@ -1476,10 +1486,10 @@ async def test_tui_memory_scope_prompt_can_select_saved_session(tmp_path):
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        await pilot.pause(delay=0.2)
+        await wait_until(pilot, lambda: has_widget(app, AskUserPrompt))
         await pilot.press("right")
         await pilot.press("enter")
-        await pilot.pause(delay=0.2)
+        await wait_until(pilot, lambda: has_widget(app, MemoryScopeSessionPrompt))
 
         prompt = app.query_one(MemoryScopeSessionPrompt)
         assert "prior-session" in rendered_text(prompt)
@@ -1487,7 +1497,7 @@ async def test_tui_memory_scope_prompt_can_select_saved_session(tmp_path):
         await pilot.press("tab")
         assert "[✓]" in rendered_text(prompt)
         await pilot.press("enter")
-        await pilot.pause(delay=0.3)
+        await wait_until(pilot, lambda: agent.session.get("memory_scope", {}).get("mode") == "selected")
 
     assert agent.session["memory_scope"] == {
         "mode": "selected",
