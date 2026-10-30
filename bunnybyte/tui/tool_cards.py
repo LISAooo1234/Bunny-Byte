@@ -9,6 +9,8 @@ from rich.text import Text
 from textual.content import Content
 from textual.widgets import Collapsible, Markdown, Static
 
+from .theme import palette
+
 TOOL_TITLES = {
     "read_file": "读取",
     "search": "搜索",
@@ -30,7 +32,8 @@ DIFF_EXPAND_LINES = 12
 WRITE_PREVIEW_LINES = 40
 ARGS_CELLS = 72
 
-ICONS = {"running": ("…", "#74c0fc"), "success": ("✓", "#8ce99a"), "error": ("✗", "#ff8787")}
+# 状态 -> (图标, 色板里的颜色名)
+ICONS = {"running": ("…", "info"), "success": ("✓", "success"), "error": ("✗", "error")}
 
 
 def tool_title(name: str) -> str:
@@ -162,22 +165,23 @@ def render_new_file(content: str, max_lines: int = WRITE_PREVIEW_LINES) -> Text:
 
 
 def _style_diff(lines: list[str], max_lines: int) -> Text:
+    colors = palette()
     text = Text()
     shown = lines[:max_lines]
     for index, line in enumerate(shown):
         if index:
             text.append("\n")
         if line.startswith("@@"):
-            text.append(line, style="#6c7a96")
+            text.append(line, style=colors.faint)
         elif line.startswith("+"):
-            text.append(line, style="#8ce99a on #12261a")
+            text.append(line, style=f"{colors.diff_add} on {colors.diff_add_bg}")
         elif line.startswith("-"):
-            text.append(line, style="#ffa8a8 on #2c1416")
+            text.append(line, style=f"{colors.diff_del} on {colors.diff_del_bg}")
         else:
-            text.append(line, style="#9ca8bb")
+            text.append(line, style=colors.muted)
     hidden = len(lines) - len(shown)
     if hidden > 0:
-        text.append(f"\n… 还有 {hidden} 行未显示", style="#6c7a96")
+        text.append(f"\n… 还有 {hidden} 行未显示", style=colors.faint)
     return text
 
 
@@ -198,12 +202,12 @@ class ToolCard(Static):
         margin: 0;
         padding: 0;
         background: transparent;
-        border-left: outer #3b5b8c;
+        border-left: outer $bb-card-border;
     }
-    ToolCard.-success { border-left: outer #2f6b45; }
-    ToolCard.-error { border-left: outer #c92a2a; }
-    ToolCard.-verify.-success { border-left: thick #40c057; background: #102016; }
-    ToolCard.-verify.-error { border-left: thick #fa5252; background: #241214; }
+    ToolCard.-success { border-left: outer $bb-card-ok-border; }
+    ToolCard.-error { border-left: outer $bb-card-error-border; }
+    ToolCard.-verify.-success { border-left: thick $bb-verify-ok-border; background: $bb-verify-ok-bg; }
+    ToolCard.-verify.-error { border-left: thick $bb-verify-error-border; background: $bb-verify-error-bg; }
     ToolCard Collapsible {
         padding: 0;
         border-top: none;
@@ -214,13 +218,13 @@ class ToolCard(Static):
     ToolCard Collapsible > Contents { padding: 0 0 1 3; }
     ToolCard .tool-output {
         max-height: 16;
-        color: #adb5bd;
+        color: $bb-text-soft;
         padding: 0 1;
-        background: #0b0f16;
+        background: $bb-code-bg;
         overflow-x: hidden;
     }
     ToolCard .tool-output Markdown { height: auto; width: 100%; }
-    ToolCard .tool-diff { height: auto; padding: 0 1; background: #0b0f16; }
+    ToolCard .tool-diff { height: auto; padding: 0 1; background: $bb-code-bg; }
     ToolCard .hidden { display: none; }
     """
 
@@ -281,20 +285,22 @@ class ToolCard(Static):
             self._collapsible.collapsed = not self.expanded
 
     def label_text(self) -> Text:
-        icon, color = ICONS.get(self.status, ("•", "#9ca8bb"))
+        colors = palette()
+        icon, color_name = ICONS.get(self.status, ("•", "muted"))
+        color = getattr(colors, color_name)
         text = Text()
         text.append(f"{icon} ", style=f"bold {color}")
-        text.append(tool_title(self.tool_name), style="bold #dbe4ff")
+        text.append(tool_title(self.tool_name), style=f"bold {colors.title}")
         if self.args_summary:
-            text.append(f" {self.args_summary}", style="#c5d1e8")
+            text.append(f" {self.args_summary}", style=colors.text_soft)
         details = []
         if self.result_summary:
-            details.append((self.result_summary, color if self.status == "error" else "#9ca8bb"))
+            details.append((self.result_summary, color if self.status == "error" else colors.muted))
         duration = format_duration(self.duration_ms) if self.duration_ms is not None else ""
         if duration:
-            details.append((duration, "#6c7a96"))
+            details.append((duration, colors.faint))
         for value, style in details:
-            text.append(" · ", style="#4c566a")
+            text.append(" · ", style=colors.separator)
             text.append(value, style=style)
         return text
 
@@ -306,7 +312,23 @@ class ToolCard(Static):
             self.remove_class(name)
         self.add_class(f"-{self.status}")
         if self._collapsible is not None:
-            self._collapsible.title = Content.from_rich_text(self.label_text())
+            # Content 相等只比较纯文本：主题切换后文字不变、颜色变了，reactive 会跳过，要强制写入。
+            title = Content.from_rich_text(self.label_text())
+            header = getattr(self._collapsible, "_title", None)
+            if header is not None and hasattr(header, "_update_label"):
+                self._collapsible.set_reactive(type(self._collapsible).title, title)
+                header.set_reactive(type(header).label, title)
+                header._update_label()
+            else:  # Textual 内部结构变了：至少保证文字正确
+                self._collapsible.title = title
+
+    def refresh_theme(self) -> None:
+        """主题切换后重新生成带颜色的标题和 diff（它们是按旧色板生成的 Rich 文本）。"""
+        if self.diff is not None:
+            self.diff = tool_diff(self.tool_name, self.args)
+        self._refresh_label()
+        if self.status != "running":
+            self._update_body(self.output)
 
     def set_success(self, output: str = "", duration_ms=None) -> None:
         self.status = "success"

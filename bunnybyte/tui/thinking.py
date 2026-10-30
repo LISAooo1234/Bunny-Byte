@@ -10,6 +10,8 @@ import time
 from rich.text import Text
 from textual.widgets import Static
 
+from .theme import palette
+
 
 def estimate_tokens(text: str) -> int:
     """粗估 token：CJK 字符约 1 字 1 token，其他字符约 4 个 1 token。"""
@@ -27,8 +29,8 @@ class ThinkingIndicator(Static):
     ThinkingIndicator {
         height: 1;
         padding: 0 2;
-        color: #8b93a7;
-        background: #0f1117;
+        color: $bb-thinking;
+        background: $bb-bg;
     }
     ThinkingIndicator.hidden {
         display: none;
@@ -79,14 +81,15 @@ class ThinkingIndicator(Static):
 
     def label(self) -> Text:
         dots = self.FRAMES[self.frame % len(self.FRAMES)]
-        parts = [Text(f"{self.phase}{dots:<3}", style="#c3c9d9")]
+        colors = palette()
+        parts = [Text(f"{self.phase}{dots:<3}", style=colors.thinking_phase)]
         parts.append(Text(f" · {self.elapsed_seconds()}s"))
         if self.output_chars:
             parts.append(
                 Text(f" · 已输出 {_compact(self.output_chars)} 字 ≈ {_compact(self.output_tokens)} tok")
             )
         if self.detail:
-            parts.append(Text(f"  {self.detail}", style="#6b7280"))
+            parts.append(Text(f"  {self.detail}", style=colors.thinking_detail))
         return Text.assemble(*parts)
 
     def advance(self) -> None:

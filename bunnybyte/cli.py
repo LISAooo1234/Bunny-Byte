@@ -103,6 +103,20 @@ def _env_flag(name):
     return value.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
+def tui_theme_choice(args) -> str:
+    from .config import resolve_tui_theme
+
+    value = resolve_tui_theme(
+        start=getattr(args, "cwd", ".") or ".",
+        config_path=getattr(args, "config", None),
+        cli_value=getattr(args, "theme", None),
+    )
+    if value not in {"dark", "light", "auto"}:
+        print(f"未知的 TUI 主题 {value!r}（BUNNYBYTE_THEME 或 [tui] theme），已使用深色；可选 dark / light / auto。", file=sys.stderr)
+        return "dark"
+    return value
+
+
 def prepare_tui_terminal_environment():
     """Remove accidental no-color hints when the terminal already supports color."""
 
@@ -495,6 +509,12 @@ def build_arg_parser():
         help="交卷前自动运行项目测试并留下验证回执：off 关闭，ask 遵循审批策略（默认），auto 不再询问。",
     )
     parser.add_argument(
+        "--theme",
+        choices=("dark", "light", "auto"),
+        default=None,
+        help="TUI 配色：dark 深色（默认）、light 浅色、auto 按终端的 COLORFGBG 判断（没有就用深色）。也可写在 [tui] theme。",
+    )
+    parser.add_argument(
         "--sandbox",
         choices=("off", "best_effort", "required"),
         default=None,
@@ -799,6 +819,8 @@ def handle_repl_command(agent, user_input):
         return True, False, HELP_DETAILS
     if command_name == "banner":
         return True, False, "`/banner` 只在 TUI 里可用：展开或收起顶部横幅。"
+    if command_name == "theme":
+        return True, False, "`/theme` 只在 TUI 里可用：切换深色 / 浅色配色。启动时可用 `--theme light` 或 `[tui] theme = \"light\"`。"
     if user_input == "/memory":
         return True, False, agent.memory_command_text()
     if command_name == "memory-scope":
@@ -1675,7 +1697,7 @@ def main(argv=None):
         prepare_tui_terminal_environment()
         from .tui.app import BunnyByteTuiApp
 
-        BunnyByteTuiApp(agent).run()
+        BunnyByteTuiApp(agent, theme=tui_theme_choice(args)).run()
         return 0
 
     model = getattr(

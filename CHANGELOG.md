@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
+
+M1.5「TUI 体验升级」完成：本版本包含下面全部 TUI 改动。
+
+- TUI 深色 / 浅色主题：`--theme dark|light|auto`、`BUNNYBYTE_THEME`、`[tui] theme`（项目或全局配置；`bunny setup` 重写全局配置时保留），TUI 里 `/theme [dark|light|auto]` 不重启即时切换（已生成的工具卡片标题和 diff 也会重绘）。以前背景写死为 `#0f1117`，浅色终端里是一块黑框且无法更改。`auto` 只看 `COLORFGBG`，没有就用深色。Ctrl+P 选 Textual 自带主题时按明暗套用色板，不会因缺少变量而出错。
+- 颜色集中到 `bunnybyte/tui/theme.py`（约 100 处写死的十六进制颜色和只适合深色背景的 `green` / `yellow` / `cyan` 改为语义色板）；测试检查两套色板的正文对比度 ≥ 4.5:1、边框 ≥ 3:1，并拒绝其他 TUI 文件中的颜色字面量。
+- 修复中文截断按字符数而不是显示宽度：会话名、todo、子 agent 描述、记忆范围选择里的会话标题按终端格数截断，结尾用 `…`。
+- 依赖改为 `textual>=8.2,<9`（工具卡片标题重绘依赖 8.x 的 Collapsible 结构，快照也随 Textual 版本变化）；无效的主题值会在启动时提示并回退到深色；删除 `branding.py` 里不再使用的 `TUI_*` 颜色常量。
+- 新增一轮完整对话的纯文本布局快照测试（`tests/snapshots/tui_turn.txt`，`BUNNYBYTE_UPDATE_SNAPSHOTS=1` 重新生成）；README 截图换成新界面（深色 + 浅色）。
 
 - TUI 布局：欢迎横幅在第一轮开始后（或恢复有历史的会话时）收成一行标题，不再常驻占掉约三分之一屏幕，`/banner` 展开/收起；状态栏改为彩色分段（运行状态 + 本轮耗时、模型、模式、上下文百分比与迷你条、本轮 token ↑/↓、子 agent、按键提示），窄屏按优先级丢弃次要分段（按显示宽度计算，中文不溢出）。
 - TUI 工具卡片：所有工具统一为一行摘要（图标 · 工具 · 参数 · 结果 · 耗时），`run_shell` 显示退出码且非 0 标红，`patch_file` / `write_file` 内联彩色 diff（输入上限 400 行、输出 60 行），验证回执单独配色；审批提示预览 diff；`Ctrl+O` 展开/收起全部卡片；路径或命令里的 `[...]` 不再被当成界面标记。

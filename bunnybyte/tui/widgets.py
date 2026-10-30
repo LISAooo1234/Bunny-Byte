@@ -17,11 +17,6 @@ from ..branding import (
     HELP_HINT,
     PROMPT_PLACEHOLDER,
     SUBTITLE,
-    TUI_ACCENT,
-    TUI_MUTED,
-    TUI_PANEL_BG,
-    TUI_PANEL_BORDER,
-    TUI_TEXT,
     LOWER_HALF_BLOCK,
     UPPER_HALF_BLOCK,
     mascot_stacked_rows,
@@ -31,10 +26,12 @@ from ..commands.slash import SlashCommand, suggest_commands
 from .file_completion import FileIndex, match_files, mention_at_cursor, mention_token
 from .input_paste import PasteAwareInput
 from .status import StatusBar
+from .theme import mascot_color, palette
 from .thinking import ThinkingIndicator
 from .tool_cards import (
     COMPACT_TOOLS as READ_ONLY_DISPLAY_TOOLS,
     ToolCard,
+    clip_cells,
     confirm_preview,
     summarize_tool_output,
     tool_title as _display_tool_name,
@@ -112,22 +109,22 @@ def _format_context_usage_text(usage: dict | None, *, include_bar: bool = True) 
 class WelcomeBanner(Static):
     """空会话时显示吉祥物横幅；第一轮开始（或恢复的会话已有历史）后收成一行标题，/banner 切换。"""
 
-    DEFAULT_CSS = f"""
-    WelcomeBanner {{
+    DEFAULT_CSS = """
+    WelcomeBanner {
         height: auto;
         margin: 1 1 0 1;
         padding: 1 2;
-        background: {TUI_PANEL_BG};
-        color: {TUI_TEXT};
-        border: round {TUI_PANEL_BORDER};
-    }}
-    WelcomeBanner.collapsed {{
+        background: $bb-banner-bg;
+        color: $bb-text;
+        border: round $bb-banner-border;
+    }
+    WelcomeBanner.collapsed {
         margin: 0 1;
         padding: 0 1;
         border: none;
-        border-bottom: hkey #2b3245;
-        background: {TUI_PANEL_BG};
-    }}
+        border-bottom: hkey $bb-header-rule;
+        background: $bb-banner-bg;
+    }
     """
 
     def __init__(self, model_name: str = "", cwd: str = "", approval: str = "") -> None:
@@ -188,9 +185,10 @@ class WelcomeBanner(Static):
         if self.collapsed:
             return self._render_header()
         cwd_name = Path(self.cwd).name + "/" if self.cwd else "-"
-        muted = TUI_MUTED
-        accent = TUI_ACCENT
-        status_style = "#ffd43b" if self.busy else "#8ce99a"
+        colors = palette()
+        muted = colors.muted
+        accent = colors.accent
+        status_style = colors.warning if self.busy else colors.success
         mascot_rows = self._mascot_rows()
         title = Text(DISPLAY_NAME, style=f"bold {accent}")
         if SUBTITLE:
@@ -220,13 +218,14 @@ class WelcomeBanner(Static):
         """一行标题：名字 · 会话 · 目录@分支 · 审批；状态和用量交给底部状态栏。"""
         cwd_name = Path(self.cwd).name + "/" if self.cwd else "-"
         location = f"{cwd_name}@{self.branch}" if self.branch not in {"", "-"} else cwd_name
-        line = Text("🐰 ", style=TUI_ACCENT)
-        line.append(DISPLAY_NAME, style=f"bold {TUI_ACCENT}")
+        colors = palette()
+        line = Text("🐰 ", style=colors.accent)
+        line.append(DISPLAY_NAME, style=f"bold {colors.accent}")
         for label, value in (("session", self.session or "-"), ("cwd", location), ("approval", self.approval or "-")):
             line.append("  ")
-            line.append(f"{label} ", style=TUI_MUTED)
-            line.append(str(value), style=TUI_TEXT)
-        line.append("   /banner 展开", style="#5c6680")
+            line.append(f"{label} ", style=colors.muted)
+            line.append(str(value), style=colors.text)
+        line.append("   /banner 展开", style=colors.faint)
         width = int(getattr(getattr(self, "size", None), "width", 0) or 0)
         return self._fit_line(line, max(0, width - 2) if width else 0)
 
@@ -249,12 +248,13 @@ class WelcomeBanner(Static):
         return clipped
 
     def _info_line(self, *pairs: tuple[str, str], value_style: str | None = None) -> Text:
+        colors = palette()
         line = Text()
         for index, (label, value) in enumerate(pairs):
             if index:
                 line.append("   ")
-            line.append(f"{label} ", style=TUI_MUTED)
-            line.append(str(value), style=value_style or TUI_ACCENT)
+            line.append(f"{label} ", style=colors.muted)
+            line.append(str(value), style=value_style or colors.accent)
         return line
 
     def _mascot_rows(self) -> list[Text]:
@@ -266,6 +266,7 @@ class WelcomeBanner(Static):
         for row_index, pixel_row in enumerate(mascot_stacked_rows()):
             line = Text()
             for top_color, bottom_color in pixel_row:
+                top_color, bottom_color = mascot_color(top_color), mascot_color(bottom_color)
                 if top_color is None and bottom_color is None:
                     line.append(" ")
                 elif top_color is None:
@@ -290,8 +291,8 @@ class UserMessage(Static):
         height: auto;
         margin: 0 0 1 0;
         padding: 0 1;
-        color: #b7f5c1;
-        border-left: thick #2f9e44;
+        color: $bb-user-text;
+        border-left: thick $bb-user-border;
     }
     """
 
@@ -301,8 +302,9 @@ class UserMessage(Static):
         self.fork_target = fork_target
 
     def render(self) -> Text:
+        colors = palette()
         return Text.assemble(
-            Text("> ", style="bold green"), Text(self.content, style="green")
+            Text("> ", style=f"bold {colors.success}"), Text(self.content, style=colors.user_text)
         )
 
 
@@ -312,8 +314,8 @@ class AssistantMessage(Static):
         height: auto;
         margin: 0 0 1 0;
         padding: 0 1;
-        background: #15161c;
-        border-left: thick #495057;
+        background: $bb-panel;
+        border-left: thick $bb-assistant-border;
     }
     AssistantMessage Markdown {
         height: auto;
@@ -330,36 +332,36 @@ class AssistantMessage(Static):
         height: 3;
         margin: 0 1 0 0;
         padding: 0 2;
-        border: round #4dabf7;
-        background: #10243a;
-        color: #d0ebff;
+        border: round $bb-fork-border;
+        background: $bb-fork-bg;
+        color: $bb-fork-text;
     }
     AssistantMessage .rollback-button {
         min-width: 18;
         width: 18;
-        border: round #f59f00;
-        background: #2b2112;
-        color: #ffe8a1;
+        border: round $bb-rollback-border;
+        background: $bb-rollback-bg;
+        color: $bb-rollback-text;
     }
     AssistantMessage .fork-button:hover {
-        border: round #74c0fc;
-        background: #123456;
-        color: #ffffff;
+        border: round $bb-fork-hover-border;
+        background: $bb-fork-hover-bg;
+        color: $bb-button-strong;
     }
     AssistantMessage .rollback-button:hover {
-        border: round #ffd43b;
-        background: #3a2a10;
-        color: #ffffff;
+        border: round $bb-rollback-hover-border;
+        background: $bb-rollback-hover-bg;
+        color: $bb-button-strong;
     }
     AssistantMessage .fork-button:focus {
-        border: heavy #91d5ff;
-        background: #1f4f7a;
-        color: #ffffff;
+        border: heavy $bb-fork-focus-border;
+        background: $bb-fork-focus-bg;
+        color: $bb-button-strong;
     }
     AssistantMessage .rollback-button:focus {
-        border: heavy #ffe066;
-        background: #5c3d08;
-        color: #ffffff;
+        border: heavy $bb-rollback-focus-border;
+        background: $bb-rollback-focus-bg;
+        color: $bb-button-strong;
     }
     """
 
@@ -391,9 +393,9 @@ class ConfirmPrompt(Static):
         height: auto;
         margin: 0 0 1 0;
         padding: 1 2;
-        background: #211d12;
-        color: #ffe8a1;
-        border: round #f59f00;
+        background: $bb-confirm-bg;
+        color: $bb-confirm-text;
+        border: round $bb-confirm-border;
     }
     """
 
@@ -408,15 +410,16 @@ class ConfirmPrompt(Static):
         allow = "[allow]" if self.selected else " allow "
         deny = " deny " if self.selected else "[deny]"
         preview = Text.assemble(self.preview, "\n") if self.preview is not None and self.preview.plain else Text("")
+        colors = palette()
         return Text.assemble(
-            Text("Approve tool call? ", style="bold yellow"),
-            Text(self.tool_name, style="yellow"),
-            Text(f" {self.args_summary}\n", style="#ffe8a1"),
+            Text("Approve tool call? ", style=f"bold {colors.warning}"),
+            Text(self.tool_name, style=colors.warning),
+            Text(f" {self.args_summary}\n", style=colors.confirm_text),
             preview,
-            Text("左/右选择，Enter 确认，Esc 拒绝：", style="#c9a227"),
-            Text(deny, style="bold red"),
+            Text("左/右选择，Enter 确认，Esc 拒绝：", style=colors.confirm_hint),
+            Text(deny, style=f"bold {colors.error}"),
             Text("  "),
-            Text(allow, style="bold green"),
+            Text(allow, style=f"bold {colors.success}"),
         )
 
     def select_allow(self) -> None:
@@ -434,9 +437,9 @@ class AskUserPrompt(Static):
         height: auto;
         margin: 0 0 1 0;
         padding: 1 2;
-        background: #121f2b;
-        color: #d0ebff;
-        border: round #4dabf7;
+        background: $bb-ask-bg;
+        color: $bb-ask-text;
+        border: round $bb-ask-border;
     }
     """
 
@@ -453,23 +456,24 @@ class AskUserPrompt(Static):
         return self.choices[self.selected_index]
 
     def render(self) -> Text:
+        colors = palette()
         if not self.choices:
             return Text.assemble(
-                Text(self.question + "\n", style="bold #d0ebff"),
-                Text("Enter 继续，Esc 取消", style="#74c0fc"),
+                Text(self.question + "\n", style=f"bold {colors.ask_text}"),
+                Text("Enter 继续，Esc 取消", style=colors.ask_choice),
             )
-        parts = [Text(self.question + "\n", style="bold #d0ebff")]
+        parts = [Text(self.question + "\n", style=f"bold {colors.ask_text}")]
         for index, choice in enumerate(self.choices):
             marker = f"[{choice}]" if index == self.selected_index else f" {choice} "
             parts.append(
                 Text(
                     marker,
-                    style="bold #a5d8ff" if index == self.selected_index else "#74c0fc",
+                    style=f"bold {colors.ask_selected}" if index == self.selected_index else colors.ask_choice,
                 )
             )
             parts.append(Text("  "))
         parts.append(
-            Text("\n左/右选择，Enter 确认，Esc 取消", style="#74c0fc")
+            Text("\n左/右选择，Enter 确认，Esc 取消", style=colors.ask_choice)
         )
         return Text.assemble(*parts)
 
@@ -490,9 +494,9 @@ class MemoryScopeSessionPrompt(Static):
         height: auto;
         margin: 0 0 1 0;
         padding: 1 2;
-        background: #171d2a;
-        color: #e7f5ff;
-        border: round #748ffc;
+        background: $bb-scope-bg;
+        color: $bb-scope-text;
+        border: round $bb-scope-border;
     }
     """
 
@@ -513,19 +517,20 @@ class MemoryScopeSessionPrompt(Static):
         return ids
 
     def render(self) -> Text:
-        parts = [Text(self.question + "\n", style="bold #e7f5ff")]
+        colors = palette()
+        parts = [Text(self.question + "\n", style=f"bold {colors.scope_text}")]
         if not self.choices:
-            parts.append(Text("没有可选择的已保存 session", style="#91a7ff"))
+            parts.append(Text("没有可选择的已保存 session", style=colors.scope_choice))
             return Text.assemble(*parts)
         for index, choice in enumerate(self.choices):
             session_id = str(choice.get("id", "")).strip()
             label = str(choice.get("label", session_id) or session_id)
             cursor = ">" if index == self.selected_index else " "
             checked = "✓" if session_id in self.selected_ids else " "
-            style = "bold #bac8ff" if index == self.selected_index else "#91a7ff"
+            style = f"bold {colors.scope_selected}" if index == self.selected_index else colors.scope_choice
             parts.append(Text(f"{cursor} [{checked}] {label}\n", style=style))
         parts.append(
-            Text("Up/Down 移动，Tab/Space 勾选，Enter 确认，Esc 取消", style="#91a7ff")
+            Text("Up/Down 移动，Tab/Space 勾选，Enter 确认，Esc 取消", style=colors.scope_choice)
         )
         return Text.assemble(*parts)
 
@@ -559,9 +564,9 @@ class ProgressPanel(Static):
         max-height: 14;
         margin: 1 1 0 1;
         padding: 0 2;
-        background: #15161c;
-        color: #d8dcff;
-        border: round #343a40;
+        background: $bb-panel;
+        color: $bb-text-soft;
+        border: round $bb-border;
     }
     ProgressPanel.hidden {
         display: none;
@@ -596,8 +601,8 @@ class ProgressPanel(Static):
             priority = str(item.get("priority", "")).strip()
             if priority == "normal":
                 priority = ""
-            content = _clip(str(item.get("content", "")).strip(), 100)
-            note = _clip(str(item.get("note", "")).strip(), 80)
+            content = clip_cells(str(item.get("content", "")).strip(), 100)
+            note = clip_cells(str(item.get("note", "")).strip(), 80)
             suffix = f" — {note}" if note else ""
             prefix = f"{icon} {priority} " if priority else f"{icon} "
             lines.append(f"{prefix}{content}{suffix}")
@@ -610,7 +615,7 @@ class ProgressPanel(Static):
                 status = str(worker.get("status", "idle"))
                 icon = {"running": "→", "completed": "✓", "failed": "!", "stopping": "…"}.get(status, "•")
                 kind = str(worker.get("subagent_type", "worker"))
-                desc = _clip(str(worker.get("description", "Worker task")), 80)
+                desc = clip_cells(str(worker.get("description", "Worker task")), 80)
                 steps = int(worker.get("tool_steps", 0) or 0)
                 lines.append(f"{icon} {worker.get('id', '?')} ({kind}) {status}, tools {steps}: {desc}")
         self.update("\n".join(lines))
@@ -621,7 +626,7 @@ class ChatLog(VerticalScroll):
     ChatLog {
         height: 1fr;
         padding: 1 1 0 1;
-        background: #0f1117;
+        background: $bb-bg;
         scrollbar-size: 1 1;
     }
     """
@@ -672,9 +677,9 @@ class SlashSuggestions(Static):
         height: auto;
         max-height: 8;
         padding: 0 1;
-        background: #111827;
-        color: #d8dcff;
-        border: round #4b61a8;
+        background: $bb-popup-bg;
+        color: $bb-popup-text;
+        border: round $bb-popup-border;
     }
     SlashSuggestions.visible {
         display: block;
@@ -706,14 +711,15 @@ class SlashSuggestions(Static):
     def render(self) -> Text:
         if not self.suggestions:
             return Text("")
+        colors = palette()
         lines = []
         for index, command in enumerate(self.suggestions):
             marker = ">" if index == self.selected_index else " "
-            style = "bold cyan" if index == self.selected_index else "#a7a9bb"
+            style = f"bold {colors.popup_selected}" if index == self.selected_index else colors.popup_dim
             lines.append(
                 Text.assemble(
                     Text(f"{marker} {self.prefix}{command.name:<15}" + (" " if self.prefix == "@" else ""), style=style),
-                    Text(command.description, style="#d8dcff"),
+                    Text(command.description, style=colors.popup_text),
                 )
             )
         return Text("\n").join(lines)
@@ -725,7 +731,7 @@ class InputBar(Static):
         height: auto;
         min-height: 3;
         padding: 0 1 1 1;
-        background: #0f1117;
+        background: $bb-bg;
     }
     InputBar Horizontal {
         height: 3;
@@ -734,7 +740,7 @@ class InputBar(Static):
     InputBar Input {
         height: 3;
         width: 1fr;
-        border: round #6fd13e;
+        border: round $bb-input-border;
     }
     InputBar Button {
         display: none;
@@ -742,29 +748,29 @@ class InputBar(Static):
         height: 3;
         min-width: 9;
         margin: 0 0 0 1;
-        border: round #6b7280;
-        background: #161b24;
-        color: #cbd5e1;
+        border: round $bb-stop-border;
+        background: $bb-stop-bg;
+        color: $bb-stop-text;
     }
     InputBar Button:hover {
-        border: round #fb7185;
-        background: #2a1218;
-        color: #ffe4e6;
+        border: round $bb-stop-hover-border;
+        background: $bb-stop-hover-bg;
+        color: $bb-stop-hover-text;
     }
     InputBar.busy Button.stoppable {
         display: block;
-        border: round #fb7185;
-        background: #241117;
-        color: #fecdd3;
+        border: round $bb-stop-hover-border;
+        background: $bb-stop-active-bg;
+        color: $bb-stop-active-text;
     }
     InputBar.busy Button.stopping {
         display: block;
-        border: round #f59e0b;
-        background: #261904;
-        color: #fde68a;
+        border: round $bb-busy-border;
+        background: $bb-stopping-bg;
+        color: $bb-stopping-text;
     }
     InputBar.busy Input {
-        border: round #f59e0b;
+        border: round $bb-busy-border;
     }
     """
 
@@ -1059,7 +1065,7 @@ class InputBar(Static):
 def _session_display_label(agent, limit: int = 32) -> str:
     topic = str(getattr(agent, "session_topic", "") or "").strip()
     if topic and topic != "Untitled session":
-        return _clip(topic, limit)
+        return clip_cells(topic, limit)
     return (
         "待开始"
         if getattr(agent, "is_pending_session", False)

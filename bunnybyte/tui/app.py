@@ -20,6 +20,8 @@ from ..core.memory_scope import (
     should_prompt_memory_scope_startup,
 )
 from ..core.workspace import clip
+from . import theme as tui_theme
+from .tool_cards import clip_cells
 from .widgets import (
     AskUserPrompt,
     ChatLog,
@@ -39,7 +41,7 @@ from .widgets import (
 BUNNYBYTE_TUI_CSS = """
 Screen {
     layout: vertical;
-    background: #0f1117;
+    background: $bb-bg;
 }
 """
 
@@ -75,14 +77,20 @@ class BunnyByteTuiApp(App):
         Binding("ctrl+q", "quit", "Quit"),
     ]
 
-    def __init__(self, agent, **kwargs) -> None:
+    def __init__(self, agent, theme: str | None = None, **kwargs) -> None:
+        self._initial_theme = tui_theme.resolve_theme(theme)
+        tui_theme.set_active_theme(self._initial_theme)
         super().__init__(**kwargs)
+        for name in tui_theme.THEME_NAMES:
+            self.register_theme(tui_theme.textual_theme(name))
+        self.theme = tui_theme.TEXTUAL_THEME[self._initial_theme]
         self.agent = agent
         self._turn_count = 0
         self._running_tool_cards: list[ToolCard] = []
         self._tool_cards_expanded = False
         self._confirm_prompt: ConfirmPrompt | None = None
         self._confirm_decision: tuple[threading.Event, dict] | None = None
+        self._confirm_args: tuple[str, dict] | None = None
         self._ask_user_prompt: AskUserPrompt | None = None
         self._ask_user_decision: tuple[threading.Event, dict] | None = None
         self._memory_session_prompt: MemoryScopeSessionPrompt | None = None
@@ -116,7 +124,12 @@ class BunnyByteTuiApp(App):
         yield StatusBar()
         yield InputBar()
 
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        # Ctrl+P 里选的 Textual 内置主题没有 $bb-* 变量：按它的明暗补上对应色板，CSS 才能解析。
+        return tui_theme.palette(tui_theme.active_theme()).css_variables()
+
     def on_mount(self) -> None:
+        self.theme_changed_signal.subscribe(self, self._on_theme_changed)
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(WelcomeBanner).update_agent(self.agent)
         # --resume 启动时聊天区是空的，但会话已有历史：按历史决定是否收起横幅。
@@ -137,6 +150,7 @@ class BunnyByteTuiApp(App):
             )
 
     def on_unmount(self) -> None:
+        tui_theme.set_active_theme(tui_theme.DEFAULT_THEME)
         if self._previous_approve is not None:
             self.agent.approve = self._previous_approve
         self.agent.ask_user_callback = self._previous_ask_user
@@ -144,6 +158,47 @@ class BunnyByteTuiApp(App):
             self._memory_scope_startup_task.cancel()
         self._resolve_ask_user("")
         self._resolve_memory_session_scope([])
+
+    def set_ui_theme(self, name: str) -> str:
+        """切换深色 / 浅色（不重启）；返回实际生效的色板名。"""
+        resolved = tui_theme.resolve_theme(name)
+        tui_theme.set_active_theme(resolved)
+        self.theme = tui_theme.TEXTUAL_THEME[resolved]
+        self._repaint_rich_text()
+        return resolved
+
+    def _on_theme_changed(self, theme) -> None:
+        name = tui_theme.theme_for_textual(theme)
+        if name != tui_theme.active_theme():
+            tui_theme.set_active_theme(name)
+            self.refresh_css(animate=False)
+        self._repaint_rich_text()
+
+    def _repaint_rich_text(self) -> None:
+        """Rich 文本的颜色在 render 时取色板；已经生成好的 diff / 卡片标题要重新生成一次。"""
+        for card in self.query(ToolCard):
+            card.refresh_theme()
+        if self._confirm_prompt is not None and self._confirm_args is not None:
+            self._confirm_prompt.preview = confirm_preview(*self._confirm_args)
+        for widget in self.query("*"):
+            widget.refresh()
+
+    def _handle_theme_command(self, text: str) -> None:
+        parts = text.split()
+        current = tui_theme.active_theme()
+        if len(parts) == 1:
+            target = "light" if current == "dark" else "dark"
+        elif parts[1].lower() in tui_theme.THEME_CHOICES:
+            target = parts[1].lower()
+        else:
+            self.query_one(ChatLog).add_message("assistant", "用法：/theme [dark|light|auto]（不带参数则在深色/浅色之间切换）")
+            return
+        resolved = self.set_ui_theme(target)
+        label = {"dark": "深色", "light": "浅色"}[resolved]
+        self.query_one(ChatLog).add_message(
+            "assistant",
+            f"已切换到{label}主题（只对本次 TUI 生效；要长期使用，在 .bunnybyte.toml 里写 `[tui] theme = \"{resolved}\"`）。",
+        )
 
     def action_clear_screen(self) -> None:
         self.query_one(ChatLog).clear_messages()
@@ -240,6 +295,10 @@ class BunnyByteTuiApp(App):
         if text.startswith("/"):
             if text.split(maxsplit=1)[0] == "/banner":
                 self.query_one(WelcomeBanner).toggle_collapsed()
+                return
+            if text.split(maxsplit=1)[0] == "/theme":
+                self.query_one(ChatLog).add_message("user", text)
+                self._handle_theme_command(text)
                 return
             self.query_one(ChatLog).add_message("user", text)
             self._handle_command(full_text)
@@ -556,7 +615,7 @@ class BunnyByteTuiApp(App):
             session_id = str(row.get("id", "")).strip()
             if not session_id or session_id == current_id:
                 continue
-            topic = clip(str(row.get("topic", "") or "Untitled"), 36)
+            topic = clip_cells(str(row.get("topic", "") or "Untitled"), 36)
             updated = str(row.get("updated_at", "") or "-")
             label = f"{topic} · {session_id} · {updated}"
             choices.append({"id": session_id, "label": label})
@@ -778,6 +837,7 @@ class BunnyByteTuiApp(App):
     ) -> None:
         prompt = ConfirmPrompt(name, format_tool_args(name, args), preview=confirm_preview(name, args))
         self._confirm_prompt = prompt
+        self._confirm_args = (name, dict(args or {}))
         self._confirm_decision = (event, decision)
         chat = self.query_one(ChatLog)
         chat.mount(prompt)
@@ -793,6 +853,7 @@ class BunnyByteTuiApp(App):
             self._confirm_prompt.remove()
         self._confirm_prompt = None
         self._confirm_decision = None
+        self._confirm_args = None
 
     def _ask_user_callback(self, question: str, choices: list[str]) -> str:
         event = threading.Event()

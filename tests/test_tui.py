@@ -1,4 +1,5 @@
 import pytest
+from rich.text import Text
 
 from bunnybyte import BunnyByte, SessionStore, WorkspaceContext
 from bunnybyte.testing import ScriptedModelClient
@@ -180,8 +181,9 @@ def test_status_and_welcome_clip_long_session_topic(tmp_path):
     bar = StatusBar()
     bar.update_agent(agent)
 
-    assert banner.session.endswith("...")
-    assert len(banner.session) <= 34
+    # 按显示宽度截断：中文占 2 格，整体不超过 34 格。
+    assert banner.session.endswith("…")
+    assert Text(banner.session).cell_len <= 34
     # 会话名现在只在横幅/一行标题里出现，状态栏不再重复它。
     assert long_topic not in rendered_text(bar)
     banner.set_collapsed(True)

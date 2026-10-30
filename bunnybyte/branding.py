@@ -13,13 +13,6 @@ HELP_HINT = "输入 /help 查看命令，Ctrl+L 清屏，Ctrl+Q 退出"
 PROMPT_PLACEHOLDER = "向 BunnyByte 提问，或输入 /help"
 BUSY_PLACEHOLDER = "BunnyByte 正在工作..."
 
-TUI_PANEL_BG = "#10131b"
-TUI_PANEL_BORDER = "#66b6ff"
-TUI_TEXT = "#eef4ff"
-TUI_ACCENT = "#7fc8ff"
-TUI_MUTED = "#9ca8bb"
-TUI_INPUT_BORDER = "#66b6ff"
-
 ANSI_RESET = "\x1b[0m"
 UPPER_HALF_BLOCK = "▀"
 LOWER_HALF_BLOCK = "▄"

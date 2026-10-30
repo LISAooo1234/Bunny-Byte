@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 
 from bunnybyte.branding import DISPLAY_HANDLE
-from bunnybyte.cli import build_agent, build_arg_parser, prepare_tui_terminal_environment
+from bunnybyte.cli import build_agent, build_arg_parser, prepare_tui_terminal_environment, tui_theme_choice
 
 
 def main(argv=None):
@@ -19,7 +19,7 @@ def main(argv=None):
     prepare_tui_terminal_environment()
     from bunnybyte.tui.app import BunnyByteTuiApp
 
-    BunnyByteTuiApp(agent).run()
+    BunnyByteTuiApp(agent, theme=tui_theme_choice(args)).run()
     return 0
 
 

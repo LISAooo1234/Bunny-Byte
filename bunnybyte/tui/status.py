@@ -7,12 +7,9 @@ import time
 from rich.text import Text
 from textual.widgets import Static
 
-from ..branding import TUI_ACCENT, TUI_MUTED
+from .theme import palette
 
 SEPARATOR = " · "
-BUSY_COLOR = "#ffd43b"
-READY_COLOR = "#8ce99a"
-WARN_COLOR = "#ff8787"
 
 
 def compact_number(value) -> str:
@@ -52,17 +49,18 @@ def context_segment(usage: dict | None, bar_width: int = 8) -> Text | None:
         budget_value = int(budget) if budget else 0
     except (TypeError, ValueError):
         return None
-    text = Text("context ", style=TUI_MUTED)
+    colors = palette()
+    text = Text("context ", style=colors.muted)
     if budget_value <= 0:
-        text.append(compact_number(used_value), style=TUI_ACCENT)
+        text.append(compact_number(used_value), style=colors.accent)
         return text
     ratio = min(1.0, used_value / budget_value)
-    color = WARN_COLOR if ratio >= 0.8 else (BUSY_COLOR if ratio >= 0.5 else TUI_ACCENT)
+    color = colors.error if ratio >= 0.8 else (colors.warning if ratio >= 0.5 else colors.accent)
     text.append(f"{int(ratio * 100)}% ", style=color)
     filled = int(round(ratio * bar_width))
     text.append("█" * filled, style=color)
-    text.append("░" * (bar_width - filled), style="#3b4252")
-    text.append(f" {compact_number(used_value)}/{compact_number(budget_value)}", style=TUI_MUTED)
+    text.append("░" * (bar_width - filled), style=colors.meter_empty)
+    text.append(f" {compact_number(used_value)}/{compact_number(budget_value)}", style=colors.muted)
     return text
 
 
@@ -72,19 +70,21 @@ def token_segment(tokens: dict | None) -> Text | None:
         return None
     last_input = tokens.get("last_input")
     output = tokens.get("output")
-    text = Text("tokens ", style=TUI_MUTED)
+    colors = palette()
+    text = Text("tokens ", style=colors.muted)
     if last_input is None and output is None:
-        text.append("-", style=TUI_MUTED)
+        text.append("-", style=colors.muted)
         return text
-    text.append(f"↑{compact_number(last_input) if last_input is not None else '-'}", style=TUI_ACCENT)
+    text.append(f"↑{compact_number(last_input) if last_input is not None else '-'}", style=colors.accent)
     text.append(" ")
-    text.append(f"↓{compact_number(output) if output is not None else '-'}", style=TUI_ACCENT)
+    text.append(f"↓{compact_number(output) if output is not None else '-'}", style=colors.accent)
     return text
 
 
-def labeled(label: str, value: str, style: str = TUI_ACCENT) -> Text:
-    text = Text(f"{label} ", style=TUI_MUTED)
-    text.append(str(value), style=style)
+def labeled(label: str, value: str, style: str | None = None) -> Text:
+    colors = palette()
+    text = Text(f"{label} ", style=colors.muted)
+    text.append(str(value), style=style or colors.accent)
     return text
 
 
@@ -96,7 +96,7 @@ def fit_segments(segments: list[tuple[int, Text]], width: int) -> Text:
         line = Text()
         for index, (_priority, segment) in enumerate(items):
             if index:
-                line.append(SEPARATOR, style="#4c566a")
+                line.append(SEPARATOR, style=palette().separator)
             line.append_text(segment)
         return line
 
@@ -116,8 +116,8 @@ class StatusBar(Static):
         height: 1;
         margin: 0 1;
         padding: 0 1;
-        background: #161a24;
-        color: #c5d1e8;
+        background: $bb-surface;
+        color: $bb-text-soft;
     }
     """
 
@@ -196,20 +196,21 @@ class StatusBar(Static):
 
     def segments(self) -> list[tuple[int, Text]]:
         """(优先级, 分段)；优先级数字越大越先在窄屏时被丢弃。"""
+        colors = palette()
         if self.busy:
             elapsed = format_elapsed(time.monotonic() - (self.turn_started_at or time.monotonic()))
             word = "正在停止" if self.stopping else "运行中"
-            state = Text("● ", style=BUSY_COLOR)
-            state.append(f"{word} {elapsed}", style=f"bold {BUSY_COLOR}")
+            state = Text("● ", style=colors.warning)
+            state.append(f"{word} {elapsed}", style=f"bold {colors.warning}")
         else:
-            state = Text("● ", style=READY_COLOR)
-            state.append("就绪", style=f"bold {READY_COLOR}")
+            state = Text("● ", style=colors.success)
+            state.append("就绪", style=f"bold {colors.success}")
             if self.last_turn_seconds is not None:
-                state.append(f" 上轮 {format_elapsed(self.last_turn_seconds)}", style=TUI_MUTED)
+                state.append(f" 上轮 {format_elapsed(self.last_turn_seconds)}", style=colors.muted)
         segments: list[tuple[int, Text]] = [
             (0, state),
             (1, labeled("model", self.model or "-")),
-            (3, labeled("mode", self.mode, style=READY_COLOR if self.mode == "default" else BUSY_COLOR)),
+            (3, labeled("mode", self.mode, style=colors.success if self.mode == "default" else colors.warning)),
             (2, context_segment(self.usage)),
             (4, token_segment(self.tokens)),
         ]
@@ -218,7 +219,7 @@ class StatusBar(Static):
         segments.append((6, labeled("turns", str(self.turns))))
         segments.append((7, labeled("provider", self.provider or "-")))
         hint = "Esc 停止" if self.busy else "/help 命令 · Ctrl+L 清屏"
-        segments.append((5, Text(hint, style=TUI_MUTED)))
+        segments.append((5, Text(hint, style=colors.muted)))
         return [item for item in segments if item[1] is not None]
 
     def render(self) -> Text:

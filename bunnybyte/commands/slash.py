@@ -23,6 +23,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("rollback", "/rollback [event|turn|#]", "回滚到历史节点并创建分支会话。", "会话"),
     SlashCommand("undo", "/undo [list|--force]", "撤销最近一轮对文件的改动（只还原那一轮改过的文件）。", "会话"),
     SlashCommand("banner", "/banner", "展开或收起 TUI 顶部的欢迎横幅（仅 TUI）。", "运行时"),
+    SlashCommand("theme", "/theme [dark|light|auto]", "切换 TUI 深色 / 浅色配色，不用重启（仅 TUI）。", "运行时"),
     SlashCommand("hooks", "/hooks [trust]", "查看 pre_tool / post_tool / on_final 钩子，或信任仓库里的项目钩子。", "运行时"),
     SlashCommand("compact", "/compact", "压缩较早的会话历史。", "会话"),
     SlashCommand("context", "/context", "查看当前提示词上下文用量。", "运行时"),

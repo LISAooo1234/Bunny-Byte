@@ -396,6 +396,21 @@ def resolve_project_verify_config(
     return replace(config, mode="ask")
 
 
+def resolve_tui_theme(
+    *, start: str | Path = ".", config_path: str | None = None, cli_value: str | None = None, env=None
+) -> str:
+    """TUI 主题的原始取值（dark / light / auto）：命令行 > BUNNYBYTE_THEME > 项目 [tui] > 全局 [tui] > dark。"""
+    env = os.environ if env is None else env
+    for value in (cli_value, env.get("BUNNYBYTE_THEME")):
+        if str(value or "").strip():
+            return str(value).strip().lower()
+    try:
+        values = _load_config_values(start=start, explicit_path=config_path)
+    except ValueError:
+        return "dark"
+    return str(values.get("tui", {}).get("theme", "") or "dark").strip().lower()
+
+
 def resolve_project_hooks(*, start: str | Path = ".", config_path: str | None = None):
     """读取 [hooks]。全局配置和 --config 指定的文件直接生效，仓库里的 .bunnybyte.toml 要先被信任。"""
     from ..core.hooks import load_hooks
@@ -462,6 +477,9 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     if isinstance(verify, dict):
         values["verify"] = dict(verify)
     values["hooks"] = data.get("hooks", {})  # 原样交给 core.hooks 校验，写成非表时才能报错
+    tui = data.get("tui", {})
+    if isinstance(tui, dict):
+        values["tui"] = dict(tui)
 
     for name in ("openai", "anthropic", "deepseek"):
         section = data.get(name, {})
@@ -511,6 +529,14 @@ def _render_config_values(values: dict[str, Any]) -> str:
                 lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
         lines.append("")
 
+    tui = dict(values.get("tui", {}) or {})
+    if tui:  # `bunny setup` 重写全局配置时保留用户的 [tui] theme
+        lines.append("[tui]")
+        for key in sorted(tui):
+            if tui[key] is not None:
+                lines.append(f"{_toml_key(key)} = {_toml_value(tui[key])}")
+        lines.append("")
+
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -535,6 +561,7 @@ def _merge_config_values(target: dict[str, Any], incoming: dict[str, Any]) -> No
     target["top"].update(incoming.get("top", {}))
     target["sandbox"].update(incoming.get("sandbox", {}))
     target.setdefault("verify", {}).update(incoming.get("verify", {}))
+    target.setdefault("tui", {}).update(incoming.get("tui", {}))
     for name, section in incoming.get("providers", {}).items():
         target["providers"].setdefault(name, {}).update(section)
 

@@ -84,7 +84,9 @@ def test_status_bar_context_segment_colors_by_fill():
     assert low.plain == "context 10% █░░░░░░░ 20k/200k"
     high = context_segment({"total_estimated_tokens": 190000, "context_window": 200000})
     assert high.plain.startswith("context 95% ████████")
-    assert any("#ff8787" in str(span.style) for span in high.spans)
+    from bunnybyte.tui.theme import palette
+
+    assert any(palette().error in str(span.style) for span in high.spans)
 
 
 # ---- 工具卡片 ----
@@ -128,7 +130,11 @@ def test_patch_card_renders_colored_diff_and_long_diffs_are_clipped():
     lines = card.diff.plain.splitlines()
     assert "-return a - b" in lines and "+return a + b  # 修复" in lines
     styles = {str(span.style) for span in card.diff.spans}
-    assert any("#8ce99a" in style for style in styles) and any("#ffa8a8" in style for style in styles)
+    from bunnybyte.tui.theme import palette
+
+    colors = palette()
+    assert f"{colors.diff_add} on {colors.diff_add_bg}" in styles
+    assert f"{colors.diff_del} on {colors.diff_del_bg}" in styles
     assert card.expanded is True  # 短 diff 默认展开
 
     old = "\n".join(f"line {i}" for i in range(1000))

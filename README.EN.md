@@ -49,16 +49,26 @@ stored locally for recovery, review, and debugging.
 
 ## Interface
 
-### Tool execution and task flow
+### TUI upgrade (0.7.0)
 
 <p align="center">
-  <img src="assets/screenshots/bunnybyte-tui-tools.png" alt="Bunny Byte TUI tool execution" width="960">
+  <img src="assets/screenshots/bunnybyte-tui-theme-dark.png" alt="Bunny Byte TUI dark theme: tool cards and an inline diff from one bug-fix turn" width="720">
+  <img src="assets/screenshots/bunnybyte-tui-theme-light.png" alt="Bunny Byte TUI light theme" width="720">
 </p>
 
-The same interface shows model output, tool calls, command results, and
-sub-task state.
+One bug-fix turn (read, patch, run a check, answer) in the dark theme (top) and the light theme (bottom). What changed in the 0.7.0 TUI:
 
-Layout (since 0.6.x): the welcome banner only shows on an empty session; after the first message (or when `--resume` opens a session with history) it collapses to a one-line header, and `/banner` toggles it. The status bar shows segments for run state and elapsed time, model, mode, context usage (percent + mini bar, yellow above 50%, red above 80%), this turn's tokens (↑ input of the last request, ↓ summed output; `-` when the provider reports nothing), subagents and key hints, dropping the less important segments first when the window is narrow. Tool cards are one line each, e.g. `✓ 读取 calc.py:1-50 · 全部 2 行 · 13ms`; `run_shell` shows the exit code (red when non-zero), `patch_file` / `write_file` show an inline colored diff (short diffs open automatically, long ones are clipped with a count of hidden lines), and verification receipts get their own ✓/✗ card. In `ask` mode the approval prompt shows the diff before you approve a `patch_file`. `Ctrl+O` expands or collapses every tool card. The screenshots still show the old layout.
+- The screen goes to the conversation: the welcome banner collapses to a one-line header after the first turn instead of taking about a third of the screen (`/banner` toggles it).
+- The status bar shows run state and turn time, context usage as a percentage and mini bar, and this turn's input/output tokens; narrow windows drop the less important segments first.
+- One line per tool card: tool, arguments, result summary (lines, matches, exit code) and duration; `patch_file` / `write_file` show an inline colored diff, also in the approval prompt; `Ctrl+O` expands every card.
+- Files mentioned with `@path` are read before the first model call without using a step; multi-line pastes no longer keep only the first line.
+- Dark and light themes: pick one with `--theme dark|light|auto`, `BUNNYBYTE_THEME` or `[tui] theme = "light"`, and switch live with `/theme` without restarting. Every color in the UI, mascot pixels included, comes from `bunnybyte/tui/theme.py`; tests require WCAG AA contrast (4.5:1) for text and 3:1 for each border against the background it sits on, in both palettes, and reject color literals in the other TUI files.
+- CJK text is clipped by display width (session titles, todos, subagent descriptions), so it no longer overflows or cuts a character in half.
+- A plain-text snapshot test of a full turn (`tests/snapshots/tui_turn.txt`) catches layout changes in CI.
+
+Layout (since 0.6.x): the welcome banner only shows on an empty session; after the first message (or when `--resume` opens a session with history) it collapses to a one-line header, and `/banner` toggles it. The status bar shows segments for run state and elapsed time, model, mode, context usage (percent + mini bar, yellow above 50%, red above 80%), this turn's tokens (↑ input of the last request, ↓ summed output; `-` when the provider reports nothing), subagents and key hints, dropping the less important segments first when the window is narrow. Tool cards are one line each, e.g. `✓ 读取 calc.py:1-50 · 全部 2 行 · 13ms`; `run_shell` shows the exit code (red when non-zero), `patch_file` / `write_file` show an inline colored diff (short diffs open automatically, long ones are clipped with a count of hidden lines), and verification receipts get their own ✓/✗ card. In `ask` mode the approval prompt shows the diff before you approve a `patch_file`. `Ctrl+O` expands or collapses every tool card.
+
+Colors: dark by default. Use `--theme light`, `BUNNYBYTE_THEME=light`, or `[tui] theme = "light"` in `.bunnybyte.toml` / `~/.config/bunnybyte/config.toml` (precedence: CLI > environment > project config > global config). `auto` reads the terminal's `COLORFGBG` and picks light only when it reports a light background; many terminals, Terminal.app included, do not set it, and then you get dark. In the TUI, `/theme` toggles between dark and light and `/theme light` picks one; that lasts for the current run only. Picking a built-in Textual theme from Ctrl+P applies the matching dark or light palette.
 
 Input and live feedback:
 
@@ -245,6 +255,7 @@ bunny bench             # live benchmark (calls the real model)
 - `/rollback <event|turn|#>`
 - `/undo`, `/undo list`, `/undo --force`
 - `/banner` (toggle the welcome banner; `Ctrl+O` toggles all tool cards)
+- `/theme`, `/theme dark|light|auto` (switch colors without restarting)
 - `/hooks`, `/hooks trust`
 - `/plan <topic>`
 - `/plan-exit`

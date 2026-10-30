@@ -45,15 +45,26 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 
 ## 界面示例
 
-### 工具执行与任务过程
+### TUI 体验升级（0.7.0）
 
 <p align="center">
-  <img src="assets/screenshots/bunnybyte-tui-tools.png" alt="Bunny Byte TUI 工具执行界面" width="960">
+  <img src="assets/screenshots/bunnybyte-tui-theme-dark.png" alt="Bunny Byte TUI 深色主题：一轮修 bug 的工具卡片与内联 diff" width="720">
+  <img src="assets/screenshots/bunnybyte-tui-theme-light.png" alt="Bunny Byte TUI 浅色主题" width="720">
 </p>
 
-同一界面内可以查看模型输出、工具调用、命令执行结果和子任务状态。
+同一轮修 bug（读取 → 修改 → 运行检查 → 回答），上为深色主题，下为浅色主题。0.7.0 的 TUI 改动：
 
-界面布局（0.6.x 起）：欢迎横幅只在空会话时显示，发出第一条消息（或用 `--resume` 恢复有历史的会话）后收成一行标题，`/banner` 可随时展开/收起；底部状态栏分段显示运行状态与本轮耗时、模型、模式、上下文占用（百分比 + 迷你条，超过 50%/80% 变黄/变红）、本轮 token（↑ 最后一次请求的输入、↓ 本轮输出之和；provider 不上报时显示 `-`）、子 agent 数和按键提示，窗口变窄时先丢次要分段。工具卡片统一为一行：`✓ 读取 calc.py:1-50 · 全部 2 行 · 13ms`，`run_shell` 显示退出码（非 0 标红），`patch_file` / `write_file` 直接内联彩色 diff（短 diff 自动展开，长 diff 截断并注明剩余行数），验证回执是单独配色的 ✓/✗ 卡片；审批模式下批准 `patch_file` 前就能看到 diff。`Ctrl+O` 一次展开/收起全部工具卡片。截图仍是旧版界面，待更新。
+- 屏幕留给对话：欢迎横幅在第一轮后收成一行标题，不再常驻占掉约三分之一屏幕（`/banner` 切换）。
+- 状态栏分段显示运行状态与本轮耗时、上下文占用百分比与迷你条、本轮输入/输出 token，窄屏按优先级丢弃次要分段。
+- 工具卡片一行一张：工具、参数、结果摘要（行数、匹配数、退出码）、耗时；`patch_file` / `write_file` 内联彩色 diff，审批前就能预览；`Ctrl+O` 展开全部。
+- `@path` 提及的文件在第一次调用模型前就读进来，不占步数；多行粘贴不再只剩第一行。
+- 深色 / 浅色两套配色：`--theme dark|light|auto`、`BUNNYBYTE_THEME` 或 `[tui] theme = "light"` 选择，TUI 里 `/theme` 不重启即时切换。界面上的颜色（包括吉祥物像素）全部来自 `bunnybyte/tui/theme.py`；测试要求两套色板的正文对比度不低于 WCAG AA（4.5:1）、每种边框对它所在的背景不低于 3:1，并禁止其他 TUI 文件里出现颜色字面量。
+- 中文按显示宽度截断（会话名、todo、子 agent 描述），不再溢出或截出半个字。
+- 一轮完整对话的布局有纯文本快照测试（`tests/snapshots/tui_turn.txt`），布局改动会在 CI 里被发现。
+
+界面布局（0.6.x 起）：欢迎横幅只在空会话时显示，发出第一条消息（或用 `--resume` 恢复有历史的会话）后收成一行标题，`/banner` 可随时展开/收起；底部状态栏分段显示运行状态与本轮耗时、模型、模式、上下文占用（百分比 + 迷你条，超过 50%/80% 变黄/变红）、本轮 token（↑ 最后一次请求的输入、↓ 本轮输出之和；provider 不上报时显示 `-`）、子 agent 数和按键提示，窗口变窄时先丢次要分段。工具卡片统一为一行：`✓ 读取 calc.py:1-50 · 全部 2 行 · 13ms`，`run_shell` 显示退出码（非 0 标红），`patch_file` / `write_file` 直接内联彩色 diff（短 diff 自动展开，长 diff 截断并注明剩余行数），验证回执是单独配色的 ✓/✗ 卡片；审批模式下批准 `patch_file` 前就能看到 diff。`Ctrl+O` 一次展开/收起全部工具卡片。
+
+配色：默认深色。`--theme light`、环境变量 `BUNNYBYTE_THEME=light`，或在 `.bunnybyte.toml` / `~/.config/bunnybyte/config.toml` 里写 `[tui] theme = "light"`（优先级：命令行 > 环境变量 > 项目配置 > 全局配置）。`auto` 读取终端的 `COLORFGBG`，背景是浅色才用浅色；Terminal.app 等很多终端不设置这个变量，这时按深色处理。TUI 里 `/theme` 在深色和浅色之间切换，`/theme light` 指定，只对本次运行生效。Ctrl+P 里选 Textual 自带主题时按它的明暗套用对应色板。
 
 输入与实时反馈：
 
@@ -239,6 +250,7 @@ bunny bench             # 跑分基准（会调用真实模型）
 - `/undo`、`/undo list`、`/undo --force`
 - `/hooks`、`/hooks trust`
 - `/banner`（展开/收起顶部横幅；`Ctrl+O` 展开/收起全部工具卡片）
+- `/theme`、`/theme dark|light|auto`（切换配色，不用重启）
 - `/plan <topic>`
 - `/plan-exit`
 - `/skills`
