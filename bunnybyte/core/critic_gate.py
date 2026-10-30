@@ -145,7 +145,7 @@ def critic_gate(engine, task_state, final):
     truncated = len(diff) > config.max_diff_chars
     prompt = build_prompt(
         request=agent.redact_text(task_state.user_request),
-        rules=render_rules(getattr(agent.workspace, "project_rules", ())),
+        rules=agent.redact_text(render_rules(getattr(agent.workspace, "project_rules", ()))),
         files=files,
         changed=paths,
         diff=diff[: config.max_diff_chars],

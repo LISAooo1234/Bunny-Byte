@@ -41,6 +41,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 空转保护 | 便宜模型常反复读同一个没变的文件。这类“已读/重复调用”不再占用步数预算；连续空转时先暂时收走被重复的只读工具，仍不改就让它不带工具汇报进展并提前收尾（`loop_stalled`），避免烧光 50 步。 |
 | 跑分基准 | `bunny bench` 用真实模型在 10 个固定任务上打分（通过率、步数、token、耗时），结果与历史写入 `benchmarks/results/`；详见 [跑分基准](docs/benchmark.md)。 |
 | MCP 与钩子 | 接入任意 MCP stdio 服务器，工具默认要审批、改的文件进 `/undo`；`pre_tool` / `post_tool` / `on_final` 钩子把团队规矩变成运行时强制；仓库自带的服务器和钩子要先信任；详见下文「MCP 服务器」「钩子」。 |
+| 密钥遮蔽 | 读到的 `.env`、命令输出、粘贴进来的 key 在发给模型和写进 `.bunnybyte/` 之前换成 `<secret:GITHUB_TOKEN#…>` 占位符；模型照抄占位符做 `write_file` / `patch_file` 时落盘前换回真实值，改配置文件不会把密钥写成占位符；详见下文「密钥遮蔽」。 |
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
 
@@ -429,6 +430,21 @@ timeout = 60                                    # 单次调用超时（秒）；
 - 某个服务器起不来只打一行警告，agent 照常启动；`/mcp` 查看服务器、状态和工具；`/mcp trust` 之前会列出将要信任的命令、cwd、env 和免审批工具。
 
 目前只支持 stdio 传输和 tools（不支持 HTTP/SSE、resources、prompts、sampling）。边界：MCP 服务器不在 sandbox 里运行；服务器写到仓库外、或调用返回之后才异步写的文件不会计入本轮改动；同一轮里参数完全相同的调用到第三次（例如轮询状态）会被重复调用保护拦下；服务器写进 gitignore 路径的文件同样看不到。
+
+## 密钥遮蔽
+
+agent 读 `.env`、跑 `env`、`cat ~/.aws/credentials`，或你把 key 粘进对话，以前原文会进到下一次模型请求和 `.bunnybyte/sessions/<id>.json`。现在这些值在进入提示词、session JSON、事件、trace、`task_state`、报告和大段 shell 输出文件之前都换成占位符：
+
+```
+   1: AWS_ACCESS_KEY_ID=<secret:aws#3f9a0c-2>
+   2: GITHUB_TOKEN=<secret:GITHUB_TOKEN#3f9a0c-3>
+```
+
+- **识别什么**：名字像密钥的环境变量的值（`postgres`、`secret` 这类短的普通单词不按子串替换，否则路径和命令都会被遮掉）、当前 / 备用 / 审查 provider 配置里的 `api_key`（包括只写在 `.bunnybyte.toml` 里的）、格式明确的令牌（`sk-…`、`sk-ant-…`、`ghp_…` / `github_pat_…`、`AKIA…`、`xox?-…`、`AIza…`、`sk_live_…`、PEM 私钥块）、`.env` / YAML 风格的 `XXX_TOKEN=…`、`XXX_PASSWORD: …` 行（`search`、`git diff`、`cat -n` 的输出格式也认）、`~/.aws/credentials` 的 `aws_secret_access_key`、配置里的 `api_key = "…"`。普通代码（`max_tokens = 4096`、`token = os.environ[...]`、git 哈希）不会被当成密钥；测试会扫一遍本仓库源码和文档确认零误判。
+- **不会把文件改坏**：同一个值在一个进程里永远是同一个占位符（提示词缓存不受影响），模型把占位符写进 `write_file` / `patch_file` 时落盘前换回真实值，所以“改 `.env` 里的 DEBUG”这类任务照常完成。占位符带本进程的随机 nonce：仓库里字面写着的 `<secret:…>`（文档、测试）原样保留；`/resume` 或重启之后旧占位符一律拒绝写入，提示重新读文件。
+- **`run_shell` 不换回真实值**：命令里出现占位符直接拒绝，避免把密钥交给 `git commit -m`、`curl -d`、`echo`；需要时请在命令里用环境变量。子 agent 与主 agent 共用占位符。写进 `.bunnybyte/`（记忆、计划）的内容保留占位符，不换回真实值。
+
+边界：这是防止密钥**泄露给 provider 和留在磁盘记录里**，不是防模型的沙箱——模型仍然可以 `curl -d @.env` 把文件内容发出去（用 approval policy / sandbox 管）。只认上面列出的格式，自定义格式的密钥可以用 `--secret-env-name` / `BUNNYBYTE_SECRET_ENV_NAMES` 声明成环境变量；MCP 工具的参数不会换回真实值。界面上的工具输出同样是遮蔽后的，想看真实值请直接打开文件。
 
 ## 仓库结构
 

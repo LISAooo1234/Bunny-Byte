@@ -99,6 +99,7 @@ class RuntimeContextMixin:
         self.ensure_session_started()
         if item.get("role") == "user":
             self._maybe_update_session_topic(item.get("content", ""))
+        item = self.secret_vault.mask_structure(item, self.known_secret_items())  # 用户粘贴的密钥也换成占位符
         self.session["history"].append(self.turn_history.enrich(item))
         self.session_path = self.session_store.save(self.session)
 
@@ -213,6 +214,7 @@ class RuntimeContextMixin:
             }
         )
         metadata.update(self.detected_secret_env_summary())
+        prompt = self.redact_text(prompt)  # 最后一道：规则、记忆、技能、当前请求里的密钥也不发给 provider
         usage_payload = {
             "run_id": getattr(getattr(self, "current_task_state", None), "run_id", ""),
             "context_usage": metadata.get("context_usage", {}),

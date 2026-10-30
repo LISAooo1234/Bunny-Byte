@@ -17,6 +17,7 @@ class SessionStore:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self.redactor = None
 
     def path(self, session_id):
         return self.root / f"{_safe_session_id(session_id)}.json"
@@ -26,7 +27,7 @@ class SessionStore:
 
     def save(self, session):
         path = self.path(session["id"])
-        payload = json.dumps(session, indent=2)
+        payload = json.dumps(self.redactor(session) if self.redactor else session, indent=2)
         with self._lock:
             tmp_path = path.with_name(
                 f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"

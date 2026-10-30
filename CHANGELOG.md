@@ -1,5 +1,10 @@
 # Changelog
 
+## 未发布
+
+- 密钥遮蔽：agent 读到的 `.env`、命令输出、粘贴进对话的 key，在发给模型和写进 `.bunnybyte/`（session JSON、事件、trace、`task_state`、报告、大段 shell 输出文件）之前换成 `<secret:名字#nonce-N>` 占位符。以前只遮蔽名字像密钥的环境变量，而且只在 trace / 报告里：`read_file .env` 的原文会进入下一次模型请求和 session JSON，只写在 `.bunnybyte.toml` 里的 `api_key` 从来不遮。现在额外识别 provider 配置的 `api_key`（主 / 备用 / 审查）、`sk-` / `sk-ant-` / `ghp_` / `github_pat_` / `AKIA` / `xox?-` / `AIza` / `sk_live_` / PEM 私钥、`.env` / YAML 风格的 `XXX_TOKEN=…` 行（含 search、git diff、`cat -n` 的输出格式）、`aws_secret_access_key` 与配置里的 `api_key = "…"`；短的普通单词（如 `postgres`）不按子串替换。
+- 模型照抄占位符做 `write_file` / `patch_file` 时落盘前换回真实值；`run_shell` 命令里出现占位符直接拒绝；占位符带进程随机 nonce，`/resume` 之后的旧占位符拒绝写入，仓库里字面写着的占位符原样保留；子 agent 共用占位符；写进 `.bunnybyte/` 的内容不换回真实值；已是占位符的文本不会再遮一次。trace 里原来的 `<redacted>` 值改为占位符（按键名遮蔽的字段仍是 `<redacted>`）。
+
 ## 0.8.0
 
 M3「可集成」完成（无人值守 `bunny -p`、钩子、MCP 客户端）。独立审查 `--critic` 随本版本发布，默认关闭（M1.7 的第二个模型实测还没做）。

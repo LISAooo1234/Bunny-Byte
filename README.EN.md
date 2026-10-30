@@ -45,6 +45,7 @@ stored locally for recovery, review, and debugging.
 | Stall guard | Cheap models often re-read a file that has not changed. Those "already read" / repeated-call replies no longer eat the step budget. Repeated waste first takes the repeated read-only tool away for a couple of calls, and a model that still loops is asked to report progress without tools and stopped early (`loop_stalled`) instead of burning all 50 steps. |
 | Benchmark | `bunny bench` scores the agent with a real model on 8 fixed tasks (pass rate, steps, tokens, wall time) and appends results to `benchmarks/results/`. See [Benchmark](docs/benchmark.md). |
 | MCP and hooks | Connect any MCP stdio server; its tools need approval by default and the files they change are covered by `/undo`. `pre_tool` / `post_tool` / `on_final` hooks turn team rules into runtime checks. Servers and hooks shipped by a repository must be trusted first. See "MCP servers" and "Hooks" below. |
+| Secret masking | A `.env` the agent reads, command output, or a key you paste is replaced with a `<secret:GITHUB_TOKEN#…>` placeholder before it reaches the model or `.bunnybyte/`; when the model copies a placeholder into `write_file` / `patch_file`, the real value is written back, so editing a config file does not replace the key with a placeholder. See "Secret masking" below. |
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
 
@@ -429,6 +430,21 @@ timeout = 60                                    # per-call timeout in seconds; s
 - A server that fails to start prints one warning and the agent starts anyway; `/mcp` lists servers, status and tools; before `/mcp trust` it shows the command, cwd, env and approval-free tools you are about to trust.
 
 Only the stdio transport and tools are supported (no HTTP/SSE, resources, prompts or sampling). Limits: MCP servers do not run inside the sandbox; files a server writes outside the repo, or asynchronously after the call returns, are not counted as changes of that turn; the third call with identical arguments in one turn (for example polling a status) is stopped by the repeated-call guard; files the server writes to gitignored paths are not seen either.
+
+## Secret masking
+
+When the agent read `.env`, ran `env` or `cat ~/.aws/credentials`, or you pasted a key into the chat, the raw value used to go into the next model request and into `.bunnybyte/sessions/<id>.json`. Now those values are replaced with placeholders before they enter the prompt, the session JSON, events, traces, `task_state`, reports and saved long shell output:
+
+```
+   1: AWS_ACCESS_KEY_ID=<secret:aws#3f9a0c-2>
+   2: GITHUB_TOKEN=<secret:GITHUB_TOKEN#3f9a0c-3>
+```
+
+- **What is detected**: values of secret-looking env vars (short plain words such as `postgres` or `secret` are not replaced as substrings, which would mask paths and commands); the `api_key` of the active, fallback and critic providers (including keys that only live in `.bunnybyte.toml`); well-formed tokens (`sk-…`, `sk-ant-…`, `ghp_…` / `github_pat_…`, `AKIA…`, `xox?-…`, `AIza…`, `sk_live_…`, PEM private key blocks); `.env` / YAML-style `XXX_TOKEN=…` and `XXX_PASSWORD: …` lines (also in `search`, `git diff` and `cat -n` output); `aws_secret_access_key` in `~/.aws/credentials`; `api_key = "…"` config lines. Ordinary code (`max_tokens = 4096`, `token = os.environ[...]`, git hashes) is left alone; a test scans this repository's sources and docs and expects zero matches.
+- **Files are not corrupted**: one value always maps to the same placeholder within a process (prompt caching keeps working), and placeholders the model writes through `write_file` / `patch_file` are turned back into the real value on disk, so tasks like "flip DEBUG in `.env`" still work. Placeholders carry a random per-process nonce: literal `<secret:…>` text in docs or tests passes through unchanged, and after `/resume` or a restart old placeholders are refused instead of written.
+- **`run_shell` never gets the real value**: a command containing a placeholder is refused, so the secret cannot flow into `git commit -m`, `curl -d` or `echo`; use an environment variable in the command instead. Subagents share the parent's placeholders. Content written under `.bunnybyte/` (memory, plans) keeps the placeholder.
+
+Limits: this keeps secrets **away from the provider and out of on-disk records**; it is not a sandbox against the model, which can still `curl -d @.env` (use approval policy / sandbox for that). Only the formats above are recognised; declare custom secrets as env vars with `--secret-env-name` / `BUNNYBYTE_SECRET_ENV_NAMES`. MCP tool arguments never get real values restored. Tool output in the UI is masked too; open the file yourself to see the real value.
 
 ## Repository Layout
 

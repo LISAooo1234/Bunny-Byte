@@ -36,6 +36,7 @@ def build_child_runtime(parent, subagent_type, write_scope):
             "kind": "worker",
         },
     )
+    child.secret_vault = parent.secret_vault  # 同一个密钥在父子 agent 里是同一个占位符
     child.hooks = parent.hooks  # pre_tool / post_tool 对子 agent 同样生效；on_final 只在主 agent 上跑
     if getattr(parent, "mcp", None) is not None:
         # 共用父 agent 的连接；需要审批的 MCP 工具不在 worker / readonly 档位里，后台 worker 只拿到免审批的那些

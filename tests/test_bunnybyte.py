@@ -1604,8 +1604,8 @@ def test_trace_and_report_redact_secret_env_values(tmp_path):
 
     tool_events = [event for event in trace_events if event["event"] == "tool_executed"]
     assert tool_events
-    assert "<redacted>" in tool_events[0]["args"]["command"]
-    assert "<redacted>" in tool_events[0]["result"]
+    assert "<secret:OPENAI_API_KEY#" in tool_events[0]["args"]["command"]
+    assert "<secret:OPENAI_API_KEY#" in tool_events[0]["result"]
 
 
 def test_prompt_budget_metadata_records_budget_decisions(tmp_path):

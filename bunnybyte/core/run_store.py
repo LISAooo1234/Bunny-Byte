@@ -19,6 +19,7 @@ class RunStore:
     def __init__(self, root):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self.redactor = None
 
     def run_dir(self, run_id):
         return self.root / _run_id(run_id)
@@ -46,7 +47,8 @@ class RunStore:
     def write_task_state(self, task_state):
         path = self.task_state_path(task_state)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._write_json_atomic(path, task_state.to_dict())
+        payload = task_state.to_dict()
+        self._write_json_atomic(path, self.redactor(payload) if self.redactor else payload)
         return path
 
     def append_trace(self, task_state, event):

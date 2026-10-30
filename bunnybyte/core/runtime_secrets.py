@@ -2,6 +2,8 @@
 
 import os
 
+from .secret_vault import DEFAULT_VAULT
+
 SENSITIVE_ENV_NAME_MARKERS = ("API_KEY", "TOKEN", "SECRET", "PASSWORD")
 REDACTED_VALUE = "<redacted>"
 
@@ -34,24 +36,50 @@ class RuntimeSecretsMixin:
         names = [name for name, _ in self.detected_secret_env_items()]
         return {"secret_env_count": len(names), "secret_env_names": names}
 
-    def redact_text(self, text):
-        text = str(text)
-        for _, value in sorted(self.detected_secret_env_items(), key=lambda item: len(item[1]), reverse=True):
-            text = text.replace(value, REDACTED_VALUE)
-        return text
+    @property
+    def secret_vault(self):
+        return self.__dict__.get("_secret_vault") or DEFAULT_VAULT
 
-    def redact_artifact(self, value, key=None):
+    @secret_vault.setter
+    def secret_vault(self, vault):
+        self.__dict__["_secret_vault"] = vault
+
+    def known_secret_items(self):
+        """Values we know are secret: secret-looking env vars plus every configured provider key."""
+        items = list(self.detected_secret_env_items())
+        client = getattr(self, "model_client", None)
+        clients = [client, getattr(self, "critic_client", None)]
+        clients += list(getattr(client, "fallback_clients", None) or []) if client is not None else []
+        for item in clients:
+            key = getattr(item, "api_key", None) if item is not None else None
+            if isinstance(key, str) and key.strip():
+                items.append(("api_key", key.strip()))
+        return items
+
+    def redact_text(self, text, known=None):
+        return self.secret_vault.mask(text, self.known_secret_items() if known is None else known)
+
+    def redact_artifact(self, value, key=None, known=None):
+        known = self.known_secret_items() if known is None else known
         if key and self.is_secret_env_name(key):
             return REDACTED_VALUE
         if isinstance(value, dict):
-            return {str(item_key): self.redact_artifact(item_value, key=item_key) for item_key, item_value in value.items()}
-        if isinstance(value, list):
-            return [self.redact_artifact(item, key=key) for item in value]
-        if isinstance(value, tuple):
-            return [self.redact_artifact(item, key=key) for item in value]
+            return {str(k): self.redact_artifact(v, key=k, known=known) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self.redact_artifact(item, key=key, known=known) for item in value]
         if isinstance(value, str):
-            return self.redact_text(value)
+            return self.redact_text(value, known)
         return value
+
+    def redact_session(self, session):
+        """Masked copy of a session dict for disk; remembers which nonces this session's placeholders use."""
+        vault = self.secret_vault
+        masked = vault.mask_structure(session, self.known_secret_items())
+        if vault.issued:
+            nonces = [str(item) for item in masked.get("secret_nonces", []) or []]
+            if vault.nonce not in nonces:
+                masked["secret_nonces"] = nonces + [vault.nonce]
+        return masked
 
     def shell_env(self):
         env = {name: os.environ[name] for name in self.shell_env_allowlist if name in os.environ}

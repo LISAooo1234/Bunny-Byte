@@ -32,6 +32,7 @@ from .runtime_consumers import default_runtime_consumers
 from .runtime_checkpoints import RuntimeCheckpointsMixin
 from .runtime_events import build_runtime_event
 from .runtime_secrets import REDACTED_VALUE, RuntimeSecretsMixin
+from .secret_vault import unmask_args
 from .session_events import SessionEventBus
 from .session_fork import fork_runtime_session, rollback_runtime_session
 from .session_lifecycle import clear_runtime_session, resume_runtime_session
@@ -148,6 +149,8 @@ class BunnyByte(
         self.workspace = workspace
         self.root = Path(workspace.repo_root)
         self.session_store = session_store
+        if getattr(session_store, "redactor", None) is None:
+            session_store.redactor = self.redact_session  # 落盘的 session JSON / task_state 里不留密钥
         self.approval_policy = approval_policy
         self.max_steps = max_steps
         self.max_new_tokens = max_new_tokens
@@ -176,6 +179,8 @@ class BunnyByte(
         self.run_store = run_store or RunStore(
             Path(workspace.repo_root) / ".bunnybyte" / "runs"
         )
+        if getattr(self.run_store, "redactor", None) is None:
+            self.run_store.redactor = self.redact_artifact
         self._lazy_session_requested = bool(lazy_session and session is None)
         self._emit_derived_topic_event = self._lazy_session_requested
         self._session_started_emitted = False
@@ -628,7 +633,7 @@ class BunnyByte(
 
     def remember_durable_note(self, text, source="slash_command"):
         self.ensure_session_started()
-        path = memorylib.append_to_daily_log(self.memory_dir, text)
+        path = memorylib.append_to_daily_log(self.memory_dir, self.redact_text(text))
         if path:
             self.session_event_bus.emit(
                 "memory_note_appended",
@@ -857,7 +862,7 @@ class BunnyByte(
 
     def validate_tool(self, name, args):
         """把通用工具校验和 runtime 级额外约束串起来。"""
-        toolkit.validate_tool(self, name, args)
+        toolkit.validate_tool(self, name, unmask_args(self, name, args))
         if str(name).startswith("mcp__"):
             validate_mcp_args(self, name, args)
 
