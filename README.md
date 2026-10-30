@@ -40,8 +40,18 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 项目规则 | 仓库里的 `AGENTS.md`、`CLAUDE.md`、`.bunnybyte/rules/*.md` 会放进提示词前缀，有独立预算，超长时明确提示去读原文件；`bunny doctor` 会列出实际读到了哪些；详见下文「项目规则」。 |
 | 空转保护 | 便宜模型常反复读同一个没变的文件。这类“已读/重复调用”不再占用步数预算；连续空转时先暂时收走被重复的只读工具，仍不改就让它不带工具汇报进展并提前收尾（`loop_stalled`），避免烧光 50 步。 |
 | 跑分基准 | `bunny bench` 用真实模型在 10 个固定任务上打分（通过率、步数、token、耗时），结果与历史写入 `benchmarks/results/`；详见 [跑分基准](docs/benchmark.md)。 |
+| MCP 与钩子 | 接入任意 MCP stdio 服务器，工具默认要审批、改的文件进 `/undo`；`pre_tool` / `post_tool` / `on_final` 钩子把团队规矩变成运行时强制；仓库自带的服务器和钩子要先信任；详见下文「MCP 服务器」「钩子」。 |
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
+
+## 可集成：脚本、CI 与外部工具（0.8.0）
+
+Bunny Byte 可以嵌进团队已有的流程，而不只是一个聊天窗口：
+
+- **脚本与 CI**：`bunny -p "修好失败的测试" --require-verified --output-format json` 的 stdout 只有结果对象，退出码区分做完 / 出错 / 没做完 / 没验证通过 / 被钩子拦下；“验证通过”指运行时真的跑过、且覆盖当前文件内容的测试回执，不是模型自己说的。
+- **团队规矩运行时强制**：`pre_tool` 钩子拦截对受保护文件的写入，`post_tool` 写完自动格式化并把 lint 报错塞回给模型，`on_final` 定义自己的完成条件（例如“必须更新 CHANGELOG”）。
+- **接入外部工具（MCP）**：GitHub、数据库、浏览器、内部系统等 MCP 服务器的工具直接交给模型。和多数客户端不同，MCP 工具改的文件同样计入本轮改动：`/undo` 能撤销，验证闸门和独立审查能看到；默认需要审批，后台 worker 只拿到免审批的工具。
+- **克隆来的仓库不能自作主张**：仓库 `.bunnybyte.toml` 里的钩子和 MCP 服务器都要用户看过内容、`/hooks trust` / `/mcp trust` 之后才运行，配置一改信任作废，仓库自带的 `.env` 不能给自己授信，子进程拿不到 shell 里的 API key。
 
 ## 界面示例
 
@@ -249,6 +259,7 @@ bunny bench             # 跑分基准（会调用真实模型）
 - `/rollback <event|turn|#>`
 - `/undo`、`/undo list`、`/undo --force`
 - `/hooks`、`/hooks trust`
+- `/mcp`、`/mcp trust`
 - `/banner`（展开/收起顶部横幅；`Ctrl+O` 展开/收起全部工具卡片）
 - `/theme`、`/theme dark|light|auto`（切换配色，不用重启）
 - `/plan <topic>`
@@ -393,6 +404,31 @@ only_if_changed = true
 - 子 agent 同样受 `pre_tool` / `post_tool` 约束。
 
 完整协议、退出码表、边界和 4 个现成配方见 [docs/hooks.md](docs/hooks.md)。
+
+## MCP 服务器
+
+接入任意 [MCP](https://modelcontextprotocol.io) stdio 服务器（GitHub、数据库、浏览器、内部系统……），它的工具会以 `mcp__<服务器>__<工具>` 的名字交给模型：
+
+```toml
+[mcp.servers.fs]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+[mcp.servers.issues]
+command = "uvx"
+args = ["my-issue-tracker-mcp"]
+env = { TRACKER_TOKEN = "${TRACKER_TOKEN}" }   # 只有这里写明的变量会传给服务器
+read_only_tools = ["search_issues"]             # 列在这里的工具免审批；其余默认要审批
+timeout = 60                                    # 单次调用超时（秒）；startup_timeout 默认 10
+```
+
+- **MCP 工具改的文件同样进 `/undo`**：需要审批的 MCP 工具和 `run_shell` 一样前后打工作区快照，服务器写进仓库的文件出现在本轮改动里，`/undo` 能撤销，验证闸门和独立审查也能看到。
+- **默认需要审批**，`--approval never` / `bunny -p` 下会被拒绝；`read_only_tools = ["*"]` 才全部放行。后台 worker 只拿到免审批的那部分（MCP 工具不受 `write_scope` 约束）。
+- **仓库里的服务器默认不启动**：克隆来的 `.bunnybyte.toml` 声明的服务器要 `/mcp trust` 之后才运行，配置一改信任就作废；无人值守时用 `BUNNYBYTE_TRUST_MCP=1`。全局配置和 `--config` 里的服务器直接启动。
+- 服务器进程只拿到 `run_shell` 同一份环境变量白名单加上 `env` 里显式写的值，shell 里的 API key 不会顺带泄出去；stderr 写到 `.bunnybyte/mcp/<名字>.log`。
+- 某个服务器起不来只打一行警告，agent 照常启动；`/mcp` 查看服务器、状态和工具；`/mcp trust` 之前会列出将要信任的命令、cwd、env 和免审批工具。
+
+目前只支持 stdio 传输和 tools（不支持 HTTP/SSE、resources、prompts、sampling）。边界：MCP 服务器不在 sandbox 里运行；服务器写到仓库外、或调用返回之后才异步写的文件不会计入本轮改动；同一轮里参数完全相同的调用到第三次（例如轮询状态）会被重复调用保护拦下；服务器写进 gitignore 路径的文件同样看不到。
 
 ## 仓库结构
 

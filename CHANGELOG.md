@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
 
+M3「可集成」完成（无人值守 `bunny -p`、钩子、MCP 客户端）。独立审查 `--critic` 随本版本发布，默认关闭（M1.7 的第二个模型实测还没做）。
+
+- 新增 MCP 客户端（stdio，只支持 tools）：在全局配置、`--config` 或项目 `.bunnybyte.toml` 里写 `[mcp.servers.<名字>]`（`command`、`args`、`env` 支持 `${VAR}`、`cwd`、`timeout`、`startup_timeout`、`read_only_tools`、`enabled`），启动时并行拉起服务器、分页列出工具，以 `mcp__<服务器>__<工具>` 注册给模型（原生工具调用时传服务器的 JSON Schema，去掉 `$ref`、顶层 `oneOf` 等 provider 不收的写法，文本协议下必填参数检查并把字符串参数按 schema 转成数字/布尔值）。工具默认需要审批，前后打工作区快照：服务器写进仓库的文件计入本轮改动，`/undo` 可撤销；`isError` 结果算工具失败；调用超时、Esc 中止会给服务器发 `notifications/cancelled`；退出时连同服务器拉起的子进程整组结束；服务器崩溃不会让调用卡住。仓库声明的服务器要 `/mcp trust` 后才启动（`/mcp` 先列出命令、cwd、env、免审批工具，指纹覆盖全部这些字段），`BUNNYBYTE_TRUST_MCP=1` 用于无人值守；子进程只拿到 shell 白名单环境变量加显式 `env`，stderr 写到 `.bunnybyte/mcp/<名字>.log`；起不来的服务器只打一行警告。后台 worker / dream 拿不到需要审批的 MCP 工具；工具按名字排序注册，前缀不随启动快慢变化；每个服务器最多 40 个工具、描述截到 300 字。新增 `/mcp`、`/mcp trust`，TUI 卡片标题显示 `MCP 服务器/工具`。
 - 新增独立审查 `--critic auto` / `[critic]`（默认关闭）：交卷前另起一次不带工具的模型调用，对照用户请求、项目规则、文件列表、本轮 diff 和本回合跑过的命令逐条核对，有文件和证据的意见退回给模型修复（默认 1 轮）；审查出错、回复不是 JSON、只说“无法验证”的意见一律放行并记下原因。结果写入 `task_state` / `report.json` 的 `critic`、trace 的 `critic_review`（token 计入用量），`bunny -p` JSON 有 `critic` 字段，TUI 显示“审查”卡片。
 - `bunny bench --suite spec`：3 道“测试全绿、另一半需求写在 AGENTS.md 里”的任务（不进默认 10 题，基线指纹不变），`--critic` 开关和审查指标（反对次数、反对时代码已能通过判分的次数、照意见修改后反而不通过的题数）。实测 `Claude Haiku 4.5` 每题 3 次：不开审查 4/9，开审查 9/9，每次运行输入 token 1.31 倍；默认 10 题开审查 9/10，与基线相同。
 

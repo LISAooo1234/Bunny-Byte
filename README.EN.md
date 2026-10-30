@@ -44,8 +44,18 @@ stored locally for recovery, review, and debugging.
 | Project rules | `AGENTS.md`, `CLAUDE.md` and `.bunnybyte/rules/*.md` from the repository are placed in the prompt prefix with their own budget, and a long file is cut with an explicit pointer to read the rest; `bunny doctor` lists what was actually loaded. See "Project rules" below. |
 | Stall guard | Cheap models often re-read a file that has not changed. Those "already read" / repeated-call replies no longer eat the step budget. Repeated waste first takes the repeated read-only tool away for a couple of calls, and a model that still loops is asked to report progress without tools and stopped early (`loop_stalled`) instead of burning all 50 steps. |
 | Benchmark | `bunny bench` scores the agent with a real model on 8 fixed tasks (pass rate, steps, tokens, wall time) and appends results to `benchmarks/results/`. See [Benchmark](docs/benchmark.md). |
+| MCP and hooks | Connect any MCP stdio server; its tools need approval by default and the files they change are covered by `/undo`. `pre_tool` / `post_tool` / `on_final` hooks turn team rules into runtime checks. Servers and hooks shipped by a repository must be trusted first. See "MCP servers" and "Hooks" below. |
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
+
+## Integrations: scripts, CI and external tools (0.8.0)
+
+Bunny Byte fits into an existing team workflow, not just a chat window:
+
+- **Scripts and CI**: with `bunny -p "fix the failing test" --require-verified --output-format json`, stdout holds only the result object, and the exit code tells done / error / unfinished / not verified / blocked by a hook apart. "Verified" means the runtime really ran tests covering the current file contents, not that the model said so.
+- **Team rules enforced at runtime**: a `pre_tool` hook blocks writes to protected files, `post_tool` formats after each write and feeds lint errors back to the model, and `on_final` sets your own definition of done (for example "CHANGELOG must be updated").
+- **External tools via MCP**: tools from GitHub, database, browser or in-house MCP servers go straight to the model. Unlike most clients, files an MCP tool changes count as changes of the turn: `/undo` reverts them and the verification gate and critic see them. Approval is required by default, and background workers only get approval-free tools.
+- **A cloned repository cannot act on its own**: hooks and MCP servers in a repository's `.bunnybyte.toml` only run after the user has read them and run `/hooks trust` / `/mcp trust`; any config change revokes trust, a repository `.env` cannot trust itself, and child processes do not get the API keys in your shell.
 
 ## Interface
 
@@ -257,6 +267,7 @@ bunny bench             # live benchmark (calls the real model)
 - `/banner` (toggle the welcome banner; `Ctrl+O` toggles all tool cards)
 - `/theme`, `/theme dark|light|auto` (switch colors without restarting)
 - `/hooks`, `/hooks trust`
+- `/mcp`, `/mcp trust`
 - `/plan <topic>`
 - `/plan-exit`
 - `/skills`
@@ -393,6 +404,31 @@ only_if_changed = true
 - Subagents obey `pre_tool` / `post_tool` too.
 
 The full protocol, exit-code table, limits and four ready-made recipes are in [docs/hooks.md](docs/hooks.md) (Chinese).
+
+## MCP servers
+
+Connect any [MCP](https://modelcontextprotocol.io) stdio server (GitHub, databases, browsers, internal systems...). Its tools are offered to the model as `mcp__<server>__<tool>`:
+
+```toml
+[mcp.servers.fs]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+[mcp.servers.issues]
+command = "uvx"
+args = ["my-issue-tracker-mcp"]
+env = { TRACKER_TOKEN = "${TRACKER_TOKEN}" }   # only variables listed here reach the server
+read_only_tools = ["search_issues"]             # these skip approval; every other tool needs it
+timeout = 60                                    # per-call timeout in seconds; startup_timeout defaults to 10
+```
+
+- **Files an MCP tool changes are covered by `/undo`**: approval-requiring MCP tools get the same before/after workspace snapshots as `run_shell`, so files the server writes into the repo show up in the turn's changes, `/undo` reverts them, and the verification gate and critic see them.
+- **Approval is required by default**, so the tools are denied under `--approval never` and `bunny -p`; `read_only_tools = ["*"]` allows all of them. Background workers only get the approval-free ones (MCP tools are not bound by `write_scope`).
+- **Servers declared by the repository do not start by default**: a cloned `.bunnybyte.toml` needs `/mcp trust` first, and any change to the config revokes that trust; unattended runs use `BUNNYBYTE_TRUST_MCP=1`. Servers in the global config or `--config` start directly.
+- A server process gets the same environment allowlist as `run_shell` plus the values written in `env`, so API keys in your shell are not passed along; its stderr goes to `.bunnybyte/mcp/<name>.log`.
+- A server that fails to start prints one warning and the agent starts anyway; `/mcp` lists servers, status and tools; before `/mcp trust` it shows the command, cwd, env and approval-free tools you are about to trust.
+
+Only the stdio transport and tools are supported (no HTTP/SSE, resources, prompts or sampling). Limits: MCP servers do not run inside the sandbox; files a server writes outside the repo, or asynchronously after the call returns, are not counted as changes of that turn; the third call with identical arguments in one turn (for example polling a status) is stopped by the repeated-call guard; files the server writes to gitignored paths are not seen either.
 
 ## Repository Layout
 
