@@ -377,6 +377,7 @@ def test_prompt_metadata_exposes_skill_catalog(tmp_path):
 def test_cli_lists_skills_without_calling_model(tmp_path):
     env = os.environ.copy()
     env["PYTHONPATH"] = os.getcwd()
+    env["BUNNYBYTE_API_KEY"] = "test-key-never-sent"  # 没有 key 时启动检查会直接退出（CI 上就没有）；模型不会被调用
     result = subprocess.run(
         [sys.executable, "-m", "bunnybyte", "--cwd", str(tmp_path)],
         input="/skills\n/exit\n",
