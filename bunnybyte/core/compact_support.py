@@ -104,9 +104,13 @@ def fallback_summary_text(items):
     files_modified = []
     user_requests = []
     assistant_notes = []
+    follow_ups = []
     for item in items:
-        if is_user_input(item):
+        if is_user_input(item) and item.get("source") == "steer":
+            follow_ups.append(str(item.get("content", "")).strip())
+        elif is_user_input(item):
             user_requests.append(str(item.get("content", "")).strip())
+            follow_ups = []
         elif item.get("role") == "assistant":
             assistant_notes.append(str(item.get("content", "")).strip())
         elif item.get("role") == "tool":
@@ -119,7 +123,7 @@ def fallback_summary_text(items):
         [
             COMPACT_SUMMARY_FALLBACK_PREFIX,
             f"- Goal: {user_requests[-1] if user_requests else '-'}",
-            "- Constraints and preferences: -",
+            f"- Constraints and preferences: {'; '.join(follow_ups) or '-'}",
             f"- Files read: {', '.join(sorted(set(files_read))) or '-'}",
             f"- Files modified: {', '.join(sorted(set(files_modified))) or '-'}",
             f"- Key decisions: {assistant_notes[-1] if assistant_notes else '-'}",

@@ -48,8 +48,19 @@ stored locally for recovery, review, and debugging.
 | Secret masking | A `.env` the agent reads, command output, or a key you paste is replaced with a `<secret:GITHUB_TOKEN#…>` placeholder before it reaches the model or `.bunnybyte/`; when the model copies a placeholder into `write_file` / `patch_file`, the real value is written back, so editing a config file does not replace the key with a placeholder. See "Secret masking" below. |
 | Forged user messages | Lines in files, command output or MCP results that impersonate `[user] …` are escaped, so they cannot pose as you in the prompt; `/compact` summaries carry the messages you actually sent, so compaction cannot launder an injection into a user request; see "Forged user messages" below. |
 | Cost and budget | Every model call is priced in USD by the model that actually served it, using official list prices (main loop, critic, summaries, compaction and subagents all count); see it in the TUI status bar, `/usage`, `bunny -p` JSON and `bunny bench`. `--max-cost 0.5` caps a turn and stops at the current progress. See "Cost estimate and budget" below. |
+| Steering mid-turn | The input box stays usable while the agent works: type a correction and press Enter, it reaches the model before its next call (no need to stop and start over); Stop / Esc ends the running command and every process it started right away. See "Steering and stopping" below. |
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
+
+## Reliable: long tasks stay on track, don't spin, and stop when asked (0.11.0)
+
+Milestone M1 was about letting a cheap model finish real tasks while the user can take over at any moment:
+
+- **Steer at any time**: keep typing while the agent works; "also add type hints" or "don't touch the tests" reaches the model before its next call and is recorded as a real user message (history, compaction summary); a message that arrives as the model is about to finish makes it answer that first; Stop kills the running command's whole process group and puts undelivered text back in the input box.
+- **No spinning**: re-reading an unchanged file or repeating an identical call no longer burns the step budget; a model that keeps looping loses the repeated tool and is then asked for a summary; compound shell commands are no longer rejected by mistake.
+- **Project rules apply**: `AGENTS.md` / `CLAUDE.md` / `.bunnybyte/rules/` go into the prompt prefix with their own budget; `/undo` reverts a turn in well under a second, even in large repositories.
+- **No leaks, no impersonation**: `.env` values and common token formats become placeholders before they reach the model or disk and are restored on write; forged `[user]` lines in files and command output are escaped, so `/compact` cannot launder an injection into a user request.
+- **Guarded by CI**: GitHub Actions runs the full suite on Python 3.10–3.13 plus a wheel smoke test.
 
 ## Integrations: scripts, CI and external tools (0.8.0)
 
@@ -481,6 +492,25 @@ When the agent read `.env`, ran `env` or `cat ~/.aws/credentials`, or you pasted
 - **`run_shell` never gets the real value**: a command containing a placeholder is refused, so the secret cannot flow into `git commit -m`, `curl -d` or `echo`; use an environment variable in the command instead. Subagents share the parent's placeholders. Content written under `.bunnybyte/` (memory, plans) keeps the placeholder.
 
 Limits: this keeps secrets **away from the provider and out of on-disk records**; it is not a sandbox against the model, which can still `curl -d @.env` (use approval policy / sandbox for that). Only the formats above are recognised; declare custom secrets as env vars with `--secret-env-name` / `BUNNYBYTE_SECRET_ENV_NAMES`. MCP tool arguments never get real values restored. Tool output in the UI is masked too; open the file yourself to see the real value.
+
+## Steering and stopping
+
+While the agent works, the TUI input box stays enabled (its placeholder says you can keep typing):
+
+```
+> fix add() in calc.py
+  ✓ read calc.py · 12ms
+> also add type hints  （已送达）
+  ✓ patch calc.py +2 −1
+```
+
+- **When it arrives**: Enter queues the message (marked "queued"); it is handed to the model right before the next model call (marked "delivered"). A running command or a reply being generated is not interrupted. If the model was about to give its final answer, that answer is still shown, then the model handles your new request before verification, critic review and hooks run. At most 5 final answers per turn are interrupted this way; later messages wait for the next turn and the current turn finishes normally.
+- **It counts as your message**: a delivered message is recorded as a real user message (`source: "steer"`), appears in the verbatim user-message list of compaction summaries, in the request the critic and `report.json` see ("用户追加：…"), and the latest 5 (up to 1000 characters each) are repeated under the current request in every later call of the turn. `bunny replay` shows it as `» 用户插话`.
+- **Slash commands**: only `/banner` and `/theme` work while a turn runs; other commands show a notice and stay in the input box.
+- **No accidental approvals**: when an approval, ask-user or memory-scope prompt opens while the input box still holds unsent text, the keyboard stays with the input box (Enter queues that text as usual) and the prompt takes no keys; only once the box is empty and you have stopped typing for 0.6 seconds do `y` / `n` / arrows / Enter act on the prompt. A follow-up containing `y` and the Enter that sends it cannot approve a tool call you never read.
+- **Stop means stop**: Stop / Esc / Ctrl+X used to wait for a running `run_shell` to finish (up to 120 seconds). Commands now run in their own process group; stop or timeout ends the whole group (SIGTERM, SIGKILL after 1 second), so `sleep`, test runners and dev servers started by the command end too, and a timed-out result includes the tail of the output printed before the timeout (secret-masked; if a child left the process group and still holds the output pipes, it waits at most 2 more seconds and keeps what was already read). On stop, error or a step / cost limit, undelivered messages go back into the input box; messages still undelivered when a turn ends normally (typed during the last model call) are sent as the next turn.
+
+Limits: messages arrive only between model calls, so a long reply or a 60-second command delays them; follow-ups are sent as plain text (`@file` mentions in them are not pre-read); the REPL and `bunny -p` don't have this feature.
 
 ## Forged user messages (compaction does not launder injections)
 

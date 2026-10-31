@@ -42,6 +42,7 @@ from .session_store import SessionStore as SessionStore  # noqa: F401
 from .session_state import SessionStateMixin
 from .skill_evolution import SkillEvolutionManager
 from .session_topics import DEFAULT_SESSION_TOPIC
+from .steering import SteerQueue
 from .tool_loop_guard import same_turn_compacted
 from .tool_repetition import is_repeated_tool_call
 from .tool_profiles import build_tool_profiles
@@ -142,6 +143,7 @@ class BunnyByte(
         self.model_client = model_client
         self.model_client_factory = model_client_factory
         self.abort_requested = False
+        self.steer_queue = SteerQueue()
         self.ask_user_callback = ask_user_callback
         self.sandbox_config = sandbox_config or SandboxConfig()
         self.sandbox_runner = SandboxRunner(
@@ -774,6 +776,13 @@ class BunnyByte(
 
     def ask(self, user_message):
         return self.engine.ask(user_message)
+
+    def steer(self, text):
+        """Queue text typed while a turn runs; the turn loop hands it to the model at its next call."""
+        return self.steer_queue.put(text)
+
+    def take_pending_steers(self):
+        return self.steer_queue.take_all()
 
     def abort_current_turn(self):
         self.abort_requested = True

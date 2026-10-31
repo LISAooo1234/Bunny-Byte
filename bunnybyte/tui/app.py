@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from functools import partial
 
 from textual.actions import SkipAction
@@ -32,6 +33,7 @@ from .widgets import (
     StatusBar,
     ThinkingIndicator,
     ToolCard,
+    UserMessage,
     WelcomeBanner,
     confirm_preview,
     format_tool_args,
@@ -100,6 +102,9 @@ class BunnyByteTuiApp(App):
         self._agent_task_handle: asyncio.Task | None = None
         self._command_task_handle: asyncio.Task | None = None
         self._stop_requested = False
+        self._steer_widgets: dict[int, UserMessage] = {}
+        self._steer_typed_at = 0.0
+        self._last_stop_reason = ""
         self._model_stream_widget = None
         self._model_stream_content = ""
         self._model_stream_rendered = ""
@@ -257,7 +262,38 @@ class BunnyByteTuiApp(App):
     def _is_command_running(self) -> bool:
         return self._command_task_handle is not None and not self._command_task_handle.done()
 
+    PROMPT_ARM_SECONDS = 0.6
+
+    def _prompt_open(self) -> bool:
+        return any(prompt is not None for prompt in (self._confirm_prompt, self._ask_user_prompt, self._memory_session_prompt))
+
+    def _steer_draft_open(self) -> bool:
+        """弹窗出现时输入框里还有正在打的补充要求：键盘继续归输入框，弹窗等它发出或清空。"""
+        bar = self.query_one(InputBar)
+        return bar.accepting_steers and self._is_agent_turn_running() and bool(bar.input.value.strip())
+
+    def _prompt_keys_armed(self) -> bool:
+        # 正在打字时冒出来的审批弹窗不能被句子里的 y 或用来发送的回车批准：草稿清空且停手一会儿后才接受按键。
+        if self._steer_draft_open():
+            return False
+        return time.monotonic() - self._steer_typed_at >= self.PROMPT_ARM_SECONDS
+
+    def on_input_changed(self, event) -> None:
+        value = str(getattr(event, "value", "") or "")
+        # 只算回合运行中真的在打字：发送后清空不算；Changed 消息是异步到的，发送前那一下的旧值也不算
+        if self._is_agent_turn_running() and value and value == self.query_one(InputBar).input.value:
+            self._steer_typed_at = time.monotonic()
+        if self._prompt_open():
+            self._sync_input_lock()
+
     def action_submit_input(self) -> None:
+        if self._prompt_open() and self._steer_draft_open():
+            bar = self.query_one(InputBar)
+            self._submit_steer(bar, bar.input.value.strip())
+            self._sync_input_lock()
+            return
+        if self._prompt_open() and not self._prompt_keys_armed():
+            return
         if self._memory_session_prompt is not None:
             self._resolve_memory_session_scope(
                 self._memory_session_prompt.selected_session_ids
@@ -274,6 +310,9 @@ class BunnyByteTuiApp(App):
         if not text or bar.input.disabled:
             return
         if bar.mention_completion_pending() and bar.complete_slash_suggestion():
+            return
+        if bar.accepting_steers and self._is_agent_turn_running():
+            self._submit_steer(bar, text)
             return
         selected_command = None
         candidate = bar.selected_slash_suggestion()
@@ -306,7 +345,79 @@ class BunnyByteTuiApp(App):
         self.query_one(ChatLog).add_message("user", text)
         self._run_agent(full_text, mention_text=bar.input.strip_tokens(text))
 
+    def _submit_steer(self, bar: InputBar, text: str) -> None:
+        """回合运行中按回车：话排进运行时队列，下一次模型调用前交给模型，不打断正在跑的工具。"""
+        if text.startswith("/") and text.split(maxsplit=1)[0] not in {"/banner", "/theme"}:
+            self.notify("agent 正在工作：斜杠命令请等这一轮结束或停止后再用；普通文字会作为补充要求送达。", severity="warning")
+            return
+        bar.history.append(text)
+        bar.history_index = len(bar.history)
+        bar.input.value = ""
+        bar.hide_slash_suggestions()
+        if text.split(maxsplit=1)[0] == "/banner":
+            self.query_one(WelcomeBanner).toggle_collapsed()
+            return
+        if text.split(maxsplit=1)[0] == "/theme":
+            self.query_one(ChatLog).add_message("user", text)
+            self._handle_theme_command(text)
+            return
+        steer_id = self.agent.steer(bar.input.expand(text))
+        if not steer_id:
+            return
+        widget = self.query_one(ChatLog).add_message("user", text)
+        widget.set_steer_status("queued")
+        self._steer_widgets[steer_id] = widget
+
+    def _sync_input_lock(self) -> None:
+        """弹出审批 / 提问 / 记忆范围选择时锁住输入框，y/n 和方向键才会落到弹窗上；关掉后恢复。"""
+        bar = self.query_one(InputBar)
+        if self._prompt_open():
+            if self._steer_draft_open():
+                bar.input.disabled = False
+                if not getattr(self, "_draft_notice_shown", False):
+                    self._draft_notice_shown = True
+                    self.notify("弹出了需要你回答的提示：先回车发送或清空输入框里的文字，再用按键回答。", severity="warning")
+                return
+            bar.input.disabled = True
+            return
+        self._draft_notice_shown = False
+        bar.input.disabled = bar.has_class("busy") and not bar.accepting_steers
+        if not bar.input.disabled:
+            bar.focus_input()
+
+    def _mark_steers_delivered(self, ids) -> None:
+        for steer_id in ids or []:
+            widget = self._steer_widgets.pop(int(steer_id), None)
+            if widget is not None:
+                widget.set_steer_status("delivered")
+
+    def _after_turn_steers(self) -> None:
+        """回合结束时还没送达的话：正常结束就合成下一轮发出去；停止或出错就放回输入框，由用户决定。"""
+        pending = self.agent.take_pending_steers()
+        widgets = [self._steer_widgets.pop(steer_id, None) for steer_id, _ in pending]
+        self._steer_widgets.clear()
+        if not pending:
+            return
+        texts = [text for _, text in pending]
+        if self._last_stop_reason == "final_answer_returned" and not self._stop_requested:
+            for widget in widgets:
+                if widget is not None:
+                    widget.set_steer_status("next_turn")
+            self._run_agent("\n\n".join(texts))
+            return
+        for widget in widgets:
+            if widget is not None:
+                widget.remove()
+        bar = self.query_one(InputBar)
+        bar.input.value = "\n".join(filter(None, [*texts, bar.input.value]))
+        bar.input.cursor_position = len(bar.input.value)
+        self.notify("这一轮没有正常结束，还没送达的补充要求放回了输入框。")
+
     def on_key(self, event: Key) -> None:
+        if self._prompt_open() and not self._prompt_keys_armed():
+            if not self._steer_draft_open():
+                event.prevent_default()  # 刚停手打字：这一下按键不算回答弹窗
+            return
         if self._memory_session_prompt is not None:
             if event.key in {"down", "right"}:
                 self._memory_session_prompt.select_next()
@@ -482,17 +593,19 @@ class BunnyByteTuiApp(App):
 
     def _run_agent(self, text: str, mention_text: str | None = None) -> None:
         self._stop_requested = False
+        self._last_stop_reason = ""
         self._running_tool_cards = []
         self.query_one(WelcomeBanner).set_collapsed(True)
         self.query_one(StatusBar).start_turn()
-        self.query_one(InputBar).set_busy(True)
+        self.query_one(InputBar).set_busy(True, accepts_input=True)
+        self._sync_input_lock()
         self.query_one(WelcomeBanner).set_activity(True, "思考中")
         self.query_one(ThinkingIndicator).show("按 Ctrl+X / Esc 或点击 Stop 停止")
         self._thinking_timer = self.set_interval(0.3, self._advance_activity)
         self._agent_task_handle = asyncio.create_task(self._agent_task(text, mention_text))
 
     def _drain_idle_worker_notifications(self) -> None:
-        if self.query_one(InputBar).input.disabled:
+        if self._is_agent_turn_running() or self._is_command_running() or self.query_one(InputBar).input.disabled:
             return
         notifications = self.agent.engine.drain_worker_notifications()
         if not notifications:
@@ -530,6 +643,7 @@ class BunnyByteTuiApp(App):
             ) or {}
             status.update_context_usage(usage)
             self.query_one(WelcomeBanner).update_context_usage(usage)
+            self._after_turn_steers()
 
     def _refresh_runtime_identity(self) -> None:
         self.query_one(WelcomeBanner).update_agent(self.agent)
@@ -633,6 +747,7 @@ class BunnyByteTuiApp(App):
         prompt = MemoryScopeSessionPrompt(question, choices)
         self._memory_session_prompt = prompt
         self._memory_session_decision = (event, decision)
+        self._sync_input_lock()
         chat = self.query_one(ChatLog)
         chat.mount(prompt)
         chat.call_after_refresh(chat.scroll_end, animate=False)
@@ -647,6 +762,7 @@ class BunnyByteTuiApp(App):
             self._memory_session_prompt.remove()
         self._memory_session_prompt = None
         self._memory_session_decision = None
+        self._sync_input_lock()
 
     def _post_memory_scope_notice(self, content: str) -> None:
         try:
@@ -698,6 +814,12 @@ class BunnyByteTuiApp(App):
             self.query_one(ProgressPanel).update_agent(self.agent)
             self.query_one(ThinkingIndicator).start_phase("思考中", "工具完成")
             self.query_one(WelcomeBanner).advance_activity("工具完成，继续思考")
+            return
+        if event_type == "steer_delivered":
+            self._mark_steers_delivered(event.get("ids"))
+            return
+        if event_type == "turn_finished":
+            self._last_stop_reason = str(event.get("stop_reason", ""))
             return
         if event_type == "worker_notification":
             self.query_one(ChatLog).add_message(
@@ -841,6 +963,7 @@ class BunnyByteTuiApp(App):
         self._confirm_prompt = prompt
         self._confirm_args = (name, dict(args or {}))
         self._confirm_decision = (event, decision)
+        self._sync_input_lock()
         chat = self.query_one(ChatLog)
         chat.mount(prompt)
         chat.call_after_refresh(chat.scroll_end, animate=False)
@@ -856,6 +979,7 @@ class BunnyByteTuiApp(App):
         self._confirm_prompt = None
         self._confirm_decision = None
         self._confirm_args = None
+        self._sync_input_lock()
 
     def _ask_user_callback(self, question: str, choices: list[str]) -> str:
         event = threading.Event()
@@ -875,6 +999,7 @@ class BunnyByteTuiApp(App):
         prompt = AskUserPrompt(question, choices)
         self._ask_user_prompt = prompt
         self._ask_user_decision = (event, decision)
+        self._sync_input_lock()
         chat = self.query_one(ChatLog)
         chat.mount(prompt)
         chat.call_after_refresh(chat.scroll_end, animate=False)
@@ -889,6 +1014,7 @@ class BunnyByteTuiApp(App):
             self._ask_user_prompt.remove()
         self._ask_user_prompt = None
         self._ask_user_decision = None
+        self._sync_input_lock()
 
 
 def _session_switch_message(command_text: str, command_output: str, session_id: str) -> str:

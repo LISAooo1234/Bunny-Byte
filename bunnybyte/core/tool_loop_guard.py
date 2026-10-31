@@ -16,10 +16,15 @@ STALL_NOTICE = (
 )
 
 
+TURN_INTERNAL_SOURCES = frozenset({"steer", "worker_notification"})
+
+
 def current_turn_history(history):
+    # 运行中追加的话和 worker 通知也是 role=user，但不是新一轮的开始：跳过它们，否则重复检测会被清零。
     history = list(history)
     for index in range(len(history) - 1, -1, -1):
-        if history[index].get("role") == "user":
+        item = history[index]
+        if item.get("role") == "user" and str(item.get("source", "")) not in TURN_INTERNAL_SOURCES:
             return history[index + 1 :]
     return history
 

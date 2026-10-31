@@ -296,16 +296,27 @@ class UserMessage(Static):
     }
     """
 
+    STEER_LABELS = {"queued": "排队中 · 下一次模型调用前送达", "delivered": "已送达", "next_turn": "作为下一轮发送"}
+
     def __init__(self, content: str, fork_target: str = "") -> None:
         super().__init__()
         self.content = content
         self.fork_target = fork_target
+        self.steer_status = ""
+
+    def set_steer_status(self, status: str) -> None:
+        self.steer_status = status
+        self.refresh(layout=True)
 
     def render(self) -> Text:
         colors = palette()
-        return Text.assemble(
+        text = Text.assemble(
             Text("> ", style=f"bold {colors.success}"), Text(self.content, style=colors.user_text)
         )
+        label = self.STEER_LABELS.get(self.steer_status, "")
+        if label:
+            text.append(f"  （{label}）", style=colors.muted)
+        return text
 
 
 class AssistantMessage(Static):
@@ -790,6 +801,7 @@ class InputBar(Static):
         self._mention: tuple[int, str] | None = None
         self._recalling = False
         self._mention_exact = False
+        self.accepting_steers = False
 
     def compose(self):
         with Horizontal():
@@ -800,13 +812,19 @@ class InputBar(Static):
     def focus_input(self) -> None:
         self.input.focus()
 
-    def set_busy(self, busy: bool, stoppable: bool = True, stopping: bool = False) -> None:
+    def set_busy(self, busy: bool, stoppable: bool = True, stopping: bool = False, accepts_input: bool = False) -> None:
         busy = bool(busy)
         stoppable = bool(stoppable) and busy
         stopping = bool(stopping) and stoppable
-        self.input.disabled = busy
+        # agent 回合运行中输入框保持可用：回车把话排进队列，下一次模型调用前送达（运行中插话）。
+        self.accepting_steers = busy and bool(accepts_input) and not stopping
+        self.input.disabled = busy and not self.accepting_steers
         if not busy:
             self.input.placeholder = PROMPT_PLACEHOLDER
+            self.stop_button.label = "Stop"
+            self.stop_button.disabled = False
+        elif self.accepting_steers:
+            self.input.placeholder = f"{BUSY_PLACEHOLDER}  可以继续输入补充要求 · Esc 停止"
             self.stop_button.label = "Stop"
             self.stop_button.disabled = False
         elif stopping:

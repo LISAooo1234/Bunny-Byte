@@ -115,6 +115,8 @@ def _event_line(event):
         return "  ⇄ " + failover_notice(event)
     if name == "compaction_finished":
         return _join("  ⇣ 压缩历史", event.get("trigger"), f"{format_tokens(event.get('pre_tokens'))} → {format_tokens(event.get('post_tokens'))} tok")
+    if name == "user_steer":
+        return "  » 用户插话 " + clip_cells("；".join(event.get("messages") or []), 80)
     if name == "mentions_preloaded":
         return f"  @ 预读 {len(event.get('tools') or [])} 个提及的文件"
     if name == "loop_guard_stall" or name.startswith("stall_") and name != "stall_summary":

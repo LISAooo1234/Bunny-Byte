@@ -1267,7 +1267,8 @@ async def test_tui_stop_button_aborts_running_agent_turn(tmp_path):
         await pilot.pause(delay=0.1)
 
         assert client.started.wait(timeout=1)
-        assert bar.input.disabled is True
+        assert bar.input.disabled is False  # 运行中还能输入补充要求
+        assert bar.accepting_steers is True
         assert bar.stop_button.has_class("stoppable")
 
         await pilot.click("#stop-turn")

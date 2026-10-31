@@ -18,6 +18,7 @@ from .hook_gate import final_hook_gate
 from .model_errors import finish_model_error
 from .model_stream import complete_model_with_deltas
 from .provider_failover import failover_events
+from .steering import TurnSteering
 from .stall_budget import STOP, StallBudget, finish_stalled, watch_tool_events
 from .task_state import TaskState
 from .tool_loop_guard import stall_notice
@@ -90,6 +91,7 @@ def _merge_provider_usage_into_context_usage(prompt_metadata, completion_metadat
 def run_turn(engine, user_message, mention_text=None):
     agent = engine.runtime
     agent.ensure_session_started()
+    agent.abort_requested = False  # 上一轮结束后才到的停止请求不能让这一轮一开始就停下
     run_started_at = time.monotonic()
     task_state = TaskState.create(
         run_id=agent.new_run_id(),
@@ -126,6 +128,7 @@ def run_turn(engine, user_message, mention_text=None):
     max_attempts = agent.max_steps + 2
     stall = StallBudget(agent.max_steps)
     stalled = False
+    steering = TurnSteering(engine, task_state)
 
     while tool_steps < agent.max_steps and attempts < max_attempts:
         if agent.abort_requested:
@@ -139,6 +142,13 @@ def run_turn(engine, user_message, mention_text=None):
             )
             return
         yield from engine._drain_worker_notification_events()
+        if not agent.abort_requested:  # 已经要停了就别再取走插话：留在队列里，TUI 放回输入框
+            yield from steering.drain()  # 用户在运行中追加的话：下一次模型调用就能看到
+        if agent.abort_requested:
+            yield from finish_stopped_run(
+                engine, task_state, user_message, "Stopped after abort request.", "aborted", run_started_at
+            )
+            return
         if budget_stop_needed(agent):  # 先查后调：越过上限的那次调用已经花了，之后不再发请求
             yield from finish_stopped_run(
                 engine, task_state, user_message, agent.cost_meter.stop_text(), STOP_REASON_BUDGET_EXCEEDED, run_started_at
@@ -151,7 +161,7 @@ def run_turn(engine, user_message, mention_text=None):
         native_tools = agent.native_tools() if hasattr(agent, "native_tools") else None
         native_tools, quarantine_notice = stall.next_call(native_tools)
         prompt_user_message = _with_protocol_retry_notice(
-            user_message,
+            steering.request_text(user_message),
             "\n".join(filter(None, [protocol_retry_notice, quarantine_notice])),
             native_tools=bool(native_tools),
         )
@@ -387,6 +397,9 @@ def run_turn(engine, user_message, mention_text=None):
 
         final = (payload or raw).strip()
         yield from engine._drain_worker_notification_events()
+        if steering.free_round() and not agent.abort_requested and (yield from steering.at_final(final)):
+            max_attempts += 1  # 交卷前用户又说了话：先回应它，再跑验证等关卡；超过次数的留到下一轮
+            continue
         if engine._looks_like_premature_final(final, task_state):
             notice = engine._premature_final_notice(final)
             agent.record({"role": "assistant", "content": notice, "created_at": now()})
