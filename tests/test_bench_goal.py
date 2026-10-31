@@ -205,3 +205,82 @@ def test_timeout_closes_an_event_stream_that_ignores_the_abort_flag():
     count = len(produced)
     time.sleep(0.2)
     assert len(produced) == count  # 关掉之后不再产生事件（不再花钱）
+
+
+def _clamp_without_check(task):
+    """只满足看得见的测试的 clamp（不检查 low > high），其余照参考解。"""
+    outputs = []
+    for step in task.solution:
+        if step.get("name") == "patch_file" and step["args"]["path"] == "clamp.py":
+            step = {"name": "patch_file", "args": dict(step["args"], new_text="    return max(low, min(high, value))")}
+        outputs.append(step)
+    return scripted_outputs(replace(task, solution=tuple(outputs)), python_command())
+
+
+CLAMP_OBJECTION = json.dumps(
+    {"verdict": "object", "objections": [{"file": "clamp.py", "issue": "no ValueError when low > high", "evidence": "docstring: Raise ValueError if low > high"}]}
+)
+ACCEPT = json.dumps({"verdict": "accept", "objections": []})
+
+
+def test_goal_evaluator_veto_turns_a_false_achievement_into_a_pass():
+    task = select_tasks(["implement_toolkit"])[0]
+    fix = [
+        '<tool>{"name":"read_file","args":{"path":"clamp.py"}}</tool>',
+        '<tool>{"name":"patch_file","args":{"path":"clamp.py","old_text":"    return max(low, min(high, value))",'
+        '"new_text":"    if low > high:\\n        raise ValueError(\\"low > high\\")\\n    return max(low, min(high, value))"}}</tool>',
+        "<final>补上了 low > high 的检查。</final>",
+    ]
+    client = ScriptedModelClient([*_clamp_without_check(task), CLAMP_OBJECTION, *fix])
+
+    result = run_task(task, client, timeout=120, goal_rounds=3, goal_evaluator=True)
+
+    assert result["passed"], result["failure"]
+    assert result["goal_status"] == "achieved" and result["goal_rounds"] == 2
+    assert result["goal_vetoes"] == 1 and result["veto_on_passing"] == 0 and not result["veto_regression"]
+    assert "clamp.py" in result["goal_issues"][0]
+    summary = report.summarize([result])
+    assert summary["goal_vetoes"] == 1 and summary["vetoed_then_passed"] == 1 and summary["false_achieved"] == 0
+    record = report.build_record([result], [task], provider="p", model="m", set_hash="h", repeat=1, max_steps=50, goal_rounds=3, goal_evaluator=True)
+    assert result["goal_reviews"] == 1
+    assert record["goal_evaluator"] == "main"
+    assert "目标评审（main）：评审 1 次，退回 1 次，退回后判分通过 1 题" in report.render_record(record)
+    assert result["goal_review_verdicts"] == ["object"]  # 否决用完后第二次通过直接达成，不再评审
+    assert "评审退回" in report.render_row(result)
+
+
+def test_goal_evaluator_false_veto_on_passing_code_is_counted_as_a_regression():
+    task = select_tasks(["implement_toolkit"])[0]
+    # 参考解本来能过判分；评审瞎反对，模型照改后把 clamp 改坏了
+    wrong = json.dumps({"verdict": "object", "objections": [{"file": "clamp.py", "issue": "should not raise", "evidence": "made up"}]})
+    breaks = [
+        '<tool>{"name":"read_file","args":{"path":"clamp.py"}}</tool>',
+        '<tool>{"name":"patch_file","args":{"path":"clamp.py","old_text":"    if low > high:\\n        raise ValueError(\\"low > high\\")\\n",'
+        '"new_text":""}}</tool>',
+        "<final>按评审去掉了异常。</final>",
+    ]
+    client = ScriptedModelClient([*oracle(task), wrong, *breaks])
+
+    result = run_task(task, client, timeout=120, goal_rounds=3, goal_evaluator=True)
+
+    assert not result["passed"] and result["goal_status"] == "achieved"
+    assert result["goal_vetoes"] == 1 and result["veto_on_passing"] == 1 and result["veto_regression"]
+    assert report.summarize([result])["veto_regressions"] == 1
+
+
+def test_goal_evaluator_is_its_own_comparison_class_and_needs_goal_rounds(capsys):
+    rows = [{"task": "t", "attempt": 1, "passed": True, "failure": "", "steps": 3, "wall_seconds": 1.0}]
+    tasks = [type("T", (), {"id": "t"})()]
+    plain = report.build_record(rows, tasks, provider="p", model="m", set_hash="h", repeat=1, max_steps=12, goal_rounds=4)
+    plain["captured_at"] = "2026-01-01T00:00:00Z"
+    reviewed = report.build_record(rows, tasks, provider="p", model="m", set_hash="h", repeat=1, max_steps=12, goal_rounds=4, goal_evaluator=True)
+    reviewed["captured_at"] = "2026-01-02T00:00:00Z"
+    other = report.build_record(rows, tasks, provider="p", model="m", set_hash="h", repeat=1, max_steps=12, goal_rounds=4, goal_evaluator="oneapi")
+    other["captured_at"] = "2026-01-03T00:00:00Z"
+    assert report.previous_comparable(reviewed, [plain]) is None
+    assert report.previous_comparable(other, [plain, reviewed]) is None  # 不同的评审模型互不比较
+    assert build_bench_parser().parse_args(["--goal-evaluator"]).goal_evaluator == "main"
+    assert build_bench_parser().parse_args(["--goal-evaluator", "oneapi"]).goal_evaluator == "oneapi"
+
+    assert run_bench_command(["--suite", "goal", "--goal-evaluator", "--no-save"], client_factory=lambda task: ScriptedModelClient([])) == 2
+    assert "--goal-rounds" in capsys.readouterr().err

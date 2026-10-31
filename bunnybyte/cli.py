@@ -50,6 +50,7 @@ from .config import (
     resolve_project_budget_config,
     resolve_project_deps_config,
     resolve_project_critic_config,
+    resolve_project_goal_review_config,
     resolve_provider_config,
     write_global_provider_config,
 )
@@ -381,6 +382,7 @@ def build_agent(args):
         _attach_hooks(agent, hookset)
         _attach_mcp(agent, mcp_config)
         _attach_critic(agent, args, critic_config)
+        _attach_goal_review(agent, args)
         _attach_budget(agent, budget_config)
         _attach_deps(agent, deps_config)
         return agent
@@ -408,6 +410,7 @@ def build_agent(args):
     _attach_hooks(agent, hookset)
     _attach_mcp(agent, mcp_config)
     _attach_critic(agent, args, critic_config)
+    _attach_goal_review(agent, args)
     _attach_budget(agent, budget_config)
     _attach_deps(agent, deps_config)
     return agent
@@ -430,6 +433,16 @@ def _attach_critic(agent, args, critic_config):
     if not critic_config.enabled or not critic_config.profile:
         return
     agent.critic_client = _build_model_client(args, provider=critic_config.profile, include_cli_overrides=False)
+
+
+def _attach_goal_review(agent, args):
+    """[goal].evaluator / --goal-evaluator：main = 评审时用当前主模型，其他值是 provider profile 名。"""
+    config = resolve_project_goal_review_config(
+        start=agent.root, config_path=getattr(args, "config", None), evaluator=getattr(args, "goal_evaluator", None)
+    )
+    agent.goal_review_config = config
+    if config.enabled and config.evaluator != "main":
+        agent.goal_review_client = _build_model_client(args, provider=config.evaluator, include_cli_overrides=False)
 
 
 def _attach_mcp(agent, mcp_config):
@@ -682,6 +695,12 @@ def build_arg_parser():
     )
     parser.add_argument("--goal-check", default="", metavar="CMD", help="--goal 的检查命令，例如 \"pytest -q\"；不写就用 [verify].commands（需要 --approval auto）。")
     parser.add_argument("--goal-rounds", type=int, default=None, metavar="N", help="--goal 最多跑几轮（默认 5，最多 20）。--max-cost 同时限制整个目标的花费。")
+    parser.add_argument(
+        "--goal-evaluator",
+        default=None,
+        metavar="PROFILE",
+        help="目标评审：检查通过后先让评审模型对照目标和改过的文件挑错，有证据的反对让目标多跑一轮（只能否决、最多一次）。main = 当前主模型，其他值是 provider profile 名，off 关闭；默认取 [goal].evaluator。",
+    )
     parser.add_argument(
         "-q",
         "--quiet",

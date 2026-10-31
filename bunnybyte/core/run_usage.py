@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 # 独立审查、步数用尽 / 空转时的总结也是模型调用，token 要算进去
-USAGE_EVENTS = {"model_parsed", "critic_review", "step_limit_summary", "stall_summary"}
+USAGE_EVENTS = {"model_parsed", "critic_review", "goal_review", "step_limit_summary", "stall_summary"}
 
 
 def trace_usage(trace_path):

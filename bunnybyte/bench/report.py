@@ -121,6 +121,11 @@ def _goal_summary(rows):
         "goal_achieved": sum(1 for row in rows if row.get("goal_status") == "achieved"),
         "avg_goal_rounds": _average([row for row in rows if row.get("goal_status")], "goal_rounds"),
         "paid_calls": _total(rows, "paid_calls"),
+        "goal_reviews": sum(row.get("goal_reviews", 0) for row in rows),
+        "goal_vetoes": sum(row.get("goal_vetoes", 0) for row in rows),
+        "vetoes_on_passing": sum(row.get("veto_on_passing", 0) for row in rows),
+        "veto_regressions": sum(1 for row in rows if row.get("veto_regression")),
+        "vetoed_then_passed": sum(1 for row in rows if row.get("goal_vetoes") and row["passed"]),
         "cost_unmet": round(sum(unmet), 6) if unmet and all(isinstance(value, (int, float)) for value in unmet) else None,
     }
 
@@ -144,7 +149,7 @@ def package_version():
 
 
 def build_record(
-    rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False, critic=False, fix_proof="off", goal_rounds=0
+    rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False, critic=False, fix_proof="off", goal_rounds=0, goal_evaluator=""
 ):
     return {
         "schema_version": SCHEMA_VERSION,
@@ -163,6 +168,7 @@ def build_record(
         "critic": bool(critic),
         "fix_proof": fix_proof,
         "goal_rounds": int(goal_rounds or 0),
+        "goal_evaluator": evaluator_label(goal_evaluator),
         "summary": summarize(rows),
         "runs": rows,
     }
@@ -204,6 +210,14 @@ def load_history(out_dir):
     return sorted(records, key=lambda item: item["captured_at"])
 
 
+def evaluator_label(value):
+    """目标评审用的模型：True（早期结果文件）/ "main" 都是主模型，"" / off 是没开。"""
+    if value is True:
+        return "main"
+    text = str(value or "").strip()
+    return "" if text.lower() in {"", "off", "none", "false"} else text
+
+
 def previous_comparable(record, history):
     """上一次同任务集、同 provider、同模型、同步数上限、同验证闸门 / 审查 / 修复证明设置的结果；任一项变了就不比较。"""
     keys = ("task_set_hash", "provider", "model", "max_steps")
@@ -215,6 +229,7 @@ def previous_comparable(record, history):
         and bool(item.get("critic")) == bool(record.get("critic"))
         and (item.get("fix_proof") or "off") == (record.get("fix_proof") or "off")  # 旧结果没有这一项：当时没跑修复证明
         and int(item.get("goal_rounds") or 0) == int(record.get("goal_rounds") or 0)
+        and evaluator_label(item.get("goal_evaluator")) == evaluator_label(record.get("goal_evaluator"))
         and item["captured_at"] < record["captured_at"]
     ]
     return older[-1] if older else None
@@ -263,7 +278,7 @@ def render_row(row):
     if row.get("fix_proof"):
         gate += f"  [修复证明 {row['fix_proof']}{'·退回' + str(row['fix_proof_repairs']) if row.get('fix_proof_repairs') else ''}]"
     if row.get("goal_status"):
-        gate += f"  [目标 {row['goal_status']}·{row.get('goal_rounds', 0)} 轮]"
+        gate += f"  [目标 {row['goal_status']}·{row.get('goal_rounds', 0)} 轮{'·评审退回' if row.get('goal_vetoes') else ''}]"
     if row.get("check_passed") and not row["passed"]:
         gate += "  [检查通过但判分未过]"
     if row.get("critic_rounds"):
@@ -379,6 +394,11 @@ def _goal_lines(record):
         lines.append(
             f"目标模式（最多 {record['goal_rounds']} 轮）：达成 {summary.get('goal_achieved', 0)}/{summary['runs']}，"
             f"平均 {_fmt(summary.get('avg_goal_rounds'))} 轮" + (f"；没做成的题共花费 {format_usd(unmet)}" if unmet is not None else "")
+        )
+    if record.get("goal_evaluator"):
+        lines.append(
+            f"目标评审（{record['goal_evaluator']}）：评审 {summary.get('goal_reviews', 0)} 次，退回 {summary.get('goal_vetoes', 0)} 次，退回后判分通过 {summary.get('vetoed_then_passed', 0)} 题；"
+            f"退回时代码本来已能通过判分 {summary.get('vetoes_on_passing', 0)} 次，其中多跑一轮后反而不通过 {summary.get('veto_regressions', 0)} 题"
         )
     if summary.get("false_achieved"):
         lines.append(f"假达成：{summary['false_achieved']} 次题目自带的检查通过了，隐藏判分却没过")

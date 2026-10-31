@@ -131,6 +131,10 @@ def _event_line(event):
         icon = "✓" if event.get("status") == "passed" else ("✗" if event.get("status") in {"failed", "timeout"} else "·")
         reused = "沿用验证结果" if event.get("reused") else ""
         return _join(f"  🎯 目标检查 第 {event.get('round')} 轮 {icon} {clip_cells(str(event.get('command', '')), 50)}", event.get("status"), reused)
+    if name == "goal_review":
+        objections = event.get("objections") or []
+        verdict = f"{len(objections)} 条意见，目标多跑一轮" if event.get("verdict") == "object" else "通过"
+        return _join(f"  ◇ 目标评审 {event.get('model', '')}".rstrip(), verdict, clip_cells(str(event.get("reason", "")), 50), _usage(event.get("completion_metadata")), format_duration(event.get("duration_ms")))
     if name == "verification_declined":
         return f"  · 验证未运行（未获批准）：{clip_cells('；'.join(event.get('commands') or []), 60)}"
     if name == "critic_review":
@@ -233,7 +237,7 @@ def _footer(report, state, finished, events):
     total_in = total_out = calls = 0
     for event in events:
         metadata = event.get("completion_metadata") or {}
-        if event.get("event") in MODEL_EVENTS | {"critic_review"} and metadata:
+        if event.get("event") in MODEL_EVENTS | {"critic_review", "goal_review"} and metadata:
             calls += 1
             total_in += int(metadata.get("input_tokens") or 0)
             total_out += int(metadata.get("output_tokens") or 0)

@@ -46,6 +46,7 @@ def build_bench_parser():
     parser.add_argument("--verify", action="store_true", help="给 agent 开启验证闸门（交卷前自动跑探测到的测试，失败可修复 1 轮）；结果单独对比。")
     parser.add_argument("--critic", action="store_true", help="给 agent 开启独立审查（交卷前对照需求和 diff 挑错，有证据的意见退回修复 1 轮）；结果单独对比。")
     parser.add_argument("--fix-proof", default="off", choices=FIX_PROOF_MODES, help="给 agent 开启修复证明（同时开启验证闸门）：report 只记录，repair 在测试没测到改动时退回模型 1 轮；结果单独对比。")
+    parser.add_argument("--goal-evaluator", nargs="?", const="main", default="", metavar="PROFILE", help="目标模式下检查通过后先让目标评审对照目标和改过的文件挑错，可以否决一次、多跑一轮；不写值 = 主模型，写 provider 配置名 = 用那个模型评审；需要 --goal-rounds。结果单独对比。")
     parser.add_argument("--goal-rounds", type=int, default=0, help="用目标模式跑（只支持带检查命令的题，如 --suite goal）：每轮结束后运行时跑题目的检查，没通过就开下一轮，最多 N 轮；0 = 普通单轮。结果单独对比。")
     parser.add_argument("--out", default=None, help="结果目录；默认 ./benchmarks/results（存在时），否则 ~/.bunnybyte/bench-results。")
     parser.add_argument("--no-save", action="store_true", help="只打印，不写结果文件。")
@@ -103,6 +104,8 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
             args.max_steps = GOAL_SUITE_MAX_STEPS if args.suite == "goal" else DEFAULT_MAX_STEPS
         if not 0 <= args.goal_rounds <= MAX_ROUNDS:
             raise ValueError(f"--goal-rounds 应在 0 到 {MAX_ROUNDS} 之间")
+        if args.goal_evaluator and not args.goal_rounds:
+            raise ValueError("--goal-evaluator 需要 --goal-rounds N")
         if args.goal_rounds and not args.list:
             missing = [task.id for task in tasks if not task.goal_check]
             if missing:
@@ -119,8 +122,11 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
             problem = pytest_preflight()
             if problem:
                 raise ValueError("修复证明需要 pytest：" + problem)
+        evaluator_client = None
         if client_factory is None:
             client, provider, model, protocol = live_client(args)
+            if args.goal_evaluator not in ("", "main"):
+                evaluator_client = live_client(argparse.Namespace(**{**vars(args), "provider": args.goal_evaluator, "model": None}))[0]
             client_factory = lambda _task: client  # noqa: E731
             from ..config import resolve_project_budget_config
 
@@ -134,7 +140,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
 
     progress = sys.stderr if args.json else stream
     print(
-        f"bunny bench：{provider}/{model}，{len(tasks)} 个任务 × {args.repeat} 次，步数上限 {args.max_steps}，单题 {args.timeout}s{'，验证闸门开启' if args.verify or args.fix_proof != 'off' else ''}{'，修复证明 ' + args.fix_proof if args.fix_proof != 'off' else ''}{'，独立审查开启' if args.critic else ''}{f'，目标模式最多 {args.goal_rounds} 轮' if args.goal_rounds else ''}",
+        f"bunny bench：{provider}/{model}，{len(tasks)} 个任务 × {args.repeat} 次，步数上限 {args.max_steps}，单题 {args.timeout}s{'，验证闸门开启' if args.verify or args.fix_proof != 'off' else ''}{'，修复证明 ' + args.fix_proof if args.fix_proof != 'off' else ''}{'，独立审查开启' if args.critic else ''}{f'，目标模式最多 {args.goal_rounds} 轮' if args.goal_rounds else ''}{f'，目标评审 {args.goal_evaluator}' if args.goal_evaluator else ''}",
         file=progress,
     )
     rows = run_bench(
@@ -149,6 +155,8 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         prices=prices,
         fix_proof=args.fix_proof,
         goal_rounds=args.goal_rounds,
+        goal_evaluator=args.goal_evaluator,
+        evaluator_client=evaluator_client,
     )
     record = build_record(
         rows,
@@ -163,6 +171,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         critic=args.critic,
         fix_proof=args.fix_proof,
         goal_rounds=args.goal_rounds,
+        goal_evaluator=args.goal_evaluator,
     )
     record["temperature"] = BENCH_TEMPERATURE
     previous = previous_comparable(record, load_history(out_dir))

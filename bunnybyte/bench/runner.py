@@ -17,6 +17,7 @@ from unittest import mock
 
 from ..core.critic import CriticConfig
 from ..core.goal import drive_goal, start_goal
+from ..core.goal_review import resolve_goal_review_config
 from ..core.run_usage import trace_prompt_reuse, trace_usage
 from ..core.runtime import BunnyByte
 from ..core.session_store import SessionStore
@@ -234,8 +235,13 @@ def materialize_tree(root, tree, target):
 
 def grade_objections(task, root, state, answer, before):
     """对每次“提出反对”的审查，用当时的快照重跑判分：本来就能过的，说明这条反对是多余的（不一定错，但没帮上忙）。"""
+    return grade_reviews(task, root, (state.critic or {}).get("reviews", []), answer, before)
+
+
+def grade_reviews(task, root, reviews, answer, before):
+    """审查 / 目标评审共用：反对的那一刻（快照 tree）代码能不能过判分。"""
     passing = 0
-    for review in (state.critic or {}).get("reviews", []):
+    for review in reviews:
         if review.get("verdict") != "object" or not review.get("tree"):
             continue
         with tempfile.TemporaryDirectory(prefix="bunny-bench-critic-") as scratch:
@@ -306,11 +312,15 @@ def run_task(
     prices=None,
     fix_proof="off",
     goal_rounds=0,
+    goal_evaluator="",
+    evaluator_client=None,
 ):
     """在全新的临时仓库里跑一次任务，返回一行可序列化的结果。
 
     fix_proof 为 report / repair 时同时打开验证闸门，并按该模式跑修复证明。
-    goal_rounds > 0 时用目标模式驱动（检查命令是 task.goal_check，最多这么多轮），墙钟上限仍是 timeout。
+    goal_rounds > 0 时用目标模式驱动（检查命令是 task.goal_check，最多这么多轮），墙钟上限仍是 timeout；
+    goal_evaluator 非空时检查通过后先让目标评审看一遍，可以否决一次："main" / True 用主模型，
+    其他值（provider 配置名）用 evaluator_client。
 
     max_steps 是 agent 的硬上限；task.step_budget 只是“高效完成应有的步数”，超出记为 over_budget，不直接判负。
     """
@@ -357,6 +367,12 @@ def run_task(
         "goal_status": "",
         "goal_reason": "",
         "goal_rounds": 0,
+        "goal_reviews": 0,
+        "goal_vetoes": 0,
+        "goal_review_verdicts": [],
+        "veto_on_passing": 0,
+        "veto_regression": False,
+        "goal_issues": [],
         "round_stops": [],
     }
     verify_config = None
@@ -384,6 +400,8 @@ def run_task(
             )
             agent.cost_meter.prices = dict(prices or {})
             agent.unattended = True  # 依赖守卫不会在 bench 线程里等终端输入
+            agent.goal_review_config = resolve_goal_review_config({}, evaluator="main" if goal_evaluator is True else str(goal_evaluator or ""))
+            agent.goal_review_client = evaluator_client
             if goal_rounds:
                 _, problem = start_goal(agent, task.prompt, check=fill_python(task.goal_check, python_command()), max_rounds=goal_rounds)
                 if problem:
@@ -420,6 +438,13 @@ def run_task(
             result["goal_status"] = str(goal.get("status", ""))
             result["goal_reason"] = scrub(str(goal.get("reason", "")), root, real_home)[:200]
             result["goal_rounds"] = len(goal.get("rounds", []))
+            result["goal_reviews"] = sum(1 for item in goal.get("reviews") or [] if item.get("verdict") in {"accept", "object"})
+            reviews = [item for item in goal.get("reviews") or [] if item.get("verdict") == "object"]
+            result["goal_vetoes"] = len(reviews)
+            result["goal_review_verdicts"] = [str(item.get("verdict", "")) for item in goal.get("reviews") or []]
+            result["goal_issues"] = [
+                scrub(f"{item['file']}: {item['issue']}", root, real_home)[:160] for review in reviews for item in review.get("objections", [])
+            ][:5]
     problems = []
     if stuck:
         problems.append(f"超过 {timeout}s 墙钟上限，且中止请求未能生效")
@@ -445,6 +470,10 @@ def run_task(
             result["objection_on_passing"] = grade_objections(task, root, state, answer, before)
             # 审查前本来能过、照着意见改完反而不过：这是审查真正的代价
             result["critic_regression"] = bool(result["objection_on_passing"] and not result["passed"])
+    if result["goal_vetoes"] and not stuck and error is None:
+        result["veto_on_passing"] = grade_reviews(task, root, agent.session["goal"].get("reviews") or [], answer, before)
+        # 否决时代码本来就能过判分、多跑一轮之后反而不过：这是评审真正的代价
+        result["veto_regression"] = bool(result["veto_on_passing"] and not result["passed"])
     if keep_dir is None:
         shutil.rmtree(root, ignore_errors=True)
     return result
@@ -463,6 +492,8 @@ def run_bench(
     prices=None,
     fix_proof="off",
     goal_rounds=0,
+    goal_evaluator="",
+    evaluator_client=None,
 ):
     results = []
     for task in tasks:
@@ -478,6 +509,8 @@ def run_bench(
                 prices=prices,
                 fix_proof=fix_proof,
                 goal_rounds=goal_rounds,
+                goal_evaluator=goal_evaluator,
+                evaluator_client=evaluator_client,
             )
             results.append(row)
             if on_result is not None:

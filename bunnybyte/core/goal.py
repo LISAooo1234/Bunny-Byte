@@ -11,6 +11,7 @@ from dataclasses import replace
 
 from .cost_meter import STOP_REASON_BUDGET_EXCEEDED
 from .fix_proof import is_test_path
+from .goal_review import review_skip_reason, review_summary, run_review, veto_message, vetoes
 from .pricing import format_usd
 from .task_state import STATUS_FAILED, STATUS_RUNNING
 from .transcript_fence import fence
@@ -119,7 +120,7 @@ def resume_goal(agent):
         return "这个目标已经达成。设定新目标会替换它。"
     goal.update(round_base=len(goal["rounds"]), reason="")
     if goal["status"] == BUDGET_LIMITED:  # 预算用完后再 resume = 同意再花一份同样的预算
-        goal["cost_at_start"] = _session_usd(agent)
+        goal.update(cost_at_start=_session_usd(agent), cost_round_base=len(goal["rounds"]))
     agent._goal_pending = True
     _save(agent)
     return ""
@@ -222,7 +223,7 @@ def _after_round(agent, goal, state, number):
         agent.abort_requested = False
         return _finish(agent, goal, PAUSED, "检查运行时被停止")
     if receipt["status"] == STATUS_PASSED:
-        return _finish(agent, goal, ACHIEVED, "")
+        return (yield from _review_or_achieve(agent, goal, entry, receipt, state))
     if failed:  # 模型 / provider 出错：检查照跑（也许已经改好了），没通过就暂停而不是接着花钱
         return _finish(agent, goal, PAUSED, f"这一轮出错（{state.stop_reason}），处理好后用 /goal resume 继续")
     if receipt["status"] not in (CHECK_FAILED, STATUS_TIMEOUT):
@@ -235,6 +236,26 @@ def _after_round(agent, goal, state, number):
         return _finish(agent, goal, UNMET, "连续两轮改动和检查输出都没有变化，没有进展")
     if len(goal["rounds"]) - int(goal.get("round_base", 0)) >= goal["max_rounds"]:
         return _finish(agent, goal, UNMET, f"用完了 {goal['max_rounds']} 轮，检查仍未通过")
+    return ""
+
+
+def _review_or_achieve(agent, goal, entry, receipt, state):
+    """生成器：检查通过后，开了目标评审就先让它看一遍；有证据的反对让目标多跑一轮，否则达成。"""
+    skip = review_skip_reason(agent, goal)
+    if skip:
+        goal.setdefault("reviews", []).append({"round": entry["round"], "verdict": "skipped", "reason": skip})
+        yield _notice(f"目标评审跳过：{skip}")
+    if skip is not None:
+        return _finish(agent, goal, ACHIEVED, "")
+    review = yield from run_review(agent, goal, receipt, state)
+    if review["verdict"] != "object":
+        agent.abort_requested = False  # 评审通过时按的 Esc：目标已经达成，别把停止标记留给下一轮
+        return _finish(agent, goal, ACHIEVED, "")
+    entry["vetoed"] = True  # 下一轮（包括 /goal resume 之后）的续接消息带评审意见，而不是“检查失败”
+    if agent.abort_requested:
+        agent.abort_requested = False
+        return _finish(agent, goal, PAUSED, "评审退回后被停止")
+    _save(agent)
     return ""
 
 
@@ -261,7 +282,10 @@ def _round_message(goal, number, shown):
         base = goal.get("baseline") or {}
         status = "failed (exit {})".format(base.get("exit_code")) if base.get("status") == CHECK_FAILED else str(base.get("status", "failed"))
         return goal["objective"] + FIRST_ROUND_NOTE.format(command=_command_text(goal), status=status)
-    check = (_last_checked(goal) or {}).get("check") or goal.get("baseline") or {}
+    last = _last_checked(goal) or {}
+    if last.get("vetoed"):
+        return veto_message(goal, number, shown)
+    check = last.get("check") or goal.get("baseline") or {}
     return CONTINUE_MESSAGE.format(
         objective=goal["objective"],
         number=shown,
@@ -362,8 +386,27 @@ def _finish(agent, goal, status, reason):
         touched = check_files_changed(goal)
         if touched:
             text += f"\n⚠ 目标期间改过检查涉及的文件：{'、'.join(touched[:5])}——请确认没有为了通过而改检查"
+        vetoed, after = _veto_rounds(goal)
+        if vetoed and after and after[-1].get("fingerprint") == vetoed.get("fingerprint"):
+            text += "\n⚠ 评审退回后模型没有再改文件：评审意见没有处理（`/goal` 查看）"
+        elif vetoed:
+            text += "\n评审退回过一次，修改后检查仍通过"
         return text
-    return f"🎯 目标{STATUS_LABELS[status]}：{reason}（{used} 轮 · 估算 {spent}）。用 /goal resume 继续，/goal clear 放弃。"
+    text = f"🎯 目标{STATUS_LABELS[status]}：{reason}（{used} 轮 · 估算 {spent}）。用 /goal resume 继续，/goal clear 放弃。"
+    vetoed, after = _veto_rounds(goal)
+    if vetoed and status != PAUSED:
+        if any((item.get("check") or {}).get("status") in (CHECK_FAILED, STATUS_TIMEOUT) for item in after):
+            text += "\n⚠ 检查曾经通过，评审退回后又没通过：可以用 /undo 或 /diff 看评审之后的改动"
+        else:
+            text += "\n⚠ 检查曾经通过，评审退回后没能再跑完一轮检查"
+    return text
+
+
+def _veto_rounds(goal):
+    """(被否决的那一轮, 它之后的各轮)；没有否决时 (None, [])。"""
+    rounds = goal["rounds"]
+    index = next((i for i in range(len(rounds) - 1, -1, -1) if rounds[i].get("vetoed")), None)
+    return (None, []) if index is None else (rounds[index], rounds[index + 1:])
 
 
 def check_files_changed(goal):
@@ -432,6 +475,8 @@ def goal_summary(agent):
             for item in goal["rounds"]
         ],
         "check_files_changed": check_files_changed(goal),
+        "vetoes": vetoes(goal),
+        "reviews": review_summary(goal),
     }
 
 
@@ -449,6 +494,10 @@ def render_goal_status(agent):
     ]
     for item in goal["rounds"][-8:]:
         check = item.get("check") or {}
-        lines.append(f"  - 第 {item['round']} 轮：{item.get('tool_steps', 0)} 步 · {item.get('stop_reason', '')} · 检查 {check.get('status', '未运行')}")
+        lines.append(f"  - 第 {item['round']} 轮：{item.get('tool_steps', 0)} 步 · {item.get('stop_reason', '')} · 检查 {check.get('status', '未运行')}" + (" · 评审退回" if item.get("vetoed") else ""))
+    for review in (goal.get("reviews") or [])[-3:]:
+        label = {"object": "退回", "accept": "通过", "skipped": "跳过"}.get(review.get("verdict"), review.get("verdict"))
+        lines.append(f"  - 评审（第 {review.get('round')} 轮后）：{label}" + (f"（{review['reason']}）" if review.get("reason") else ""))
+        lines.extend(f"    - {item['file']}：{item['issue']}" for item in review.get("objections") or [])
     lines += ["", "`/goal resume` 继续 · `/goal clear` 放弃"]
     return "\n".join(lines)

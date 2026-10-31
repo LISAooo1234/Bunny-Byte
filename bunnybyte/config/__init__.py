@@ -404,6 +404,14 @@ def resolve_project_critic_config(
     return resolve_critic_config(_load_config_values(start=start, explicit_path=config_path), mode=mode)
 
 
+def resolve_project_goal_review_config(
+    *, start: str | Path = ".", config_path: str | None = None, evaluator: str | None = None
+):
+    from ..core.goal_review import resolve_goal_review_config
+
+    return resolve_goal_review_config(_load_config_values(start=start, explicit_path=config_path), evaluator=evaluator)
+
+
 def resolve_project_budget_config(
     *, start: str | Path = ".", config_path: str | None = None, max_cost: float | None = None
 ):
@@ -532,6 +540,9 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     critic = data.get("critic", {})
     if isinstance(critic, dict):
         values["critic"] = dict(critic)
+    goal = data.get("goal", {})
+    if isinstance(goal, dict):
+        values["goal"] = dict(goal)
     values["hooks"] = data.get("hooks", {})  # 原样交给 core.hooks 校验，写成非表时才能报错
     tui = data.get("tui", {})
     if isinstance(tui, dict):
@@ -624,6 +635,7 @@ def _merge_config_values(target: dict[str, Any], incoming: dict[str, Any]) -> No
     target["sandbox"].update(incoming.get("sandbox", {}))
     target.setdefault("verify", {}).update(incoming.get("verify", {}))
     target.setdefault("critic", {}).update(incoming.get("critic", {}))
+    target.setdefault("goal", {}).update(incoming.get("goal", {}))
     target.setdefault("tui", {}).update(incoming.get("tui", {}))
     for name in ("budget", "pricing", "deps"):
         section = incoming.get(name)

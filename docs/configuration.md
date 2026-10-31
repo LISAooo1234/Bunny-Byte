@@ -139,6 +139,20 @@ max_diff_chars = 12000        # 发给审查模型的 diff 上限（超出部分
 - 发出去的 diff 先按 secret 环境变量脱敏；`profile` 指向别的 provider 时，diff 会发给那个 provider。
 - 结果写入 `task_state.json` / `report.json` 的 `critic` 字段和 trace 的 `critic_review` 事件（含 token，`bunny bench` 与 `bunny -p` 的用量统计会算进去）。
 
+## 目标评审（`[goal]`）
+
+目标模式（`/goal`、`bunny -p --goal`）里检查命令通过后，宣布达成之前，另起一次不带工具的模型调用，对照目标、项目规则和目标期间改过的文件的当前内容逐条核对；有证据的反对让目标多跑一轮（说明见 README「目标模式」）。默认关闭。
+
+```toml
+[goal]
+evaluator = "main"            # 空 / off（默认）关闭；main = 当前主模型；其他值是 provider 配置名，也可用 --goal-evaluator 覆盖
+```
+
+- 只能否决“达成”，不能增加轮数：整个目标最多否决一次；最后一轮、剩余预算不够再跑一轮（按已用轮数的平均花费估算）、已按 Esc 时不评审，跳过原因记进 `/goal`。
+- 评审调用出错、回复不是 JSON、反对意见没写文件和证据，一律按通过处理并记下原因；评审的花费算进目标花费（`/usage` 里的来源是 `goal_review`）。
+- 发出去的文件内容先按 secret 环境变量脱敏，每个文件最多 6000 字、总共 24000 字；文件内容来自仓库，冒充对话结构的行会被转义。最坏情况是被仓库内容诱导多跑一轮，不会因此宣布达成。
+- 和 `[critic]` 可以同时开：审查在每一轮交卷前看本轮 diff，目标评审只在检查通过后看整个目标改过的文件，两者的 trace 事件分开（`critic_review` / `goal_review`）。
+
 ## 依赖守卫（`[deps]`）
 
 模型要装或要直接运行的新包（安装命令、`npx` / `uvx` / `npm create` 等下载即运行的命令、`pip install -r` 引用的文件、依赖文件改动）在审批前检查：和热门包只差一个字符、或第一次发布不到 30 天的包必须有人确认（`--approval auto` 也一样），没人能确认时拒绝（说明见 README「依赖守卫」）。
