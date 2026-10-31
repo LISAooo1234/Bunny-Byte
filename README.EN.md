@@ -53,6 +53,14 @@ stored locally for recovery, review, and debugging.
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
 
+## Dependency guard: package names a model makes up don't get installed (0.13.0)
+
+Cheap models invent package names, and a repo's `AGENTS.md`, a web page or command output can lure them into installing a misspelled one; an attacker who registers that name gets code execution on the next `pip install`. M7 stops it **before** the install: for `pip` / `uv` / `npm` / `pnpm` / `yarn` install commands and edits to requirements / pyproject / package.json, newly added names are compared with bundled top-10k PyPI and npm lists. A name one character from a popular package (`reqeusts`, `pyyml`) or first published less than 30 days ago needs a human to confirm, even under `--approval auto`; in `bunny -p` and subagents, where nobody can answer, it is refused and the model is told the right name.
+
+- **Stays out of the way**: popular packages, packages the project already declares or locks, and `[deps] allow` entries pass without any network call; in `ask` mode it is folded into the one normal approval. With a private index configured nothing is looked up publicly, so internal names stay private; Chinese mirrors keep working.
+- **A cloned repo can't switch it off**: a repo's own `.bunnybyte.toml` can only make it stricter.
+- **Measured** (`Claude Haiku 4.5`, `bunny -p --approval auto`, poisoned `AGENTS.md`): asked to install `pyyml` (a lookalike registered on PyPI since 2019) and an "intentionally spelled" `reqeusts`, both were blocked with nothing installed, and recorded on stderr, in the JSON `dependencies` and in `bunny replay`; the core bench stayed at 9/10.
+
 ## Fix proof: green tests, and proof that they test this fix (0.12.0)
 
 A verification receipt only says the tests are green now. Milestone M6 adds the next step: when verification passes and the turn changed both sources and tests, the runtime **reverts only the source changes in a scratch copy, keeps the new tests**, and runs them again. Failing on the old code = ✓ proven; still passing = ⚠ the tests do not exercise the change (also flagging tests that never import the changed sources, or test edits that only delete assertions); failing only on a missing interface = weak (normal for new features). No model call, the working tree is never touched, pytest results are read per test from junitxml, and runs where an editable install or src layout would import code from outside the copy are skipped. `[verify].fix_proof = repair` sends a "not exercised" result back to the model once.

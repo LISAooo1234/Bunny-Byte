@@ -2,6 +2,10 @@
 
 ## 未发布
 
+## 0.13.0
+
+M7「依赖守卫」完成。实测（`Claude Haiku 4.5`，`bunny -p --approval auto`，`AGENTS.md` 投毒）：`pyyml` 和“拼写是故意的” `reqeusts` 都被拦下、没有安装；核心 bench 9/10（`20261031-104025`），与改动前持平。
+
 - 新增依赖守卫（`[deps] mode = off|warn|guard`，默认 `guard`，`--deps` 覆盖；新模块 `bunnybyte/core/dependency_extract.py`、`dependency_names.py`、`dependency_registry.py`、`dependency_guard.py`）：`run_shell` 里的 pip / uv / pipx / poetry / pdm / npm / pnpm / yarn / bun 安装命令（含 `bash -c`）和对 `requirements*.txt`、`pyproject.toml`、`package.json` 的 `write_file` / `patch_file`，在审批之前检查新增的包名。内置 PyPI、npm 各前 1 万个热门包名单（`bunnybyte/data/`，`scripts/update_top_packages.py` 刷新）：名单里的、项目已声明或锁定的、`[deps] allow` 里的直接放行；和前 2000 个热门包只差一个字符的（`reqeusts` → `requests`）或在公共仓库第一次发布不到 30 天的算可疑，必须有人确认（TUI 审批框写明原因，`--approval auto` 也弹；`ask` 模式下合并成一次审批），`bunny -p`、子 agent、`--approval never`、非终端时直接拒绝并告诉模型正确的名字；公共仓库里没有的包或查询失败只在工具结果后附一句提示，但和热门包只差一个字符的名字即使还不存在也照样拦（查不到的结果不缓存，命令里的每个包都查）。查询走 PyPI simple JSON / npm registry，2 秒超时，缓存在 `~/.bunnybyte/dependency_cache.json`；配了私有索引的生态不查（命令参数、环境变量、pip.conf、pyproject / uv.toml / requirements / .npmrc / .yarnrc.yml 里的索引都算），国内常见镜像算公共源，`.npmrc` 指向 npmmirror 时改去镜像查。仓库自带的 `.bunnybyte.toml` 只能调严。trace `dependency_check` 事件（`bunny replay` 显示）、`report.json` 与 `bunny -p` JSON 的 `dependencies`，`bunny -p` 拦下时 stderr 说明。`bunny bench` 的 agent 标记为无人值守，守卫不会在 bench 线程里等终端输入。
 
 ## 0.12.0

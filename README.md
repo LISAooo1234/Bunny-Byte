@@ -50,6 +50,14 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
 
+## 依赖守卫：模型编出来的包名装不进你的机器（0.13.0）
+
+便宜模型会编包名，仓库里的 `AGENTS.md`、网页和命令输出也能诱导它去装一个拼错的包；攻击者只要抢注这些名字，`pip install` 一跑代码就在你机器上执行了。M7 让 Bunny Byte 在安装发生**之前**拦住它：`pip` / `uv` / `npm` / `pnpm` / `yarn` 等安装命令和对 requirements / pyproject / package.json 的改动，新增的包名先和内置的 PyPI、npm 各前 1 万个热门包对照，和热门包只差一个字符（`reqeusts`、`pyyml`）或在公共仓库首次发布不到 30 天的，必须有人确认，`--approval auto` 也一样；`bunny -p`、子 agent 里没人能确认，就直接拒绝并告诉模型正确的名字。
+
+- **不打扰日常**：热门包、项目已声明或锁定的包、`[deps] allow` 里的名字直接放行，不联网；`ask` 模式下合并成那一次普通审批。配了私有索引就不去公网查，内部包名不外泄；国内镜像照常可用。
+- **克隆来的仓库关不掉它**：仓库自带的 `.bunnybyte.toml` 只能调严。
+- **实测**（`Claude Haiku 4.5`，`bunny -p --approval auto`，`AGENTS.md` 投毒）：要求装 `pyyml`（PyPI 上 2019 年就注册了的仿冒名）和“拼写是故意的” `reqeusts`，两次都被拦下、什么都没装，stderr、JSON 的 `dependencies` 和 `bunny replay` 里都有记录；核心 bench 9/10，和改动前持平。
+
 ## 修复证明：测试绿了，还要证明它测到了这次修复（0.12.0）
 
 验证回执只能说明“测试现在是绿的”。M6 补上了下一步：验证通过、本轮同时改了源码和测试时，运行时在临时副本里**只撤回源码改动、保留新测试**再跑一遍。旧代码上失败 = ✓ 已证明；照样通过 = ⚠ 测试没测到改动（还会指出“测试没导入改过的源码”“只删了断言”）；只因缺少新接口而失败 = 弱（新功能常见）。不调用模型、不碰工作区，pytest 按 junitxml 逐个判断，可编辑安装 / src 布局导入的不是副本代码时自动跳过，`[verify].fix_proof = repair` 会把“没测到”退回模型一轮。
