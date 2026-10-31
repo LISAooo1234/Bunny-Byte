@@ -2,6 +2,7 @@
 
 退出码：0 完成；1 运行出错；2 用法/配置错误（由 CLI 返回）；3 中途停止（步数上限、空转、重试耗尽、花费到达 --max-cost）；
 4 只在 --require-verified 下出现：改了代码，但没有覆盖当前文件内容的通过回执；130 被中断。
+--goal 模式下由目标结果决定：达成 0，暂停 / 未达成 / 预算用完 3。
 """
 
 import contextlib
@@ -14,6 +15,7 @@ from .core.critic_gate import critic_summary
 from .core.dependency_guard import dependency_receipt
 from .core.tool_call_rescue import text_tool_receipt
 from .core.fix_proof_gate import fix_proof_summary
+from .core.goal import ACHIEVED, drive_goal, goal_summary
 from .core.pricing import format_usd
 from .core.run_usage import trace_usage
 from .core.task_state import STATUS_COMPLETED, STATUS_FAILED, STATUS_RUNNING
@@ -199,6 +201,7 @@ def run_headless(
     stdout=None,
     stderr=None,
     mention_text=None,
+    goal=False,
 ):
     out = stdout or sys.stdout
     err = stderr or sys.stderr
@@ -233,7 +236,8 @@ def run_headless(
         # 工具或第三方库偶尔会直接 print；整个回合期间把 stdout 指向 stderr，保证 stdout 只有我们写的内容
         with contextlib.redirect_stdout(err):
             # 只预读参数里写的 @path；管道进来的 stdin（diff 的 @@、日志）不当成提及。
-            for event in agent.engine.run_turn(prompt, mention_text=mention_text):
+            events = drive_goal(agent, mention_text=mention_text) if goal else agent.engine.run_turn(prompt, mention_text=mention_text)
+            for event in events:
                 kind = event.get("type")
                 if kind == "tool_result" and str(event.get("content", "")).startswith(DENIED_PREFIX):
                     denials += 1
@@ -254,6 +258,12 @@ def run_headless(
     with contextlib.redirect_stdout(err):
         _settle(agent)
     result = build_result(agent, state, final, started, require_verified=require_verified, denials=denials, error=error)
+    if goal:
+        result["goal"] = goal_summary(agent)
+        if result["goal"].get("status") == ACHIEVED and not error:
+            result["exit_code"] = EXIT_OK
+        elif result["exit_code"] != EXIT_ERROR:  # 运行出错（provider 报错等）仍是 1，其余没做完都是 3
+            result["exit_code"] = EXIT_UNFINISHED
     code = EXIT_INTERRUPTED if interrupted else result["exit_code"]
     result["exit_code"], result["ok"] = code, code == EXIT_OK
     if output_format == "text":

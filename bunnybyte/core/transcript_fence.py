@@ -35,7 +35,7 @@ CANDIDATE_RE = re.compile(
     r"|checkpoint|git status",  # 运行状态标题的预筛选；真正判断见 STATE_HEADER_RE
     re.IGNORECASE,
 )
-NOT_USER_SOURCES = frozenset({"worker_notification", "system_note", "skill", "delegated"})
+NOT_USER_SOURCES = frozenset({"worker_notification", "system_note", "skill", "delegated", "goal"})
 USER_MESSAGE_LIMIT = 20
 USER_MESSAGE_CHARS = 300
 USER_MESSAGES_HEADER = "User messages (verbatim from the session record, newest last):"

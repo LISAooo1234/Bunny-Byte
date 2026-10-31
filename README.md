@@ -48,6 +48,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 运行中插话 | agent 干活时输入框不锁：想到什么直接打字回车，下一次调用模型前就送到（不用停下重来）；Stop / Esc 连同正在跑的命令和它拉起的子进程一起立刻停；详见下文「运行中插话与停止」。 |
 | 依赖守卫 | 模型要装或要直接运行的新包（`pip install`、`npm i`、`npx` / `uvx`、`pip install -r`、改 requirements / pyproject / package.json）先过一遍：和热门包只差一个字符（`reqeusts`）或刚注册不到 30 天的，必须有人确认，`--approval auto` 也一样，`bunny -p` 里直接拒绝；详见下文「依赖守卫」。 |
 | 文字工具调用救回 | 模型把工具调用写进了正文（DeepSeek 的 `name{json}` / DSML、Qwen 的 `<tool_call>` / `<function=…>`）时，以前回合直接结束、你看到一段标记当回答；现在照常执行或退回模型重来，读文件以外的工具只在有人审批时执行；详见下文「写成文字的工具调用」。 |
+| 目标模式 | `/goal --check "pytest -q" <目标>` / `bunny -p --goal`：一轮做不完就自动开下一轮，每轮结束后由运行时跑检查命令，通过才算达成；检查一开始就通过或跑不起来时不花钱直接拒绝（resume 也会重新检查），没有进展、一轮不调用工具、轮数或花费到顶就停。见[目标模式](#目标模式goal)。 |
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
 
@@ -326,6 +327,7 @@ bunny replay --list     # 最近的运行；bunny replay 1 --diff 看时间线�
 - `/rollback <event|turn|#>`
 - `/undo`、`/undo list`、`/undo --force`
 - `/diff`、`/diff 2`、`/diff --stat`、`/diff 1 src/`
+- `/goal --check "pytest -q" <目标>`、`/goal`、`/goal resume`、`/goal clear`
 - `/hooks`、`/hooks trust`
 - `/mcp`、`/mcp trust`
 - `/banner`（展开/收起顶部横幅；`Ctrl+O` 展开/收起全部工具卡片）
@@ -457,6 +459,23 @@ bunny -p "总结最近的改动" --output-format json | jq .result
 - 无人值守时永远不会等人确认：审批策略 `ask` 等同 `never`（写文件、跑命令都会被拒绝，拒绝次数记在 `permission_denials` 并在 stderr 提示），需要放行请显式加 `--approval auto`；审批策略不是 `auto` 时只允许启动只读的 Explore 子 agent（写入型 worker 自带放行权限，会绕过拒绝）；`ask_user` 工具不可用；自动 dream、skill 进化等后台学习关闭。
 - 带参数提示词时不会读 stdin（避免被 cron 或其他 agent 的工具 shell 继承来的、永不关闭的 stdin 卡死）；只有没有参数提示词，或参数里有单独的 `-` 时才读（超过 20 万字符会截断并在 stderr 提示）。
 - 不支持斜杠命令和 skill 调用（`bunny -p "/status"` 退出码 2，请直接用自然语言描述任务）；以 `/` 开头的路径（如 `/tmp/app.py 有个 bug`）照常当提示词。可与 `--resume latest`、`--cwd`、`--provider` 等参数组合；`--resume` 找不到会话等启动错误退出码 2，json 格式下 stdout 仍是一个带 `error` 的结果对象。`--output-format`、`-q`、`--require-verified` 不带 `-p` 时报错。
+
+## 目标模式（/goal）
+
+一轮做不完的任务（`--max-steps` 用完、模型中途交卷）以前只能手动打「继续」。`/goal` 把它交给运行时：给出目标和一条**检查命令**，Bunny Byte 一轮接一轮地做，**每轮结束后由运行时自己跑检查**，通过才算达成——不是模型说“做完了”，也不是另一个模型读对话记录判断。
+
+```bash
+/goal --check "pytest -q tests/test_api.py" 把 API 改成分页返回，测试要全过
+bunny -p --goal "让 make check 通过" --goal-check "make check" --approval auto --goal-rounds 4 --max-cost 0.5
+```
+
+- 开始前先跑一次检查：已经通过（分不出做没做完）、一个测试都没跑到、命令跑不起来时直接拒绝，**一次模型调用都不花**。
+- 每轮里验证闸门改为自动运行这条检查，回合内的修复轮就是针对它；回合结束时如果闸门已经对当前文件跑过，直接沿用结果，同一套测试不跑两遍。第一轮的提示里写明检查命令、说明它现在没通过（你输入的目标原样作为用户消息，仓库代码打印的输出不混进去）；之后每轮的续接消息完整复述目标、带上上一轮的检查输出（转义过，不能冒充对话结构或提前闭合代码块），并标记为运行时写的，压缩摘要和用户消息列表不会把它当成你说的话。
+- 停下来的条件：检查通过（已达成）；轮数用完（`/goal --rounds N` / `-p --goal-rounds N`，默认 5，最多 20，每次 resume 重新计数）；连续两轮改动的文件内容和检查输出（去掉耗时、内存地址、临时路径后）都没变（没有进展）；某一轮模型一个工具都没调用；目标总花费到达 `--max-cost`（每轮的花费上限也收紧到剩余预算；暂停后 resume 不重新计算，只有“预算用完”之后 resume 才再给一份同样的预算）；Esc / Stop（暂停）；模型报错（先照常跑检查，没通过就暂停）。达成时如果改过测试文件或检查命令里提到的文件，会提示你确认没有为了通过而改检查。
+- 状态存在会话里：`/goal` 查看每轮结果，`/goal resume` 接着做（`--resume` 之后也行，进程中途被杀的目标恢复为“已暂停”），`/goal clear` 放弃；`/fork` 出来的分支不继承目标。
+- 检查命令：`--check` 写的命令是你亲手给的，直接运行；不写时用 `[verify].commands`，开始前按审批策略询问一次（`-p` 下需要 `--approval auto`，否则退出码 2）。
+- `bunny -p --goal`：达成退出码 0，暂停 / 未达成 / 预算用完退出码 3，运行出错（如 provider 报错）仍是 1；JSON 结果多一个 `goal` 块（`status`、`reason`、`rounds`、`cost_usd`、`baseline`、每轮 `receipts`、`check_files_changed`）；`bunny replay` 每轮一行「🎯 目标检查」。不能和 `--require-verified` 同用（目标本身就以检查通过为准）。
+- 限制：检查命令由你决定，运行时只认它的退出码；没有“评审模型”兜底（计划中）；每轮仍按 `--max-steps` 计步，目标期间不会自动提高；还没有 bench 数据说明多轮在便宜模型上值不值（计划中的 `bunny bench --suite goal`）。
 
 ## 项目规则
 

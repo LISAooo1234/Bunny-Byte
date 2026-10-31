@@ -16,6 +16,7 @@ from textual.widgets import Button
 
 from ..commands.slash import resolve_command
 from ..cli import HELP_DETAILS, handle_repl_command, provider_profiles_for_agent
+from ..core.goal import drive_goal, take_goal_drive
 from ..core.memory_scope import (
     mark_memory_scope_startup_prompted,
     should_prompt_memory_scope_startup,
@@ -546,6 +547,7 @@ class BunnyByteTuiApp(App):
             else:
                 run_ui(self._add_assistant_message, output)
             run_ui(self._refresh_runtime_identity)
+            run_ui(self._maybe_drive_goal)
             return
         run_ui(
             self._add_assistant_message,
@@ -593,7 +595,12 @@ class BunnyByteTuiApp(App):
             return f"{format_tool_args(name, args)} -> {content}"
         return format_tool_args(name, args)
 
-    def _run_agent(self, text: str, mention_text: str | None = None) -> None:
+    def _maybe_drive_goal(self) -> None:
+        """`/goal ...` / `/goal resume` 处理完后在主线程启动目标驱动，界面与普通回合相同。"""
+        if take_goal_drive(self.agent):
+            self._run_agent("", goal=True)
+
+    def _run_agent(self, text: str, mention_text: str | None = None, goal: bool = False) -> None:
         self._stop_requested = False
         self._last_stop_reason = ""
         self._running_tool_cards = []
@@ -604,7 +611,7 @@ class BunnyByteTuiApp(App):
         self.query_one(WelcomeBanner).set_activity(True, "思考中")
         self.query_one(ThinkingIndicator).show("按 Ctrl+X / Esc 或点击 Stop 停止")
         self._thinking_timer = self.set_interval(0.3, self._advance_activity)
-        self._agent_task_handle = asyncio.create_task(self._agent_task(text, mention_text))
+        self._agent_task_handle = asyncio.create_task(self._agent_task(text, mention_text, goal))
 
     def _drain_idle_worker_notifications(self) -> None:
         if self._is_agent_turn_running() or self._is_command_running() or self.query_one(InputBar).input.disabled:
@@ -619,10 +626,10 @@ class BunnyByteTuiApp(App):
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(WelcomeBanner).update_agent(self.agent)
 
-    async def _agent_task(self, text: str, mention_text: str | None = None) -> None:
+    async def _agent_task(self, text: str, mention_text: str | None = None, goal: bool = False) -> None:
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, partial(self._drive_turn, text, mention_text))
+            await loop.run_in_executor(None, partial(self._drive_turn, text, mention_text, goal))
         except Exception as exc:
             self.query_one(ChatLog).add_message("assistant", f"[错误] {exc}")
         finally:
@@ -663,8 +670,9 @@ class BunnyByteTuiApp(App):
         self.query_one(WelcomeBanner).advance_activity()
         self.query_one(ProgressPanel).update_agent(self.agent)
 
-    def _drive_turn(self, text: str, mention_text: str | None = None) -> None:
-        for event in self.agent.engine.run_turn(text, mention_text=mention_text):
+    def _drive_turn(self, text: str, mention_text: str | None = None, goal: bool = False) -> None:
+        events = drive_goal(self.agent) if goal else self.agent.engine.run_turn(text, mention_text=mention_text)
+        for event in events:
             try:
                 self.call_from_thread(self._handle_runtime_event, dict(event))
             except RuntimeError:

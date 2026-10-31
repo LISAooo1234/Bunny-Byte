@@ -51,6 +51,7 @@ stored locally for recovery, review, and debugging.
 | Dependency guard | New packages the model installs (`pip install`, `npm i`, edits to requirements / pyproject / package.json) are checked first: a name one character away from a popular package (`reqeusts`) or first published less than 30 days ago needs a human to confirm, even under `--approval auto`, and is refused under `bunny -p`. See "Dependency guard" below. |
 | Steering mid-turn | The input box stays usable while the agent works: type a correction and press Enter, it reaches the model before its next call (no need to stop and start over); Stop / Esc ends the running command and every process it started right away. See "Steering and stopping" below. |
 | Text tool-call rescue | When a model writes its tool call into the reply text (DeepSeek's `name{json}` / DSML markup, Qwen's `<tool_call>` / `<function=…>`), the turn used to end with that markup as the answer; now the call runs or the model is asked to redo it, and tools other than file reads only run when a human approves. See "Tool calls written as text" below. |
+| Goal mode | `/goal --check "pytest -q" <objective>` / `bunny -p --goal`: when one turn isn't enough the next starts automatically, and after every turn the runtime runs the check command; only a pass counts. A check that already passes or can't run is refused before spending anything (resume re-checks); no progress, a round without tool calls, or the round/cost cap stops it. See [Goal mode](#goal-mode-goal). |
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
 
@@ -331,6 +332,7 @@ bunny replay --list     # recent runs; bunny replay 1 --diff shows a timeline an
 - `/rollback <event|turn|#>`
 - `/undo`, `/undo list`, `/undo --force`
 - `/diff`, `/diff 2`, `/diff --stat`, `/diff 1 src/`
+- `/goal --check "pytest -q" <objective>`, `/goal`, `/goal resume`, `/goal clear`
 - `/banner` (toggle the welcome banner; `Ctrl+O` toggles all tool cards)
 - `/theme`, `/theme dark|light|auto` (switch colors without restarting)
 - `/hooks`, `/hooks trust`
@@ -461,6 +463,23 @@ bunny -p "Summarize recent changes" --output-format json | jq .result
 - It never waits for a human: approval policy `ask` behaves like `never` (writes and shell commands are denied, the count lands in `permission_denials` and a note on stderr), so pass `--approval auto` to allow them; unless the policy is `auto` only read-only Explore subagents may be started (write-capable workers carry their own approval and would bypass the denial); the `ask_user` tool is unavailable; background learning (auto dream, skill evolution) is off.
 - With a prompt argument stdin is not read (a stdin inherited from cron or another agent's tool shell may be a pipe that never closes); it is read only when there is no prompt argument or the arguments contain a lone `-` (input beyond 200k characters is truncated, with a note on stderr).
 - Slash commands and skill invocations are not supported (`bunny -p "/status"` exits 2; describe the task in plain language); a prompt that starts with a path such as `/tmp/app.py has a bug` is fine. It combines with `--resume latest`, `--cwd`, `--provider` and the other flags; startup errors such as an unknown `--resume` session exit 2, and with a json format stdout still carries one result object with an `error` field. `--output-format`, `-q` and `--require-verified` are errors without `-p`.
+
+## Goal mode (/goal)
+
+Tasks that don't fit in one turn (the `--max-steps` budget runs out, or the model hands in early) used to need a manual "continue". `/goal` hands that to the runtime: give an objective and a **check command**, and Bunny Byte works turn after turn, **running the check itself after every turn**. Only a pass counts. It's not the model saying "done", and not a second model reading the transcript.
+
+```bash
+/goal --check "pytest -q tests/test_api.py" make the API paginate, all tests must pass
+bunny -p --goal "make make check pass" --goal-check "make check" --approval auto --goal-rounds 4 --max-cost 0.5
+```
+
+- The check runs once before anything else. If it already passes (it can't tell done from not done), collects no tests, or can't run, the goal is refused **before any model call**.
+- During a round the verification gate runs this check automatically, so its in-turn repair round targets it; if the gate already ran it against the current files, the result is reused and the tests don't run twice. Round 1's prompt names the check and says it currently fails (your objective stays the user message; output printed by repository code is not mixed into it). Each later continuation restates the objective, carries the previous check output (escaped, so it can't pose as transcript structure or close the code block early) and is marked as runtime-written, so compaction summaries and the user-message list don't treat it as yours.
+- It stops when: the check passes (achieved); the round limit is used (`/goal --rounds N` / `-p --goal-rounds N`, default 5, max 20, counted again on each resume); two rounds in a row leave both the changed files and the check output (with timings, addresses and temp paths stripped) unchanged (no progress); a round makes no tool call; the goal's total spend reaches `--max-cost` (each round's cap is also tightened to the remaining budget; resuming after a pause keeps counting, only resuming after "out of budget" grants the same budget again); Esc / Stop (paused); a model error (the check still runs; if it fails, paused). On success it warns if test files or files named in the check were changed, so you can confirm nobody edited the check to pass it.
+- State lives in the session: `/goal` shows per-round results, `/goal resume` continues (also after `--resume`; a goal whose process was killed loads as paused), `/goal clear` drops it; `/fork` branches don't inherit it.
+- Check command: one you pass with `--check` is yours and runs directly; without it `[verify].commands` is used and approved once per the approval policy (under `-p` that needs `--approval auto`, else exit 2).
+- `bunny -p --goal`: exit 0 when achieved, 3 when paused / unmet / out of budget, still 1 for run errors such as a provider failure; the JSON result gains a `goal` block (`status`, `reason`, `rounds`, `cost_usd`, `baseline`, per-round `receipts`, `check_files_changed`); `bunny replay` shows one "🎯 goal check" line per round. It can't be combined with `--require-verified` (the goal already requires a passing check).
+- Limits: you choose the check and the runtime only trusts its exit code; no evaluator model yet (planned); each round still counts `--max-steps` as usual; no bench data yet on whether multi-round pays off on cheap models (planned `bunny bench --suite goal`).
 
 ## Project rules
 

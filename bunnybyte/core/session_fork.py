@@ -67,6 +67,7 @@ def _branch_runtime_session(runtime, target="latest", mode="fork"):
     child["topic"] = _fork_topic(parent, child_history)
     child["parent_session_id"] = parent.get("id", "")
     child.pop("cost", None)  # 花费从零算起，否则父会话和每个分叉都把同一笔钱算一遍
+    child.pop("goal", None)  # 目标的花费起点和轮次记录属于父会话，分叉不继承
     child["fork"] = {
         "parent_session_id": parent.get("id", ""),
         "forked_from_event_id": target_item.get("event_id", ""),

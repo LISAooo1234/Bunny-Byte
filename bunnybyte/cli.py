@@ -30,6 +30,7 @@ from .commands.mcp_commands import handle_mcp_command
 from .core.mcp_tools import McpManager, register_mcp_tools
 from .core.hook_runner import HookRunner
 from .commands.diff_commands import handle_diff_command
+from .commands.goal_commands import handle_goal_command
 from .commands.undo_commands import handle_undo_command
 from .core.cost_meter import cost_rows
 from .core.first_run import missing_key_check
@@ -675,6 +676,13 @@ def build_arg_parser():
         help="-p 下要求改动有通过的验证回执，否则退出码 4；隐含 --verify auto。",
     )
     parser.add_argument(
+        "--goal",
+        action="store_true",
+        help="-p 下把提示词当成目标：一轮接一轮地做，每轮结束后运行时跑 --goal-check，通过才算达成（退出码 0），否则 3。",
+    )
+    parser.add_argument("--goal-check", default="", metavar="CMD", help="--goal 的检查命令，例如 \"pytest -q\"；不写就用 [verify].commands（需要 --approval auto）。")
+    parser.add_argument("--goal-rounds", type=int, default=None, metavar="N", help="--goal 最多跑几轮（默认 5，最多 20）。--max-cost 同时限制整个目标的花费。")
+    parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
@@ -1057,6 +1065,8 @@ def handle_repl_command(agent, user_input):
         return True, False, handle_undo_command(agent, command_args)
     if command_name == "diff":
         return True, False, handle_diff_command(agent, command_args)
+    if command_name == "goal":
+        return True, False, handle_goal_command(agent, command_args)
     if command_name == "hooks":
         return True, False, handle_hooks_command(agent, command_args)
     if command_name == "mcp":
@@ -1641,14 +1651,16 @@ def _stream_print(text, *, chunk_size=12, delay=0.012):
     sys.stdout.flush()
 
 
-def _print_turn_stream(agent, user_message):
+def _print_turn_stream(agent, user_message, events=None):
     final_answer = ""
     is_slash = str(user_message or "").lstrip().startswith("/")
     stream_open = False
     stream_buffer = ""
     stream_preview = ""
     native_stream = bool(getattr(agent.model_client, "supports_native_tools", False))
-    for event in agent.engine.run_turn(user_message, mention_text=None if is_slash else user_message):
+    if events is None:
+        events = agent.engine.run_turn(user_message, mention_text=None if is_slash else user_message)
+    for event in events:
         event_type = str(event.get("type", ""))
         if event_type == "model_requested":
             stream_buffer = ""
@@ -1705,6 +1717,15 @@ def _print_turn_stream(agent, user_message):
             stream_buffer = ""
             stream_preview = ""
     return final_answer
+
+
+def _drive_pending_goal(agent):
+    """`/goal ...` / `/goal resume` 之后由 REPL / 一次性命令接着驱动目标的各轮。"""
+    from .core.goal import drive_goal, take_goal_drive
+
+    if take_goal_drive(agent):
+        print()
+        _print_turn_stream(agent, "", events=drive_goal(agent))
 
 
 def _model_stream_preview(content, *, legacy=False):
@@ -1781,6 +1802,18 @@ def run_print_mode(args):
     if level == "warn" and not args.quiet:
         print(message, file=sys.stderr)
     headless.prepare_agent(agent)
+    if args.goal:
+        from .core.goal import MAX_ROUNDS, start_goal
+
+        if args.require_verified:
+            return usage_error("--goal 自己就以检查通过为准，不能和 --require-verified 同用。")
+        if args.goal_rounds is not None and not 1 <= args.goal_rounds <= MAX_ROUNDS:
+            return usage_error(f"--goal-rounds 应在 1 到 {MAX_ROUNDS} 之间。")
+        if not args.goal_check and agent.approval_policy != "auto":
+            return usage_error("--goal 需要 --goal-check \"命令\"；用 [verify].commands 时要加 --approval auto（无人值守不弹审批）。")
+        _, error = start_goal(agent, prompt, check=args.goal_check, max_rounds=args.goal_rounds, max_cost=args.max_cost)
+        if error:
+            return usage_error(error)
     return headless.run_headless(
         agent,
         prompt,
@@ -1788,6 +1821,7 @@ def run_print_mode(args):
         require_verified=args.require_verified,
         quiet=args.quiet,
         mention_text=typed_prompt,
+        goal=args.goal,
     )
 
 
@@ -1813,8 +1847,8 @@ def main(argv=None):
     args = build_arg_parser().parse_args(argv)
     if args.print:
         return run_print_mode(args)
-    if args.output_format != "text" or args.quiet or args.require_verified:
-        print("--output-format / --require-verified / -q 只能和 -p 一起使用。", file=sys.stderr)
+    if args.output_format != "text" or args.quiet or args.require_verified or args.goal or args.goal_check or args.goal_rounds is not None:
+        print("--output-format / --require-verified / -q / --goal* 只能和 -p 一起使用（交互界面里用 /goal）。", file=sys.stderr)
         return 2
     try:
         agent = build_agent(args)
@@ -1851,6 +1885,7 @@ def main(argv=None):
                 handled, _, output = handle_repl_command(agent, prompt)
                 if handled:
                     print(output)
+                    _drive_pending_goal(agent)
                 else:
                     _print_turn_stream(agent, prompt)
             except RuntimeError as exc:
@@ -1878,6 +1913,12 @@ def main(argv=None):
             return 0
         if handled:
             print(output)
+            try:
+                _drive_pending_goal(agent)
+            except KeyboardInterrupt:
+                print("\n目标已中断。/goal resume 继续。")
+            except RuntimeError as exc:
+                print(str(exc), file=sys.stderr)
             continue
 
         print()

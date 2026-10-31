@@ -127,6 +127,10 @@ def _event_line(event):
     if name == "text_tool_call":
         label = {"rescued": "已救回执行", "retry": "未执行，退回模型", "accepted": "退回次数用完，按回答收下"}.get(str(event.get("decision", "")), "")
         return _join(f"  ⤷ 文字工具调用 {event.get('format', '')} {'、'.join(event.get('tools') or [])}".rstrip(), label)
+    if name == "goal_check":
+        icon = "✓" if event.get("status") == "passed" else ("✗" if event.get("status") in {"failed", "timeout"} else "·")
+        reused = "沿用验证结果" if event.get("reused") else ""
+        return _join(f"  🎯 目标检查 第 {event.get('round')} 轮 {icon} {clip_cells(str(event.get('command', '')), 50)}", event.get("status"), reused)
     if name == "verification_declined":
         return f"  · 验证未运行（未获批准）：{clip_cells('；'.join(event.get('commands') or []), 60)}"
     if name == "critic_review":

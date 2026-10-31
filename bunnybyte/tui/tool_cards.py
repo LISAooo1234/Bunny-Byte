@@ -22,6 +22,7 @@ TOOL_TITLES = {
     "send_message": "发消息",
     "task_stop": "停止任务",
     "verify": "验证",
+    "goal_check": "目标检查",
     "hook": "钩子",
     "critic": "审查",
     "fix_proof": "修复证明",
@@ -74,7 +75,7 @@ def card_args_summary(name: str, args: dict | None) -> str:
     if name == "fix_proof":
         tests = [str(item) for item in args.get("tests") or []]
         return clip_cells("撤回源码重跑 " + "、".join(tests)) if tests else ""
-    if name in {"run_shell", "verify", "hook"}:
+    if name in {"run_shell", "verify", "hook", "goal_check"}:
         commands = args.get("commands")
         if isinstance(commands, list) and commands:
             return clip_cells(" ; ".join(str(item) for item in commands))
@@ -143,7 +144,7 @@ def summarize_tool_output(name: str, output: str, args: dict | None = None) -> s
     if name == "patch_file":
         added, removed = diff_counts(str(args.get("old_text", "")), str(args.get("new_text", "")))
         return f"+{added} −{removed}"
-    if name in {"verify", "hook", "critic", "fix_proof"}:
+    if name in {"verify", "hook", "critic", "fix_proof", "goal_check"}:
         return clip_cells(text.splitlines()[0], 60)
     return ""
 
@@ -252,7 +253,7 @@ class ToolCard(Static):
         self.add_class("-running")
         if self.compact:
             self.add_class("compact")
-        if tool_name in {"verify", "critic", "fix_proof"}:
+        if tool_name in {"verify", "critic", "fix_proof", "goal_check"}:
             self.add_class("-verify")
         self.expanded = bool(expanded)
         self.force_expanded = bool(expanded)

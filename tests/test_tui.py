@@ -1504,3 +1504,34 @@ async def test_tui_memory_scope_prompt_can_select_saved_session(tmp_path):
         "mode": "selected",
         "session_ids": ["prior-session"],
     }
+
+
+@pytest.mark.asyncio
+async def test_tui_goal_command_drives_rounds_until_check_passes(tmp_path):
+    import shlex
+    import sys
+
+    from bunnybyte.core.verification import VerifyConfig
+    from bunnybyte.tui.app import BunnyByteTuiApp
+    from bunnybyte.tui.widgets import InputBar, ToolCard
+
+    (tmp_path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "check.py").write_text("import app\nassert app.VALUE == 2\n", encoding="utf-8")
+    check = f"{shlex.quote(sys.executable)} -B check.py"
+    outputs = [
+        '<tool name="read_file" path="app.py"></tool>',
+        '<tool name="write_file" path="app.py"><content>VALUE = 2\n</content></tool>',
+        "<final>改好了。</final>",
+    ]
+    agent = build_agent(tmp_path, outputs, verify_config=VerifyConfig(mode="off", max_repair_rounds=0))
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = f'/goal --check "{check}" 让 check.py 通过'
+        await pilot.press("enter")
+        await wait_until(pilot, lambda: "目标已达成" in "\n".join(assistant_contents(app)))
+        titles = [card.tool_name for card in app.query(ToolCard)]
+        assert titles.count("goal_check") == 1  # 基线一次；本轮的结果沿用回合内验证闸门
+        assert agent.session["goal"]["status"] == "achieved"
+        assert not app._is_agent_turn_running()
