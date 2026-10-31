@@ -200,6 +200,10 @@ def _history_metadata(rendered):
         "same_turn_compacted_notifications": int(details.get("same_turn_compacted_notifications", 0)),
         "budget_clipped": bool(details.get("budget_clipped", False)),
         "rendered_turns": int(details.get("rendered_turns", 0)),
+        # 本轮哪些 read_file 结果在提示词里、看得到第几行到第几行；读文件去重据此判断要不要重新给内容
+        "visible_reads": dict(details.get("visible_reads") or {}),
+        "rendered_through": str(details.get("rendered_through", "")),
+        "item_cap": details.get("item_cap"),
     }
 
 

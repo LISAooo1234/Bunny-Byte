@@ -38,7 +38,7 @@ def build_bench_parser():
     parser.add_argument("--config", default=None, help="BunnyByte TOML 配置文件路径。")
     parser.add_argument("--cwd", default=".", help="从该目录向上查找 .bunnybyte.toml。")
     parser.add_argument("--tasks", default=None, help="只运行指定任务，逗号分隔。")
-    parser.add_argument("--suite", default="core", choices=("core", "spec", "proof"), help="任务套件：core 是默认 10 题；spec 是“测试全过、需求漏了一半”的 3 题，用来衡量独立审查；proof 是“补的回归测试抓不住 bug”的 3 题，用来衡量修复证明。")
+    parser.add_argument("--suite", default="core", choices=("core", "spec", "proof", "long"), help="任务套件：core 是默认 10 题；spec 是“测试全过、需求漏了一半”的 3 题，用来衡量独立审查；proof 是“补的回归测试抓不住 bug”的 3 题，用来衡量修复证明；long 是大文件、几十次调用的长回合 1 题，用来衡量本轮压缩和提示词复用。")
     parser.add_argument("--repeat", type=int, default=1, help="每个任务重复次数；次数越多分数越稳。")
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS, help="agent 每题的工具步数硬上限（默认与正常 CLI 一致）。")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TASK_TIMEOUT, help="单个任务的墙钟上限（秒）。")

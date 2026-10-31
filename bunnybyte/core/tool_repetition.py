@@ -6,7 +6,7 @@ FILE_MUTATION_TOOLS = {"write_file", "patch_file"}
 FILE_READ_TOOLS = {"read_file"}
 
 
-def is_repeated_tool_call(history, name, args, read_ledger=None, compacted=True):
+def is_repeated_tool_call(history, name, args, read_ledger=None, view=None):
     current_turn = current_turn_history(history)
     tool_events = [
         (index, item)
@@ -27,7 +27,7 @@ def is_repeated_tool_call(history, name, args, read_ledger=None, compacted=True)
         )
     if name in FILE_READ_TOOLS:
         if read_ledger is not None and read_ledger.covered(args):
-            return read_content_visible(history, args, compacted)
+            return read_content_visible(history, args, view, read_ledger.canonical_path)
         if not matches:
             return False
         last_index, _ = matches[-1]

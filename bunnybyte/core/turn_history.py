@@ -37,5 +37,5 @@ class TurnHistoryBuilder:
     def raw_text(self, history):
         return self.renderer.raw_text(history)
 
-    def render_section(self, budget):
-        return self.renderer.render_section(self.prompt_history(), budget)
+    def render_section(self, budget, stable_budget=None):
+        return self.renderer.render_section(self.prompt_history(), budget, stable_budget=stable_budget)

@@ -3,7 +3,7 @@ import re
 from .hook_runner import post_tool_hooks, pre_tool_hooks, render_notes
 from .secret_vault import execute_masked
 from .read_ledger import read_stub_metadata, render_read_file_result
-from .tool_loop_guard import escalate_reply
+from .tool_loop_guard import escalate_reply, read_stub
 from .tool_policy import ToolPolicyChecker
 from .tool_repetition import repeated_tool_call_metadata
 from .tool_snapshots import take_snapshot
@@ -34,7 +34,7 @@ def run_tool(agent, name, args):
         ledger = getattr(agent, "read_ledger", None)
         if name == "read_file" and ledger is not None and ledger.covered(args):
             agent._last_tool_result_metadata = read_stub_metadata()
-            return escalate_reply(ledger.stub(args), agent.session["history"], name, args)
+            return escalate_reply(read_stub(agent, ledger, args), agent.session["history"], name, args)
         agent._last_tool_result_metadata = repeated_tool_call_metadata(tool)
         message = f"error: repeated identical tool call for {name}; choose a different tool or return a final answer"
         return escalate_reply(message, agent.session["history"], name, args)

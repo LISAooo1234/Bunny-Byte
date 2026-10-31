@@ -72,7 +72,14 @@ def proof_tasks():
     return list(PROOF_TASKS)
 
 
-SUITES = {"core": all_tasks, "spec": spec_tasks, "proof": proof_tasks}
+def long_tasks():
+    """单独的“长回合”套件：大文件、几十次调用，本轮历史会被压缩；不进默认任务集。"""
+    from .catalog_long import LONG_TASKS
+
+    return list(LONG_TASKS)
+
+
+SUITES = {"core": all_tasks, "spec": spec_tasks, "proof": proof_tasks, "long": long_tasks}
 
 
 def select_tasks(ids=None, suite="core"):
@@ -81,7 +88,7 @@ def select_tasks(ids=None, suite="core"):
     tasks = SUITES[suite]()
     if not ids:
         return tasks
-    by_id = {task.id: task for task in [*all_tasks(), *spec_tasks(), *proof_tasks()]}
+    by_id = {task.id: task for task in [*all_tasks(), *spec_tasks(), *proof_tasks(), *long_tasks()]}
     unknown = [item for item in ids if item not in by_id]
     if unknown:
         raise ValueError(f"未知的 bench 任务：{', '.join(unknown)}；可用：{', '.join(by_id)}")

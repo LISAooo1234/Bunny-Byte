@@ -364,7 +364,9 @@ class ContextManager:
         if not history:
             return SectionRender(raw=raw, budget=budget, rendered="Transcript:\n- empty", details=empty_history_details())
 
-        rendered, history_details = self.history_builder.render_section(budget)
+        # 切点按配置的历史预算算：超预算时临时缩小的预算不应该挪动本轮的切点（挪了提示词缓存就断）
+        stable_budget = int(self._section_budgets.get("history", 0) or 0) or budget
+        rendered, history_details = self.history_builder.render_section(budget, stable_budget=stable_budget)
 
         return SectionRender(
             raw=raw,

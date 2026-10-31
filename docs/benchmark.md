@@ -10,6 +10,7 @@ bunny bench --tasks add_cli_flag,multi_file_rename   # 部分任务默认不写�
 bunny bench --repeat 3           # 每题跑 3 次，分数更稳
 bunny bench --verify             # 开启验证闸门（交卷前自动跑探测到的测试，失败可修复 1 轮）
 bunny bench --suite proof --fix-proof repair   # 修复证明套件，测试没测到改动时退回模型 1 轮
+bunny bench --suite long         # 长回合套件：大文件、几十次调用，本轮历史会被压缩
 bunny bench --history            # 查看历史分数
 bunny bench --provider openai --model gpt-x --no-save
 bunny bench --json > result.json
@@ -76,6 +77,12 @@ bunny bench --json > result.json
 - `frozen` 文件（例如测试文件、输入数据）被改动即判失败；只读问答任务改动任何文件即判失败，且最终回答必须包含正确事实。
 - agent 的步数硬上限与正常 CLI 一致（`--max-steps`，默认 50），所以通过率反映真实使用；每题另有一个“高效完成应有的步数”，超出只标记为 `over_budget`，不判负。
 - 模型/网络故障、超过墙钟上限都算该题失败，不会中断整轮 bench。bench 不启用 `fallback`，避免备用模型污染分数。`--timeout` 到点会请求 agent 中止（agent 在步与步之间检查），再宽限 5 秒，仍不返回就放弃该线程并判失败。
+
+### 长回合套件（`--suite long`）
+
+不进默认任务集，用 `bunny bench --suite long` 运行，衡量长回合里的本轮压缩和提示词复用。唯一一题 `long_context_ripple`：八个约 300 行的模块（`accounts.py`、`invoices.py` ……），每个都在文件末尾用 `%.2f` 格式化给客户看的金额；提示词点名 `test_money.py` 里失败的千分位测试，并说明每个模块都要统一。只改 `invoices.py` 能让点名的测试通过，隐藏 verifier 检查全部八个模块。整份读完八个文件约 7 万字，会越过本轮历史的软上限（默认约 5 万字），触发本轮压缩。离线测试（`tests/test_bench_long.py`）证明 fixture 和"只改点名模块"都判负、参考解通过且确实越过软上限、整轮前缀复用 > 75%。
+
+实测（`Claude Haiku 4.5` 经 OneAPI，步数上限 50，每边 3 次，单题，样本很小）：修复长回合截断之前（3e7e009）1/3 通过：一次重读被拒、空转 21 步后 `loop_stalled` 停下（$0.306）；一次漏改了 `payments.py`；一次通过。修复之后 3/3 通过，平均 25.7 步、9 次模型调用、空转 0.7 步，$0.204/次。结果文件：修复前 `benchmarks/results/20261031-122253-…`（1 次）、`…-122516-…`（2 次），修复后 `…-122350-…`（1 次）、`…-122611-…`（2 次）；修复前的两份是在 3e7e009 的工作树里只加上 long 套件文件跑的，所以也标 `git_dirty`。
 
 ## 输出指标
 
