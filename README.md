@@ -51,6 +51,15 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
 
+## 缓存友好的提示词：长任务每一步少付重复的钱，也不再看不全刚读的文件（0.14.0）
+
+agent 每走一步都要把整个提示词重新发一遍，provider 的前缀缓存只认"从开头起逐字相同"的部分。M5 把每次调用都会变的运行状态（工作记忆、待办、已读范围、检查点、git status）挪到会话历史之后，说明、规则、工具在 Anthropic 协议上作为 `system` 发送；长回合里工具结果攒多了以后，历史改成成批折叠、只在末尾追加。
+
+- **复用率**：同一轮相邻两次调用逐字相同的开头从 50% 升到 86%（bench 10 题参考解离线回放），Claude Haiku 4.5 实跑 85.5%；`bunny replay`、`bunny bench` 都显示"前缀复用"。
+- **顺带修好的真 bug**：长回合里刚读的文件以前只显示前 900 字、重读又被拒，模型原地空转。新增 `bunny bench --suite long`：Haiku 4.5 每边 3 次 1/3 → 3/3。
+- **写成文字的工具调用**：DeepSeek / Qwen 偶尔把调用写进正文，以前回合直接结束；现在照常执行或退回重来，读文件以外的工具要有人审批（见下文「写成文字的工具调用」）。
+- **如实说明**：真实省钱没有测到。OneAPI 网关只给 `system` 打折，DeepSeek 账户余额不足，所以没有账单数字；角色化消息（M5 第 4 项）因 DeepSeek 思考模式的兼容问题暂缓。
+
 ## 依赖守卫：模型编出来的包名装不进你的机器（0.13.0）
 
 便宜模型会编包名，仓库里的 `AGENTS.md`、网页和命令输出也能诱导它去装一个拼错的包；攻击者只要抢注这些名字，`pip install` 一跑代码就在你机器上执行了。M7 让 Bunny Byte 在安装发生**之前**拦住它：`pip` / `uv` / `npm` / `pnpm` / `yarn` 等安装命令和对 requirements / pyproject / package.json 的改动，新增的包名先和内置的 PyPI、npm 各前 1 万个热门包对照，和热门包只差一个字符（`reqeusts`、`pyyml`）或在公共仓库首次发布不到 30 天的，必须有人确认，`--approval auto` 也一样；`bunny -p`、子 agent 里没人能确认，就直接拒绝并告诉模型正确的名字。
@@ -605,7 +614,7 @@ max_turn_cost = 0.5   # 每轮上限，等同 --max-cost 0.5
 - **看得到**：每次模型调用的 `model_requested` trace 事件记下 `prompt_chars` 和 `reused_chars`（和上一次提示词开头逐字相同的字数），`bunny replay` 在模型调用行显示"前缀复用 N%"，`bunny bench` 报告给出整轮的复用率。
 - 顺带修复：提示词前缀以前整段缩进 12 个空格（多行内容插进模板后 `dedent` 失效），每次调用白送几百个空格。
 
-**长回合（0.14 未发布）**：一轮里工具结果攒多了（默认约 5 万字），以前只有最后 4 条结果原样显示、而且每条只留前 900 字，滑动窗口还让历史每次调用都被改写。实际后果是 bug：模型读完一个 300 行的文件，下一次调用只看得到前二十几行，想再读一遍时读文件去重又回答"已经读过、用之前的结果"，于是空转。现在：
+**长回合（0.14.0）**：一轮里工具结果攒多了（默认约 5 万字），以前只有最后 4 条结果原样显示、而且每条只留前 900 字，滑动窗口还让历史每次调用都被改写。实际后果是 bug：模型读完一个 300 行的文件，下一次调用只看得到前二十几行，想再读一遍时读文件去重又回答"已经读过、用之前的结果"，于是空转。现在：
 
 - 切点只在原样部分超过软上限时**成批**往前推（推到只剩一半），两次切之间历史只在末尾追加；单条结果最多显示 16000 字，`read_file` 按整行截断并写明"显示到第几行、从 start=N 接着读"。
 - 读文件去重按**上一次提示词实际显示了什么**判断：被折叠成一行摘要的结果再读会重新给内容；被截断的结果再读同一范围不重发（重发也一样会被截），而是告诉模型从哪一行接着读；读截断之后的范围直接放行。整段历史超预算后的压缩渲染里，本轮的结果按同样规则判断，之前几轮的读结果重读时一律重新给内容。
@@ -631,7 +640,7 @@ max_turn_cost = 0.5   # 每轮上限，等同 --max-cost 0.5
 
 现在 `run_shell` 里的安装命令（pip / `python -m pip` / uv / pipx / poetry / pdm，npm / pnpm / yarn / bun，包括 `bash -c "…"` 里的）以及对 `requirements*.txt`、`pyproject.toml`、`package.json` 的 `write_file` / `patch_file`，在审批之前先检查这次**新增**的包名。
 
-**下载即运行的命令也一样（0.14 起）**：`npx` / `pnpx` / `bunx` / `bun x` / `npm exec` / `pnpm dlx` / `yarn dlx`、`npm create vite`（下载的是 `create-vite`）/ `npm init x` / `yarn|pnpm|bun create x`、`uvx` / `uv tool run` / `pipx run`，以及 `--from` / `--with`（uvx、`uv run`、`uv tool install`）和 `pipx inject` 带进来的包。它们比 `pip install` 更危险：包装上的那一刻代码就运行了，以前 `uvx pyyml` 能绕过守卫直接执行。`-p/--package` 指定了包时后面的名字只当可执行文件名；`npx --no-install` / `--offline` 和仓库（或上级目录，monorepo 的依赖提升，到用户目录为止）`node_modules` 里已有的包在本地运行，不检查（`.bin` 里的同名命令只对 `npx 名字` 算数，`-p 包` 和带 scope 的名字按包名找）。这类命令后面常常只是可执行文件名（`npx tsc`），所以“公共仓库里没有”“没查到”不提示，只拦拼错和刚注册的；查询失败在内存里记 5 分钟，断网时不会每次都等 2 秒。`pip install -r 文件` / `uv pip sync 文件` / `--with-requirements 文件` / `pipx inject -r 文件` 会读工作区里的那个文件（再展开一层 `-r`）；文件里写的私有索引同样让内部包名不发到公网；已经提交进 git（`HEAD` 里就有）的名字算项目自己声明的。守卫看不到内容的文件算可疑（有人时问、没人时拒绝）：在仓库外、是网址、超过 256KB，或者同一条命令先写它再安装（`echo reqeusts >> requirements.txt && pip install -r requirements.txt`、heredoc、`cp`、`sed -i`）。“项目已声明”按这个会话第一次检查时的依赖文件算，并记进会话（`--resume` 接着用）：模型用 shell 往 requirements.txt 追加一行再安装，这个名字不算已声明；有人确认过的包之后不再问。会话中途你自己加进依赖文件的拼错式名字也要确认一次。
+**下载即运行的命令也一样（0.14.0 起）**：`npx` / `pnpx` / `bunx` / `bun x` / `npm exec` / `pnpm dlx` / `yarn dlx`、`npm create vite`（下载的是 `create-vite`）/ `npm init x` / `yarn|pnpm|bun create x`、`uvx` / `uv tool run` / `pipx run`，以及 `--from` / `--with`（uvx、`uv run`、`uv tool install`）和 `pipx inject` 带进来的包。它们比 `pip install` 更危险：包装上的那一刻代码就运行了，以前 `uvx pyyml` 能绕过守卫直接执行。`-p/--package` 指定了包时后面的名字只当可执行文件名；`npx --no-install` / `--offline` 和仓库（或上级目录，monorepo 的依赖提升，到用户目录为止）`node_modules` 里已有的包在本地运行，不检查（`.bin` 里的同名命令只对 `npx 名字` 算数，`-p 包` 和带 scope 的名字按包名找）。这类命令后面常常只是可执行文件名（`npx tsc`），所以“公共仓库里没有”“没查到”不提示，只拦拼错和刚注册的；查询失败在内存里记 5 分钟，断网时不会每次都等 2 秒。`pip install -r 文件` / `uv pip sync 文件` / `--with-requirements 文件` / `pipx inject -r 文件` 会读工作区里的那个文件（再展开一层 `-r`）；文件里写的私有索引同样让内部包名不发到公网；已经提交进 git（`HEAD` 里就有）的名字算项目自己声明的。守卫看不到内容的文件算可疑（有人时问、没人时拒绝）：在仓库外、是网址、超过 256KB，或者同一条命令先写它再安装（`echo reqeusts >> requirements.txt && pip install -r requirements.txt`、heredoc、`cp`、`sed -i`）。“项目已声明”按这个会话第一次检查时的依赖文件算，并记进会话（`--resume` 接着用）：模型用 shell 往 requirements.txt 追加一行再安装，这个名字不算已声明；有人确认过的包之后不再问。会话中途你自己加进依赖文件的拼错式名字也要确认一次。
 
 - **直接放行、不联网**：内置热门名单里的包（PyPI、npm 各前 1 万个，随包发布）、项目已经声明或锁定的包（requirements、pyproject、package.json、`uv.lock` / `poetry.lock` / `pdm.lock` / `package-lock.json`）、`[deps] allow` 里的名字。
 - **可疑**：不在名单里、又和前 2000 个热门包只差一个字符（增、删、改、相邻对调；5 个字符以下的名字不比）；或者在公共仓库里**第一次发布不到 30 天**（PyPI simple JSON 的 `upload-time`、npm 的 `time.created`，每个 2 秒超时，结果缓存在 `~/.bunnybyte/dependency_cache.json`）。

@@ -2,6 +2,10 @@
 
 ## 未发布
 
+## 0.14.0
+
+M5「缓存友好的提示词」完成：提示词顺序已在 0.12.0 发布，这一版加上长回合读文件修复与 `bunny bench --suite long`、写成文字的工具调用救回、依赖守卫补上下载即运行的命令。真实省钱没有在线测到（OneAPI 只给 `system` 打折，DeepSeek 余额不足）；角色化消息暂缓。
+
 - 修复：原生工具调用模式下，模型把工具调用写进正文时回合直接结束、标记被当成回答（已复现：`<tool_call>{"name": "read_file", …}</tool_call>` 一次模型调用后就收尾）。新模块 `bunnybyte/core/tool_call_rescue.py` 识别回复末尾的 DeepSeek `name{json}` 与 DSML（`｜DSML｜`、`｜｜DSML｜｜`、`||DSML||`、裸 `<invoke>`）、Qwen / Hermes `<tool_call>{json}`（`arguments` 为字符串时再解一次，可连续多个）、Qwen XML `<function=…><parameter=…>`（开头 `<tool_call>` 缺失也认）、Bunny 自己的 `<tool>`：工具在本次请求提供的列表里、参数可解析、不在代码块（```、~~~、缩进、引用）里、在行首或句末、后面没有正文才执行，参数从原文解析（代码块在参数里也原样保留）；只有 read_file / list_files / search 直接执行，其他工具只在 `--approval ask` 的主 agent 上（有人审批，平时免审批的 remember / agent 等也单独问一次）执行；工具不可用、参数坏、整条回复是 JSON、模仿历史的 `[tool:x] {…}`、与本会话工具结果或用户消息逐字相同（照抄的注入）一律不执行、退回模型，每轮最多 2 次且不占模型调用次数，之后按回答收下；用户消息里自带这类标记时不处理。trace / `bunny replay` / `report.json` / `bunny -p` JSON 的 `text_tool_calls`，`bunny bench` 每行 `text_tool_rescued` / `text_tool_retries`。TUI 收到重试时不再把流出来的原始标记留在聊天里。
 - 安全：依赖守卫以前不看下载即运行的命令，`uvx pyyml`、`npx expres`、`pnpm dlx`、`yarn dlx`、`npm exec`、`pipx run`、`uv tool run` 会把拼错的包直接下载并执行（`--approval auto` / `bunny -p` 下没有任何提示），`uvx --with pyyml ruff`、`uv run --with`、`pipx inject`、`npm create x`（下载 `create-x`）同样漏掉，`uv tool install --from pyyml black` 查的是 `black` 而不是真正安装的 `pyyml`。现在这些都按同一套规则检查（新模块 `bunnybyte/core/dependency_runners.py`）：`-p/--package`、`--from`、`--spec` 指定的才是包，`--no-install` / `--offline` 和仓库或上级目录 `node_modules` 里已有的包不检查；runner 后面多半是可执行文件名，“仓库里没有 / 没查到”不提示，只拦拼错和刚注册的，拒绝信息说明“这条命令会下载并立刻运行它”，回执 `findings` 带 `runner`。`pip install -r 文件` / `-r文件` / `--requirement=文件` / `uv pip sync 文件` / `--with-requirements 文件` / `pipx inject -r 文件` 现在读取引用的文件（再展开一层 `-r`；文件里的私有索引照样阻止外查；`HEAD` 里已提交的名字算已声明），读不到内容的（工作区外、网址、超过 256KB、同一条命令先写再装）算“无法检查”，按可疑处理。uv 的带值选项按 `uvx --help` 补全（`--refresh-package`、`--resolution`、`-w` 等的值以前会被当成包名、真正运行的包被跳过），`pipx run --backend`、`pnpm dlx -c` 同样修正。“项目已声明”改为按会话第一次检查时的依赖文件算，并记进会话 JSON（`--resume` 接着用，子 agent 继承父 agent 的），`echo reqeusts >> requirements.txt && pip install reqeusts` 不再能把拼错的名字“洗”成已声明；有人确认过的包之后从文件安装不再重复询问。查询失败的结果在内存里记 5 分钟，断网时重复的 `npx tsc` 不会每次等 2 秒超时。
 
