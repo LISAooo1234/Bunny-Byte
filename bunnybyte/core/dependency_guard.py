@@ -1,10 +1,14 @@
 """依赖守卫：模型要装的新包先过一遍“拼错 / 仿冒 / 刚注册”的检查。
 
-在 PermissionChecker 里、审批之前运行，看 run_shell 的安装命令和 write_file / patch_file 对
+在 PermissionChecker 里、审批之前运行，看 run_shell 的安装命令、下载即运行的命令（npx / uvx 等，
+包已在本地 node_modules 里时不算）、`pip install -r` 引用的文件，和 write_file / patch_file 对
 requirements*.txt、pyproject.toml、package.json 的改动：
 - 名字在内置热门名单里、项目已经声明过、或在 `[deps] allow` 里 → 放行，不联网；
 - 和热门包只差一个字符（`reqeusts` → `requests`）或第一次发布不到 30 天 → 可疑；
-- 公共仓库里没有、或查询失败 → 只在工具结果后面附一句提示（装不上就是装不上，没有危害）。
+- 公共仓库里没有、或查询失败 → 只在工具结果后面附一句提示（装不上就是装不上，没有危害）；
+  npx / uvx 后面常常只是可执行文件名或全局工具，这两种情况不提示。
+“项目已经声明”按会话里第一次工具调用之前的依赖文件算：agent 自己用 shell 往 requirements.txt 里
+追加一行，不能让这个名字变成“已声明”。
 `mode = "guard"`（默认）时可疑的包必须有人确认，`--approval auto` 也一样；没人能确认（`bunny -p`、
 子 agent、`--approval never`、非终端）就拒绝并告诉模型原因。`warn` 只提示，`off` 关闭。
 """
@@ -13,15 +17,24 @@ import re
 import sys
 import threading
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from .dependency_extract import NPM, PYPI, dependency_file_kind, from_command, from_file_change, normalize
+from .dependency_extract import NPM, PYPI, Requested, dependency_file_kind, from_command, from_file_change, names_in_file, normalize
+from .dependency_runners import (
+    MISSING,
+    committed_text,
+    files_written_by,
+    local_node_package,
+    read_workspace_file,
+    requirement_files,
+)
 from .dependency_names import is_popular, lookalike
 from .dependency_registry import RegistryLookup, npm_lookup_base, private_index, project_index_urls
 from .transcript_fence import match_patch
 
 DEPS_MODES = ("off", "warn", "guard")
-SUSPICIOUS = ("typosquat", "new")
+SUSPICIOUS = ("typosquat", "new", "unverifiable")
+INSTALLER_HEADS = frozenset({"pip", "pip3", "uv", "uvx", "pipx", "python", "python3", "poetry", "pdm"})
 REGISTRY_LABEL = {PYPI: "PyPI", NPM: "npm"}
 LOCK_NAME_RE = re.compile(r'^name = "([^"]+)"', re.M)
 
@@ -84,17 +97,69 @@ class DependencyCheck:
 def check_tool_call(agent, tool, args):
     """这次工具调用要新装的包里有问题的那些；没有新包或守卫关闭时返回 None。"""
     config = getattr(agent, "deps_config", None) or DepsConfig()
-    if config.mode == "off" or tool.name not in {"run_shell", "write_file", "patch_file"}:
+    if config.mode == "off":
+        return None
+    baseline = declared_baseline(agent)  # 在 agent 第一次能改文件之前定下来
+    if tool.name not in {"run_shell", "write_file", "patch_file"}:
         return None
     extraction = _requested(agent, tool.name, args or {})
-    if extraction is None or not extraction.packages:
+    if extraction is None:
         return None
-    skip = declared_names(agent.root) | {(eco, normalize(eco, name)) for eco in (PYPI, NPM) for name in config.allow}
-    candidates = [item for item in extraction.packages if (item.ecosystem, normalize(item.ecosystem, item.name)) not in skip]
-    findings = _judge(agent, config, [item for item in candidates if not is_popular(item.ecosystem, item.name)], extraction)
+    skip = baseline | {(eco, normalize(eco, name)) for eco in (PYPI, NPM) for name in config.allow}
+    written = files_written_by(str(args.get("command", "")), INSTALLER_HEADS) if tool.name == "run_shell" else set()
+    from_files, unverifiable = _from_requirement_files(agent, extraction, written)
+    candidates = [
+        item for item in extraction.packages + from_files
+        if (item.ecosystem, normalize(item.ecosystem, item.name)) not in skip
+        and not (item.runner and item.ecosystem == NPM and local_node_package(agent.root, item.name, item.bin_name))
+    ]
+    findings = unverifiable + _judge(agent, config, [item for item in candidates if not is_popular(item.ecosystem, item.name)], extraction)
     if not findings:
         return None
     return DependencyCheck(findings, [item for item in findings if item["verdict"] in SUSPICIOUS])
+
+
+def declared_baseline(agent):
+    """项目在这个会话开始时已经声明 / 锁定的依赖。
+
+    第一次检查时读盘并记进会话（`--resume` 接着用，不会把上次 agent 追加的名字当成已声明）；子 agent 用父 agent 的那份。
+    """
+    baseline = getattr(agent, "dependency_baseline", None)
+    if baseline is None:
+        session = getattr(agent, "session", None)
+        saved = session.get("dependency_baseline") if isinstance(session, dict) else None
+        if isinstance(saved, list):
+            baseline = frozenset(tuple(item) for item in saved if isinstance(item, (list, tuple)) and len(item) == 2)
+        else:
+            baseline = frozenset(declared_names(agent.root))
+            if isinstance(session, dict):
+                session["dependency_baseline"] = sorted(list(item) for item in baseline)
+        agent.dependency_baseline = baseline
+    return baseline
+
+
+def _from_requirement_files(agent, extraction, written):
+    """`pip install -r extra.txt`：文件里的包都算这次要装的。
+
+    文件已经提交进 git 的那部分（HEAD 里就有的名字）算项目自己声明的；同一条命令里先写再装的文件、
+    工作区外 / URL / 太大读不了的文件，守卫看不到会装什么，算可疑（有人时问，没人时拒绝）。
+    """
+    found, unverifiable = [], []
+    for path, text in requirement_files(read_workspace_file(agent), extraction.requirement_files):
+        if text is None or str(PurePosixPath(path)) in written:
+            reason = "这条命令会先改写它再安装" if text is not None else "在工作区外、是网址或超过 256KB"
+            unverifiable.append({"ecosystem": PYPI, "name": f"-r {path}", "verdict": "unverifiable", "similar": "",
+                                 "created": "", "detail": reason, "runner": False})
+            continue
+        if text == MISSING:
+            continue
+        parsed = names_in_file(path, text)
+        extraction.index_urls += parsed.index_urls  # 文件里写着私有索引：内部包名不发到公网
+        committed = names_in_file(path, committed_text(agent.root, path) or "").packages
+        known = {normalize(item.ecosystem, item.name) for item in committed}
+        found += [Requested(item.ecosystem, item.name, f"-r {path}") for item in parsed.packages
+                  if normalize(item.ecosystem, item.name) not in known]
+    return found, unverifiable
 
 
 def _requested(agent, name, args):
@@ -123,7 +188,7 @@ def _judge(agent, config, packages, extraction):
     for item in packages:
         similar = lookalike(item.ecosystem, item.name)
         findings.append({"ecosystem": item.ecosystem, "name": item.name, "verdict": "typosquat" if similar else "",
-                         "similar": similar, "created": "", "detail": ""})
+                         "similar": similar, "created": "", "detail": "", "runner": item.runner})
         unknown[item.ecosystem].append(findings[-1])
     for ecosystem, items in unknown.items():
         if not items:
@@ -147,7 +212,8 @@ def _judge(agent, config, packages, extraction):
                 item["verdict"], item["detail"] = "new", verdict["detail"]
             elif verdict["status"] == "unchecked" and not item["verdict"]:
                 item["verdict"], item["detail"] = "unchecked", verdict["detail"]
-    return [item for item in findings if item["verdict"]]
+    # npx tsc / uvx 某个全局工具：“仓库里没有”多半只是可执行文件名，不提示；拼错和刚注册照样拦
+    return [item for item in findings if item["verdict"] and not (item["runner"] and item["verdict"] not in SUSPICIOUS)]
 
 
 def _lookup(agent):
@@ -192,6 +258,14 @@ def _package_lock_names(path):
 
 def finding_text(item):
     name, registry = item["name"], REGISTRY_LABEL[item["ecosystem"]]
+    if item.get("runner") and item["verdict"] in SUSPICIOUS:
+        return _base_text(item, name, registry) + "；这条命令会下载并立刻运行它"
+    return _base_text(item, name, registry)
+
+
+def _base_text(item, name, registry):
+    if item["verdict"] == "unverifiable":
+        return f"没法检查 `{name}` 里要装的包（{item['detail']}）"
     if item["verdict"] == "typosquat":
         text = f"{name} 不在常用包名单里，和热门包 {item['similar']} 只差一个字符，可能是拼错或仿冒包"
         return text + (f"（{item['detail']}）" if item["detail"] else "")
@@ -228,6 +302,8 @@ def guard_permission(agent, tool, args, allow, deny):
         return GuardVerdict(decision=deny("dependency_blocked", "dependency_guard", deny_message(tool.name, check)))
     if confirm(tool.name, dict(args, dependency_note=note)):  # 这一次确认同时算普通审批，不会再弹第二次
         record_check(agent, tool.name, check, "confirmed")
+        confirmed = {(item["ecosystem"], normalize(item["ecosystem"], item["name"])) for item in check.suspicious}
+        agent.dependency_baseline = declared_baseline(agent) | confirmed  # 确认过的包，之后 `pip install -r` 不再问
         return GuardVerdict(decision=allow("dependency_confirmed"), notes=(f"[dependency guard] 用户确认后执行。{note}",))
     record_check(agent, tool.name, check, "denied")
     message = f"error: the user rejected {tool.name}: {'；'.join(finding_text(item) for item in check.suspicious)}"

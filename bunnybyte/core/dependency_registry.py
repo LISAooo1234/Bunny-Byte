@@ -25,6 +25,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10
 TIMEOUT = 2.0
 MAX_WORKERS = 8
 CACHE_TTL = 24 * 3600
+UNCHECKED_TTL = 300  # 查询失败（断网、超时）只在内存里记 5 分钟：不然离线时每次 `npx tsc` 都要等 2 秒
 NEW_PACKAGE_DAYS = 30
 PYPI_HOSTS = {"pypi.org", "files.pythonhosted.org", "pypi.python.org"}
 # 国内常用的 PyPI / npm 镜像：内容和公共仓库一样，配了它们照样可以去 pypi.org / npmjs 查
@@ -148,6 +149,7 @@ class RegistryLookup:
         self.fetch = fetch or fetch_json
         self.now = now or time.time
         self._cache = None
+        self._failed = {}  # 名字 → (verdict, 时间)，只在内存里
 
     def check(self, ecosystem, names):
         names = list(dict.fromkeys(normalize(ecosystem, name) for name in names))
@@ -155,8 +157,11 @@ class RegistryLookup:
         results, todo = {}, []
         for name in names:
             cached = cache.get(f"{ecosystem}:{name}")  # 镜像和官方源内容一样，缓存不区分
+            failed = self._failed.get(f"{ecosystem}:{name}")
             if cached and self.now() - float(cached.get("checked_at", 0)) < CACHE_TTL:
                 results[name] = _with_age(cached, self.now())
+            elif failed and self.now() - failed[1] < UNCHECKED_TTL:
+                results[name] = dict(failed[0])
             else:
                 todo.append(name)  # 全部都查：只查前几个的话，把可疑包排在第六个就能绕过
         if todo:
@@ -165,6 +170,8 @@ class RegistryLookup:
             for name, verdict in fetched.items():
                 if verdict["status"] in {"ok", "new"}:  # 查不到的不缓存：这个名字随时可能被注册
                     cache[f"{ecosystem}:{name}"] = dict(verdict, checked_at=self.now())
+                elif verdict["status"] == "unchecked":
+                    self._failed[f"{ecosystem}:{name}"] = (verdict, self.now())
                 results[name] = _with_age(verdict, self.now())
             self._save(cache)
         return results

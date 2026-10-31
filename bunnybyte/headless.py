@@ -261,9 +261,9 @@ def run_headless(
         emit(json.dumps(result, ensure_ascii=False))
     if error:
         err.write(f"bunny: {error}\n")
-    blocked = [item["name"] for entry in result["dependencies"] if entry["decision"] == "blocked" for item in entry["findings"] if item["verdict"] in {"typosquat", "new"}]
+    blocked = [item["name"] for entry in result["dependencies"] if entry["decision"] == "blocked" for item in entry["findings"] if item["verdict"] in {"typosquat", "new", "unverifiable"}]
     if blocked and not quiet:
-        err.write(f"bunny: 依赖守卫拦下了 {'、'.join(dict.fromkeys(blocked))}（疑似拼错 / 刚注册的包，无人值守时不安装；确认无误可加进 [deps] allow）。\n")
+        err.write(f"bunny: 依赖守卫拦下了 {'、'.join(dict.fromkeys(blocked))}（疑似拼错 / 刚注册 / 无法检查的包，无人值守时不安装；确认无误可加进 [deps] allow）。\n")
     if denials:
         err.write(f"bunny: {denials} 个工具调用因审批策略被拒绝（无人值守时 ask 等同 never；需要放行请加 --approval auto）。\n")
     if code == EXIT_UNVERIFIED:

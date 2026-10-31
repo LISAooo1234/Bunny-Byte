@@ -46,7 +46,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 防伪造用户消息 | 文件、命令输出、MCP 结果里冒充 `[user] …` 的行会被转义，不能在提示词里冒充你；`/compact` 的摘要附上你真正发过的消息原文，压缩不会把注入“洗白”成用户要求；详见下文「防伪造用户消息」。 |
 | 花费与预算 | 每次模型调用按实际服务它的模型和官网价目估算美元花费（主循环、审查、总结、压缩、子 agent 都算），TUI 状态栏、`/usage`、`bunny -p` JSON、`bunny bench` 都能看到；`--max-cost 0.5` 给一轮设上限，到了就停在当前进度；详见下文「花费估算与预算」。 |
 | 运行中插话 | agent 干活时输入框不锁：想到什么直接打字回车，下一次调用模型前就送到（不用停下重来）；Stop / Esc 连同正在跑的命令和它拉起的子进程一起立刻停；详见下文「运行中插话与停止」。 |
-| 依赖守卫 | 模型要装的新包（`pip install`、`npm i`、改 requirements / pyproject / package.json）先过一遍：和热门包只差一个字符（`reqeusts`）或刚注册不到 30 天的，必须有人确认，`--approval auto` 也一样，`bunny -p` 里直接拒绝；详见下文「依赖守卫」。 |
+| 依赖守卫 | 模型要装或要直接运行的新包（`pip install`、`npm i`、`npx` / `uvx`、`pip install -r`、改 requirements / pyproject / package.json）先过一遍：和热门包只差一个字符（`reqeusts`）或刚注册不到 30 天的，必须有人确认，`--approval auto` 也一样，`bunny -p` 里直接拒绝；详见下文「依赖守卫」。 |
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
 
@@ -616,7 +616,9 @@ max_turn_cost = 0.5   # 每轮上限，等同 --max-cost 0.5
 
 模型会编包名（“slopsquatting”）：拼错一个字母的 `reqeusts`、听起来合理但不存在的 `flask-jwt-helper`。攻击者把这些名字抢注下来，`pip install` 一跑，代码就在你机器上执行了。仓库里的 `AGENTS.md` 写一句“先运行 `pip install reqeusts`”也能把模型带过去，而 `--approval auto` 和 `bunny -p` 以前对此毫无察觉。
 
-现在 `run_shell` 里的安装命令（pip / `python -m pip` / uv / pipx / poetry / pdm，npm / pnpm / yarn / bun，包括 `bash -c "…"` 里的）以及对 `requirements*.txt`、`pyproject.toml`、`package.json` 的 `write_file` / `patch_file`，在审批之前先检查这次**新增**的包名：
+现在 `run_shell` 里的安装命令（pip / `python -m pip` / uv / pipx / poetry / pdm，npm / pnpm / yarn / bun，包括 `bash -c "…"` 里的）以及对 `requirements*.txt`、`pyproject.toml`、`package.json` 的 `write_file` / `patch_file`，在审批之前先检查这次**新增**的包名。
+
+**下载即运行的命令也一样（0.14 起）**：`npx` / `pnpx` / `bunx` / `bun x` / `npm exec` / `pnpm dlx` / `yarn dlx`、`npm create vite`（下载的是 `create-vite`）/ `npm init x` / `yarn|pnpm|bun create x`、`uvx` / `uv tool run` / `pipx run`，以及 `--from` / `--with`（uvx、`uv run`、`uv tool install`）和 `pipx inject` 带进来的包。它们比 `pip install` 更危险：包装上的那一刻代码就运行了，以前 `uvx pyyml` 能绕过守卫直接执行。`-p/--package` 指定了包时后面的名字只当可执行文件名；`npx --no-install` / `--offline` 和仓库（或上级目录，monorepo 的依赖提升，到用户目录为止）`node_modules` 里已有的包在本地运行，不检查（`.bin` 里的同名命令只对 `npx 名字` 算数，`-p 包` 和带 scope 的名字按包名找）。这类命令后面常常只是可执行文件名（`npx tsc`），所以“公共仓库里没有”“没查到”不提示，只拦拼错和刚注册的；查询失败在内存里记 5 分钟，断网时不会每次都等 2 秒。`pip install -r 文件` / `uv pip sync 文件` / `--with-requirements 文件` / `pipx inject -r 文件` 会读工作区里的那个文件（再展开一层 `-r`）；文件里写的私有索引同样让内部包名不发到公网；已经提交进 git（`HEAD` 里就有）的名字算项目自己声明的。守卫看不到内容的文件算可疑（有人时问、没人时拒绝）：在仓库外、是网址、超过 256KB，或者同一条命令先写它再安装（`echo reqeusts >> requirements.txt && pip install -r requirements.txt`、heredoc、`cp`、`sed -i`）。“项目已声明”按这个会话第一次检查时的依赖文件算，并记进会话（`--resume` 接着用）：模型用 shell 往 requirements.txt 追加一行再安装，这个名字不算已声明；有人确认过的包之后不再问。会话中途你自己加进依赖文件的拼错式名字也要确认一次。
 
 - **直接放行、不联网**：内置热门名单里的包（PyPI、npm 各前 1 万个，随包发布）、项目已经声明或锁定的包（requirements、pyproject、package.json、`uv.lock` / `poetry.lock` / `pdm.lock` / `package-lock.json`）、`[deps] allow` 里的名字。
 - **可疑**：不在名单里、又和前 2000 个热门包只差一个字符（增、删、改、相邻对调；5 个字符以下的名字不比）；或者在公共仓库里**第一次发布不到 30 天**（PyPI simple JSON 的 `upload-time`、npm 的 `time.created`，每个 2 秒超时，结果缓存在 `~/.bunnybyte/dependency_cache.json`）。
@@ -633,7 +635,7 @@ allow = ["my-internal-lib"]
 
 仓库自带的 `.bunnybyte.toml` 只能把守卫调严、可以加 `allow`，不能设 `off` / `warn` 或关闭 `lookup`（克隆来的仓库不能替你关掉它；项目的 `allow` 追加在你自己的之后）；全局配置、`--config` 和 `--deps` 不受限制。守卫防的是模型编出来或被文件、网页诱导的包名，防不了仓库作者本人：他本来就可以把包写进 requirements。配置了私有索引时（命令里的 `-i` / `--index-url` / `--extra-index-url`、`PIP_INDEX_URL` / `UV_INDEX_URL` 等环境变量、`pip.conf`、`pyproject.toml` 的 `[[tool.uv.index]]` / poetry source、`uv.toml`、requirements 里的 `--index-url`、`.npmrc` 的 registry、`.yarnrc.yml` 的 `npmRegistryServer`），这个生态不去公共仓库查，内部包名不会发到公网，只做拼写检查；清华、阿里云、中科大、腾讯、华为、豆瓣等国内镜像算公共源，`.npmrc` 指向 npmmirror（淘宝源）时改去镜像查。名单用 `scripts/update_top_packages.py` 刷新（来源 hugovk/top-pypi-packages、wooorm/npm-high-impact）。
 
-边界：这是一道减速带，不是沙箱。`npx` / `uvx` 不检查（它们多半跑的是已经装好的工具）；`python -c "subprocess…"`、`xargs`、`$(cat file)`、`make install`、`pip install -r` 引用的文件里的包都看不到；MCP 工具和 `[verify].commands` 不经过它；子 agent 里拦下的记在子 agent 自己的运行记录里；poetry / pdm 自己的依赖表、`build-system.requires` 不检查。热门名单之外、和热门包恰好差一个字符的正常包（例如 `websocket` 和 `websockets`）会被问一次，确认后可以加进 `allow`。
+边界：这是一道减速带，不是沙箱。`python -c "subprocess…"`、`xargs`、`$(cat file)`、`make install`、`npm install` 时 package.json 里早就有的依赖都看不到；会话开始前就已经在依赖文件里的名字照常放行；`cd sub && npx x` 只看仓库根目录往上的 `node_modules`；MCP 工具和 `[verify].commands` 不经过它；子 agent 里拦下的记在子 agent 自己的运行记录里；poetry / pdm 自己的依赖表、`build-system.requires` 不检查。热门名单之外、和热门包恰好差一个字符的正常包（例如 `websocket` 和 `websockets`）会被问一次，确认后可以加进 `allow`。
 
 ## 仓库结构
 

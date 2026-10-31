@@ -1,16 +1,18 @@
 """从一条 shell 命令或一次依赖文件改动里找出“这次要新装的包名”。
 
 只做纯文本解析，不联网：给依赖守卫（dependency_guard）用。认得的命令有 pip / python -m pip /
-uv / pipx / poetry / pdm 和 npm / pnpm / yarn / bun（`bash -c` 里的也算）；
-`npx` / `uvx` 不算，它们多半跑的是已经装好的工具；认得的文件有 requirements*.txt、
-pyproject.toml、package.json。路径、URL、git 地址、wheel 包和 `-r 文件` 都不算包名。
+uv / pipx / poetry / pdm 和 npm / pnpm / yarn / bun（`bash -c` 里的也算），以及会下载并直接运行包的
+npx / bunx / `npm exec` / `pnpm dlx` / `yarn dlx` / `npm create` / uvx / `uv tool run` / `pipx run`
+（标成 runner，解析在 dependency_runners）；`-r 文件` 记下文件名，由守卫去读。认得的文件有
+requirements*.txt、pyproject.toml、package.json。路径、URL、git 地址、wheel 包都不算包名。
 """
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+from . import dependency_runners as runners
 from .shell_segments import split_segments, stage_head
 
 try:
@@ -47,12 +49,15 @@ class Requested:
     ecosystem: str  # "pypi" | "npm"
     name: str  # 规范化前的写法（去掉版本、extras）
     origin: str  # 原文：命令里的那个参数，或文件名
+    runner: bool = False  # npx / uvx 这类：下载后立刻运行
+    bin_name: bool = False  # `npx 名字` 的裸位置参数：本地 node_modules/.bin 里有同名命令时不下载
 
 
 @dataclass
 class Extraction:
     packages: list
     index_urls: list  # 命令或文件里显式写的索引 / registry 地址
+    requirement_files: list = field(default_factory=list)  # `pip install -r 文件` 引用的文件（守卫去读）
 
 
 def normalize(ecosystem, name):
@@ -94,6 +99,7 @@ def _from_stage(head, args, result):
         inner = from_command(args[1])  # `bash -c "pip install x"`、`bash -lc …`
         result.packages += inner.packages
         result.index_urls += inner.index_urls
+        result.requirement_files += inner.requirement_files
         return
     if PYTHON_RE.match(head) and args[:2] == ["-m", "pip"]:
         head, args = "pip", args[2:]
@@ -103,18 +109,69 @@ def _from_stage(head, args, result):
         _collect(PYPI, args[1:], result)
     elif head == "uv" and args[:2] == ["pip", "install"]:
         _collect(PYPI, args[2:], result)
+    elif head == "uv" and args[:2] == ["pip", "sync"]:
+        result.requirement_files += [item for item in args[2:] if not item.startswith("-")]
     elif head == "uv" and args[:1] == ["add"] or head in {"poetry", "pdm"} and args[:1] == ["add"]:
         _collect(PYPI, args[1:], result)
-    elif head == "uv" and args[:2] == ["tool", "install"] or head == "pipx" and args[:1] == ["install"]:
-        _collect(PYPI, args[2:] if head == "uv" else args[1:], result)
+    elif head == "uvx" or head == "uv" and args[:2] == ["tool", "run"]:
+        _uv(args if head == "uvx" else args[2:], "run_tool", result, runner=True)
+    elif head == "uv" and args[:2] == ["tool", "install"]:
+        _uv(args[2:], "install", result)
+    elif head == "uv" and args[:1] == ["run"]:
+        _uv(args[1:], "run", result)
+    elif head == "pipx" and args[:1] == ["install"]:
+        _collect(PYPI, args[1:], result)
+    elif head == "pipx" and args[:1] in (["run"], ["inject"]):
+        specs, files = runners.pipx_specs(args[0], args[1:])
+        result.requirement_files += files
+        for spec in specs:
+            _add(PYPI, spec, result, runner=args[0] == "run")
+    elif head in {"npx", "pnpx", "bunx"} or head == "bun" and args[:1] == ["x"]:
+        _npm_runner(args[1:] if head == "bun" else args, result)
     elif head in {"npm", "pnpm", "bun", "yarn"}:
+        leading = _leading_packages(args)  # `pnpm --package=x dlx cmd`
         args = _skip_leading_options(head, args)  # `npm --prefix web install x`、`pnpm --filter app add x`
         if head == "yarn" and args[:1] == ["workspace"] and len(args) >= 2:
             args = args[2:]  # `yarn workspace web add x`
         if head == "yarn" and args[:1] == ["global"]:
             args = args[1:]
-        if args[:1] and (args[0] == "add" or head != "yarn" and args[0] in NPM_INSTALL_VERBS):
+        verb = args[0] if args else ""
+        if verb == "add" or head != "yarn" and verb in NPM_INSTALL_VERBS:
             _collect(NPM, args[1:], result)
+        elif head == "npm" and verb in {"exec", "x"} or head in {"pnpm", "yarn"} and verb == "dlx":
+            _npm_runner(args[1:], result, leading, shell_flags={"-c", "--shell-mode"} if head == "pnpm" else ())
+        elif verb == "create" or head == "npm" and verb in {"init", "innit"}:
+            spec = runners.create_spec(args[1:], lambda item: package_name(NPM, item))
+            if spec:
+                result.packages.append(Requested(NPM, spec, f"{head} {verb} {args[1] if len(args) > 1 else ''}".strip(), True))
+
+
+def _npm_runner(args, result, leading=(), shell_flags=()):
+    specs = [(item, False) for item in leading] or runners.npx_specs(args, shell_flags)
+    for spec, bin_name in specs:
+        name = package_name(NPM, spec)
+        if name:
+            result.packages.append(Requested(NPM, name, spec, True, bin_name))
+
+
+def _leading_packages(args):
+    found, index = [], 0
+    while index < len(args) and args[index].startswith("-"):
+        flag, eq, value = args[index].partition("=")
+        if flag in {"--package", "-p"}:
+            value = value if eq else (args[index + 1] if index + 1 < len(args) else "")
+            found.append(value)
+            index += 0 if eq else 1
+        index += 1
+    return [item for item in found if item]
+
+
+def _uv(args, mode, result, runner=False):
+    specs, urls, files = runners.uv_specs(args, mode)
+    result.index_urls += urls
+    result.requirement_files += files
+    for spec in specs:
+        _add(PYPI, spec, result, runner=runner)
 
 
 def _skip_leading_options(head, args):
@@ -134,11 +191,18 @@ def _collect(ecosystem, args, result):
             skip_next = False
             if args[index - 1] in INDEX_FLAGS:
                 result.index_urls.append(item)
+            elif args[index - 1] in {"-r", "--requirement", "--requirements"}:
+                result.requirement_files.append(item)
+            continue
+        if item.startswith("-r") and len(item) > 2 and not item.startswith("--") and ecosystem == PYPI:
+            result.requirement_files.append(item[2:])  # `-rextra.txt`
             continue
         if item.startswith("-"):
             flag, _, value = item.partition("=")
             if flag in INDEX_FLAGS and value:
                 result.index_urls.append(value)
+            elif flag in {"-r", "--requirement", "--requirements"} and value:
+                result.requirement_files.append(value)
             skip_next = flag in value_flags and not value
             continue
         if item in {"--", "@"}:
@@ -146,10 +210,10 @@ def _collect(ecosystem, args, result):
         _add(ecosystem, item, result)
 
 
-def _add(ecosystem, item, result):
+def _add(ecosystem, item, result, runner=False):
     name = package_name(ecosystem, item)
     if name:
-        result.packages.append(Requested(ecosystem, name, item))
+        result.packages.append(Requested(ecosystem, name, item, runner))
 
 
 def package_name(ecosystem, spec):
@@ -185,6 +249,12 @@ def from_file_change(relative_path, before_text, after_text):
     fresh = [item for item in after.packages if normalize(item.ecosystem, item.name) not in known]
     urls = [url for url in after.index_urls if url not in before.index_urls]
     return Extraction(_dedupe(fresh), urls)
+
+
+def names_in_file(relative_path, text):
+    """`pip install -r 文件` 引用的文件里的包（文件名不叫 requirements 也按 requirements 解析）。"""
+    kind = dependency_file_kind(relative_path) or "requirements"
+    return _file_names(kind, text) or Extraction([], [])
 
 
 def dependency_file_kind(relative_path):

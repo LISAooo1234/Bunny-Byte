@@ -103,7 +103,7 @@ def _tool_line(event):
     return _join(f"  {icon} {tool_title(name)} {card_args_summary(name, args)}".rstrip(), summary, error, changed, format_duration(event.get("duration_ms")))
 
 
-DEPENDENCY_VERDICTS = {"typosquat": "疑似拼错", "new": "刚注册", "missing": "不存在", "unchecked": "未查到"}
+DEPENDENCY_VERDICTS = {"typosquat": "疑似拼错", "new": "刚注册", "missing": "不存在", "unchecked": "未查到", "unverifiable": "无法检查"}
 
 
 def _event_line(event):
