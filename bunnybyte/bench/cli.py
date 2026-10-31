@@ -15,7 +15,8 @@ from .report import (
     render_row,
     save_record,
 )
-from .runner import DEFAULT_MAX_STEPS, DEFAULT_TASK_TIMEOUT, FIX_PROOF_MODES, pytest_preflight, run_bench
+from ..core.goal import MAX_ROUNDS
+from .runner import DEFAULT_MAX_STEPS, GOAL_SUITE_MAX_STEPS, DEFAULT_TASK_TIMEOUT, FIX_PROOF_MODES, pytest_preflight, run_bench
 from .tasks import select_tasks, task_set_hash
 
 DEFAULT_BENCH_PROVIDER = "deepseek"
@@ -38,13 +39,14 @@ def build_bench_parser():
     parser.add_argument("--config", default=None, help="BunnyByte TOML 配置文件路径。")
     parser.add_argument("--cwd", default=".", help="从该目录向上查找 .bunnybyte.toml。")
     parser.add_argument("--tasks", default=None, help="只运行指定任务，逗号分隔。")
-    parser.add_argument("--suite", default="core", choices=("core", "spec", "proof", "long"), help="任务套件：core 是默认 10 题；spec 是“测试全过、需求漏了一半”的 3 题，用来衡量独立审查；proof 是“补的回归测试抓不住 bug”的 3 题，用来衡量修复证明；long 是大文件、几十次调用的长回合 1 题，用来衡量本轮压缩和提示词复用。")
+    parser.add_argument("--suite", default="core", choices=("core", "spec", "proof", "long", "goal"), help="任务套件：core 是默认 10 题；spec 是“测试全过、需求漏了一半”的 3 题，用来衡量独立审查；proof 是“补的回归测试抓不住 bug”的 3 题，用来衡量修复证明；long 是大文件、几十次调用的长回合 1 题，用来衡量本轮压缩和提示词复用；goal 是一轮 12 步做不完的 3 题，用来比较目标模式和单轮（默认 --max-steps 12）。")
     parser.add_argument("--repeat", type=int, default=1, help="每个任务重复次数；次数越多分数越稳。")
-    parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS, help="agent 每题的工具步数硬上限（默认与正常 CLI 一致）。")
+    parser.add_argument("--max-steps", type=int, default=None, help=f"agent 每题（目标模式下每轮）的工具步数硬上限；默认 {DEFAULT_MAX_STEPS}（与正常 CLI 一致），--suite goal 默认 {GOAL_SUITE_MAX_STEPS}。")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TASK_TIMEOUT, help="单个任务的墙钟上限（秒）。")
     parser.add_argument("--verify", action="store_true", help="给 agent 开启验证闸门（交卷前自动跑探测到的测试，失败可修复 1 轮）；结果单独对比。")
     parser.add_argument("--critic", action="store_true", help="给 agent 开启独立审查（交卷前对照需求和 diff 挑错，有证据的意见退回修复 1 轮）；结果单独对比。")
     parser.add_argument("--fix-proof", default="off", choices=FIX_PROOF_MODES, help="给 agent 开启修复证明（同时开启验证闸门）：report 只记录，repair 在测试没测到改动时退回模型 1 轮；结果单独对比。")
+    parser.add_argument("--goal-rounds", type=int, default=0, help="用目标模式跑（只支持带检查命令的题，如 --suite goal）：每轮结束后运行时跑题目的检查，没通过就开下一轮，最多 N 轮；0 = 普通单轮。结果单独对比。")
     parser.add_argument("--out", default=None, help="结果目录；默认 ./benchmarks/results（存在时），否则 ~/.bunnybyte/bench-results。")
     parser.add_argument("--no-save", action="store_true", help="只打印，不写结果文件。")
     parser.add_argument("--save", action="store_true", help="用 --tasks 只跑部分任务时默认不写结果文件；加上它才保存。")
@@ -97,6 +99,14 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         tasks = select_tasks(ids, suite=args.suite)
         if args.repeat < 1:
             raise ValueError("--repeat 必须 >= 1")
+        if args.max_steps is None:
+            args.max_steps = GOAL_SUITE_MAX_STEPS if args.suite == "goal" else DEFAULT_MAX_STEPS
+        if not 0 <= args.goal_rounds <= MAX_ROUNDS:
+            raise ValueError(f"--goal-rounds 应在 0 到 {MAX_ROUNDS} 之间")
+        if args.goal_rounds and not args.list:
+            missing = [task.id for task in tasks if not task.goal_check]
+            if missing:
+                raise ValueError(f"这些任务没有检查命令，不能用 --goal-rounds：{', '.join(missing)}（用 --suite goal）")
         if args.list:
             print(list_text(tasks), file=stream)
             return 0
@@ -124,7 +134,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
 
     progress = sys.stderr if args.json else stream
     print(
-        f"bunny bench：{provider}/{model}，{len(tasks)} 个任务 × {args.repeat} 次，步数上限 {args.max_steps}，单题 {args.timeout}s{'，验证闸门开启' if args.verify or args.fix_proof != 'off' else ''}{'，修复证明 ' + args.fix_proof if args.fix_proof != 'off' else ''}{'，独立审查开启' if args.critic else ''}",
+        f"bunny bench：{provider}/{model}，{len(tasks)} 个任务 × {args.repeat} 次，步数上限 {args.max_steps}，单题 {args.timeout}s{'，验证闸门开启' if args.verify or args.fix_proof != 'off' else ''}{'，修复证明 ' + args.fix_proof if args.fix_proof != 'off' else ''}{'，独立审查开启' if args.critic else ''}{f'，目标模式最多 {args.goal_rounds} 轮' if args.goal_rounds else ''}",
         file=progress,
     )
     rows = run_bench(
@@ -138,6 +148,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         critic=args.critic,
         prices=prices,
         fix_proof=args.fix_proof,
+        goal_rounds=args.goal_rounds,
     )
     record = build_record(
         rows,
@@ -151,6 +162,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         verify=args.verify,
         critic=args.critic,
         fix_proof=args.fix_proof,
+        goal_rounds=args.goal_rounds,
     )
     record["temperature"] = BENCH_TEMPERATURE
     previous = previous_comparable(record, load_history(out_dir))

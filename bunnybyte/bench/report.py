@@ -107,6 +107,21 @@ def summarize(rows):
         "fix_proof_agreement": _proof_agreement(rows),
         "text_tool_rescued": sum(row.get("text_tool_rescued", 0) for row in rows),
         "text_tool_retries": sum(row.get("text_tool_retries", 0) for row in rows),
+        **_goal_summary(rows),
+    }
+
+
+def _goal_summary(rows):
+    """检查过了、隐藏判分没过 = 假达成（每种跑法都统计）；目标模式另记达成数、平均轮数、没做成的题花了多少钱。"""
+    checked = [row for row in rows if row.get("check_passed") is not None]
+    unmet = [row.get("cost_usd") for row in rows if not row["passed"]]
+    return {
+        "check_passed": sum(1 for row in checked if row["check_passed"]),
+        "false_achieved": sum(1 for row in checked if row["check_passed"] and not row["passed"]),
+        "goal_achieved": sum(1 for row in rows if row.get("goal_status") == "achieved"),
+        "avg_goal_rounds": _average([row for row in rows if row.get("goal_status")], "goal_rounds"),
+        "paid_calls": _total(rows, "paid_calls"),
+        "cost_unmet": round(sum(unmet), 6) if unmet and all(isinstance(value, (int, float)) for value in unmet) else None,
     }
 
 
@@ -129,7 +144,7 @@ def package_version():
 
 
 def build_record(
-    rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False, critic=False, fix_proof="off"
+    rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False, critic=False, fix_proof="off", goal_rounds=0
 ):
     return {
         "schema_version": SCHEMA_VERSION,
@@ -147,6 +162,7 @@ def build_record(
         "verify": bool(verify) or fix_proof != "off",
         "critic": bool(critic),
         "fix_proof": fix_proof,
+        "goal_rounds": int(goal_rounds or 0),
         "summary": summarize(rows),
         "runs": rows,
     }
@@ -198,6 +214,7 @@ def previous_comparable(record, history):
         and bool(item.get("verify")) == bool(record.get("verify"))
         and bool(item.get("critic")) == bool(record.get("critic"))
         and (item.get("fix_proof") or "off") == (record.get("fix_proof") or "off")  # 旧结果没有这一项：当时没跑修复证明
+        and int(item.get("goal_rounds") or 0) == int(record.get("goal_rounds") or 0)
         and item["captured_at"] < record["captured_at"]
     ]
     return older[-1] if older else None
@@ -245,6 +262,10 @@ def render_row(row):
     wasted = f"，空转 {row['wasted_steps']}" if row.get("wasted_steps") else ""
     if row.get("fix_proof"):
         gate += f"  [修复证明 {row['fix_proof']}{'·退回' + str(row['fix_proof_repairs']) if row.get('fix_proof_repairs') else ''}]"
+    if row.get("goal_status"):
+        gate += f"  [目标 {row['goal_status']}·{row.get('goal_rounds', 0)} 轮]"
+    if row.get("check_passed") and not row["passed"]:
+        gate += "  [检查通过但判分未过]"
     if row.get("critic_rounds"):
         gate += f"  [审查 {row['critic_rounds']} 次·反对 {row.get('critic_objections', 0)}]"
     return f"{mark} {row['task']} #{row['attempt']}  {row['steps']} 步{wasted}{budget}  {row['wall_seconds']}s{tokens}{gate}{note}"
@@ -274,6 +295,7 @@ def render_record(record, previous=None):
         *_verify_lines(record),
         *_critic_lines(record),
         *_proof_lines(record),
+        *_goal_lines(record),
         *_text_tool_lines(summary),
         _delta(record, previous),
         NOISE_NOTE.format(step=100 / max(len(record["task_ids"]) * record["repeat"], 1)),
@@ -347,6 +369,20 @@ def _proof_lines(record):
     return [
         f"修复证明（{record['fix_proof']}）：{'、'.join(parts) or '一次也没跑'}；退回模型 {summary.get('fix_proof_repairs', 0)} 次{agree}"
     ]
+
+
+def _goal_lines(record):
+    summary = record["summary"]
+    lines = []
+    if record.get("goal_rounds"):
+        unmet = summary.get("cost_unmet")
+        lines.append(
+            f"目标模式（最多 {record['goal_rounds']} 轮）：达成 {summary.get('goal_achieved', 0)}/{summary['runs']}，"
+            f"平均 {_fmt(summary.get('avg_goal_rounds'))} 轮" + (f"；没做成的题共花费 {format_usd(unmet)}" if unmet is not None else "")
+        )
+    if summary.get("false_achieved"):
+        lines.append(f"假达成：{summary['false_achieved']} 次题目自带的检查通过了，隐藏判分却没过")
+    return lines
 
 
 def _verify_lines(record):

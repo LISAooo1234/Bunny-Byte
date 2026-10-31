@@ -475,7 +475,7 @@ bunny -p --goal "让 make check 通过" --goal-check "make check" --approval aut
 - 状态存在会话里：`/goal` 查看每轮结果，`/goal resume` 接着做（`--resume` 之后也行，进程中途被杀的目标恢复为“已暂停”），`/goal clear` 放弃；`/fork` 出来的分支不继承目标。
 - 检查命令：`--check` 写的命令是你亲手给的，直接运行；不写时用 `[verify].commands`，开始前按审批策略询问一次（`-p` 下需要 `--approval auto`，否则退出码 2）。
 - `bunny -p --goal`：达成退出码 0，暂停 / 未达成 / 预算用完退出码 3，运行出错（如 provider 报错）仍是 1；JSON 结果多一个 `goal` 块（`status`、`reason`、`rounds`、`cost_usd`、`baseline`、每轮 `receipts`、`check_files_changed`）；`bunny replay` 每轮一行「🎯 目标检查」。不能和 `--require-verified` 同用（目标本身就以检查通过为准）。
-- 限制：检查命令由你决定，运行时只认它的退出码；没有“评审模型”兜底（计划中）；每轮仍按 `--max-steps` 计步，目标期间不会自动提高；还没有 bench 数据说明多轮在便宜模型上值不值（计划中的 `bunny bench --suite goal`）。
+- 限制：检查命令由你决定，运行时只认它的退出码；没有“评审模型”兜底（计划中）；每轮仍按 `--max-steps` 计步，目标期间不会自动提高；`bunny bench --suite goal` 实测（Haiku 4.5，3 题 × 3 次，每轮 12 步）：单轮 0/9，目标模式最多 4 轮 6/9，和直接把步数上限提到 48 的单轮一样（6/9），花费多约 26%；两种跑法各有 3 次“检查通过、隐藏判分没过”，检查比需求弱时目标模式也会被骗（见 [docs/benchmark.md](docs/benchmark.md#目标模式套件--suite-goal)）。
 
 ## 项目规则
 

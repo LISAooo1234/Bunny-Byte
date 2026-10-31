@@ -4,6 +4,7 @@ import time
 
 from ..providers.base import ModelToolCall
 from .engine_helpers import (
+    step_limit_suffix,
     execute_tool_payloads,
     finish_limited_run,
     finish_stopped_run,
@@ -511,12 +512,7 @@ def run_turn(engine, user_message, mention_text=None):
             else None
         )
         if summary:
-            final = (
-                summary
-                + "\n\n— 已达本轮 step 预算上限（max_steps）。以上是当前进展总结。"
-                "继续工作：在 REPL 输入 /resume 续接本会话，或直接说"
-                "「继续」让我接着干。"
-            )
+            final = summary + step_limit_suffix(agent)
         else:
             final = "Stopped after reaching the step limit without a final answer."
         task_state.stop_step_limit(final)

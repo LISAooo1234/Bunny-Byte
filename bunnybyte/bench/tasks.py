@@ -27,8 +27,15 @@ class BenchTask:
     read_only: bool = False
     step_budget: int = 14  # 高效完成应有的工具步数；超出只记 over_budget，不直接判负
     solution: tuple = ()
+    goal_check: str = ""  # 目标模式用的检查命令（仓库里看得见的测试）；空串表示这题不支持 --goal-rounds
 
     def digest_payload(self):
+        payload = self._base_payload()
+        if self.goal_check:  # 只在有值时进指纹：旧套件的任务集指纹不变
+            payload["goal_check"] = self.goal_check
+        return payload
+
+    def _base_payload(self):
         return {
             "id": self.id,
             "prompt": self.prompt,
@@ -72,6 +79,13 @@ def proof_tasks():
     return list(PROOF_TASKS)
 
 
+def goal_tasks():
+    """单独的“目标模式”套件：一轮 12 步做不完的多文件任务；不进默认任务集。"""
+    from .catalog_goal import GOAL_TASKS
+
+    return list(GOAL_TASKS)
+
+
 def long_tasks():
     """单独的“长回合”套件：大文件、几十次调用，本轮历史会被压缩；不进默认任务集。"""
     from .catalog_long import LONG_TASKS
@@ -79,7 +93,7 @@ def long_tasks():
     return list(LONG_TASKS)
 
 
-SUITES = {"core": all_tasks, "spec": spec_tasks, "proof": proof_tasks, "long": long_tasks}
+SUITES = {"core": all_tasks, "spec": spec_tasks, "proof": proof_tasks, "long": long_tasks, "goal": goal_tasks}
 
 
 def select_tasks(ids=None, suite="core"):
@@ -88,7 +102,7 @@ def select_tasks(ids=None, suite="core"):
     tasks = SUITES[suite]()
     if not ids:
         return tasks
-    by_id = {task.id: task for task in [*all_tasks(), *spec_tasks(), *proof_tasks(), *long_tasks()]}
+    by_id = {task.id: task for task in [*all_tasks(), *spec_tasks(), *proof_tasks(), *long_tasks(), *goal_tasks()]}
     unknown = [item for item in ids if item not in by_id]
     if unknown:
         raise ValueError(f"未知的 bench 任务：{', '.join(unknown)}；可用：{', '.join(by_id)}")

@@ -329,6 +329,18 @@ _STEP_LIMIT_SUMMARY_NOTICE = (
 )
 
 
+STEP_LIMIT_SUFFIX = (
+    "\n\n— 已达本轮 step 预算上限（max_steps）。以上是当前进展总结。"
+    "继续工作：在 REPL 输入 /resume 续接本会话，或直接说「继续」让我接着干。"
+)
+GOAL_STEP_LIMIT_SUFFIX = "\n\n— 已达本轮 step 预算上限（max_steps）。目标模式会先跑检查，没通过就自动开下一轮。"
+
+
+def step_limit_suffix(agent):
+    """步数用尽时附在总结后的说明：目标模式由运行时接着开下一轮，不需要用户 /resume。"""
+    return GOAL_STEP_LIMIT_SUFFIX if getattr(agent, "_goal_driving", False) else STEP_LIMIT_SUFFIX
+
+
 def request_step_limit_summary(
     engine, task_state, user_message, notice=_STEP_LIMIT_SUMMARY_NOTICE, event="step_limit_summary"
 ):

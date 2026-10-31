@@ -1,6 +1,7 @@
 """bench 运行器：为每个任务搭一个临时 git 仓库，驱动真实 agent 跑完，再用 verifier 判分。"""
 
 import contextlib
+import json
 import os
 import re
 import shlex
@@ -10,10 +11,12 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 from ..core.critic import CriticConfig
+from ..core.goal import drive_goal, start_goal
 from ..core.run_usage import trace_prompt_reuse, trace_usage
 from ..core.runtime import BunnyByte
 from ..core.session_store import SessionStore
@@ -21,7 +24,7 @@ from ..core.shadow_snapshots import _LOCK, ShadowError, ShadowStore
 from ..core.tool_call_rescue import text_tool_receipt
 from ..core.verification import VerifyConfig, claims_verified
 from ..core.workspace import WorkspaceContext
-from .tasks import PY
+from .tasks import PY, fill_python
 
 VERIFY_TIMEOUT = 60
 DEFAULT_TASK_TIMEOUT = 300
@@ -31,6 +34,7 @@ FIX_PROOF_MODES = ("off", "report", "repair")
 BENCH_CRITIC = CriticConfig(mode="auto", max_rounds=1)
 ABORT_GRACE_SECONDS = 5  # 请求中止后再等多久；agent 只在步与步之间检查中止标志
 DEFAULT_MAX_STEPS = 50  # 与正常 CLI 的 --max-steps 默认值一致，分数才代表真实使用
+GOAL_SUITE_MAX_STEPS = 12  # goal 套件的每轮上限：高效完成要 14–19 步，一轮做不完才量得到多轮的作用
 IGNORED_PARTS = {".git", ".bunnybyte", "__pycache__"}
 GIT_IDENTITY = ["-c", "user.name=bunny-bench", "-c", "user.email=bench@example.invalid"]
 
@@ -106,6 +110,56 @@ def _tail(text, limit=300):
 def _remove_bytecode(root):
     for cache in Path(root).rglob("__pycache__"):
         shutil.rmtree(cache, ignore_errors=True)
+
+
+def run_goal_check(task, root):
+    """跑一遍题目自带的、仓库里看得见的检查：True 通过，False 不通过，None 表示这题没有检查。
+
+    在隐藏 verifier 之前跑，用来区分“检查都没过就交卷”和“检查过了、其实没做对”（假达成）。
+    """
+    if not task.goal_check:
+        return None
+    _remove_bytecode(root)
+    try:
+        done = subprocess.run(
+            fill_python(task.goal_check, python_command()),
+            cwd=root,
+            shell=True,
+            capture_output=True,
+            timeout=VERIFY_TIMEOUT,
+            env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return done.returncode == 0
+
+
+def run_totals(agent, state):
+    """把主会话自己的运行（目标模式下按轮次顺序，每轮一次）的步数、token、提示词复用加起来。
+
+    只算主会话的 run_id：子 agent 的运行也写在同一个运行目录里，混进来会改变旧套件的口径。
+    """
+    totals = {"steps": 0, "wasted_steps": 0, "model_calls": 0, "round_stops": []}
+    usage = {"input_tokens": None, "output_tokens": None, "cached_tokens": None, "prompt_chars": None, "reused_chars": None}
+    goal = agent.session.get("goal")
+    run_ids = [str(item.get("run_id", "")) for item in goal.get("rounds", [])] if isinstance(goal, dict) else []
+    if state.run_id not in run_ids:
+        run_ids.append(state.run_id)  # 不是目标模式，或最后一轮没来得及记进轮次
+    for run_id in dict.fromkeys(item for item in run_ids if item):
+        try:
+            data = json.loads(agent.run_store.task_state_path(run_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = state.to_dict() if run_id == state.run_id else {}
+        totals["steps"] += int(data.get("tool_steps", 0))
+        totals["wasted_steps"] += int(data.get("wasted_steps", 0))
+        totals["model_calls"] += int(data.get("attempts", 0))
+        totals["round_stops"].append(str(data.get("stop_reason", "")))
+        trace = agent.run_store.trace_path(run_id)
+        for key, value in {**trace_usage(trace), **trace_prompt_reuse(trace)}.items():
+            if value is not None:
+                usage[key] = (usage[key] or 0) + value
+    totals.update(usage)
+    return totals
 
 
 def verify(task, root, answer, before):
@@ -202,21 +256,38 @@ def fix_proof_label(result):
     return f"skipped:{result.get('reason', '')}" if status == "skipped" else status
 
 
-def _drive(agent, prompt, timeout, result):
-    """在工作线程里跑 agent.ask：超时先请求中止，宽限期后仍不返回就放弃该线程。"""
+def _drive(agent, events, timeout, result, *, close_on_stop=False):
+    """在工作线程里消费一轮（或一个目标的全部轮次）的事件：超时先请求中止，宽限期后仍不返回就放弃该线程。
+
+    close_on_stop：目标模式下超时后在下一个事件处直接关掉生成器。run_turn 开头会清掉中止标记，
+    恰好落在两轮之间的中止可能被吞掉，只靠标记的话下一轮会照常跑完、继续花钱。
+    """
     outcome = {}
+    stop = threading.Event()
 
     def work():
+        stream = None
         try:
-            outcome["answer"] = agent.ask(prompt)
+            stream = events()
+            for event in stream:
+                if event.get("type") in {"final", "stop"}:
+                    outcome["answer"] = event.get("content", "")
+                if close_on_stop and stop.is_set():
+                    break
         except Exception as exc:  # 模型/网络故障算这一题失败，但不能让整轮 bench 中断
             outcome["error"] = exc
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                with contextlib.suppress(Exception):
+                    close()
 
     worker = threading.Thread(target=work, daemon=True)
     worker.start()
     worker.join(timeout)
     if worker.is_alive():
         result["timed_out"] = True
+        stop.set()
         agent.abort_current_turn()
         worker.join(ABORT_GRACE_SECONDS)
     return outcome.get("answer", ""), outcome.get("error"), worker.is_alive()
@@ -234,15 +305,19 @@ def run_task(
     critic=False,
     prices=None,
     fix_proof="off",
+    goal_rounds=0,
 ):
     """在全新的临时仓库里跑一次任务，返回一行可序列化的结果。
 
     fix_proof 为 report / repair 时同时打开验证闸门，并按该模式跑修复证明。
+    goal_rounds > 0 时用目标模式驱动（检查命令是 task.goal_check，最多这么多轮），墙钟上限仍是 timeout。
 
     max_steps 是 agent 的硬上限；task.step_budget 只是“高效完成应有的步数”，超出记为 over_budget，不直接判负。
     """
     if fix_proof not in FIX_PROOF_MODES:
         raise ValueError(f"fix_proof 必须是 {', '.join(FIX_PROOF_MODES)} 之一")
+    if goal_rounds and not task.goal_check:
+        raise ValueError(f"任务 {task.id} 没有 goal_check，不能用目标模式跑")
     real_home = Path.home()
     root = Path(keep_dir or tempfile.mkdtemp(prefix=f"bunny-bench-{task.id}-"))
     write_tree(root, task.files)
@@ -277,12 +352,21 @@ def run_task(
         "fix_proof_repairs": 0,
         "text_tool_rescued": 0,
         "text_tool_retries": 0,
+        "paid_calls": 0,
+        "check_passed": None,
+        "goal_status": "",
+        "goal_reason": "",
+        "goal_rounds": 0,
+        "round_stops": [],
     }
     verify_config = None
     if fix_proof != "off":
         verify_config = VerifyConfig(mode="auto", timeout=60, max_repair_rounds=1, fix_proof=fix_proof)
     elif verify_gate:
         verify_config = BENCH_VERIFY
+    if verify_config is not None and task.goal_check:
+        # 带 goal_check 的题：闸门跑的就是这条检查，单轮和目标模式的回合内修复针对同一件事
+        verify_config = replace(verify_config, commands=(fill_python(task.goal_check, python_command()),))
     started = time.monotonic()
     agent = None
     answer, error, stuck = "", None, False
@@ -300,16 +384,18 @@ def run_task(
             )
             agent.cost_meter.prices = dict(prices or {})
             agent.unattended = True  # 依赖守卫不会在 bench 线程里等终端输入
-            answer, error, stuck = _drive(agent, task.prompt, timeout, result)
+            if goal_rounds:
+                _, problem = start_goal(agent, task.prompt, check=fill_python(task.goal_check, python_command()), max_rounds=goal_rounds)
+                if problem:
+                    raise RuntimeError(problem)
+                answer, error, stuck = _drive(agent, lambda: drive_goal(agent), timeout, result, close_on_stop=True)
+            else:
+                answer, error, stuck = _drive(agent, lambda: agent.engine.run_turn(task.prompt), timeout, result)
     except Exception as exc:
         error = exc
     result["wall_seconds"] = round(time.monotonic() - started, 2)
     state = getattr(agent, "current_task_state", None)
     if state is not None:
-        result["steps"] = state.tool_steps
-        result["wasted_steps"] = state.wasted_steps
-        result["over_budget"] = state.tool_steps > task.step_budget
-        result["model_calls"] = state.attempts
         result["stop_reason"] = state.stop_reason
         result["verify_status"] = str(state.verification.get("status", ""))
         result["verify_rounds"] = int(state.verification.get("rounds", 0))
@@ -319,17 +405,28 @@ def run_task(
         text_tools = text_tool_receipt(agent, state)
         result["text_tool_rescued"] = sum(1 for item in text_tools if item["decision"] == "rescued")
         result["text_tool_retries"] = sum(1 for item in text_tools if item["decision"] == "retry")
-        result.update(trace_usage(agent.run_store.trace_path(state)))
-        result.update(trace_prompt_reuse(agent.run_store.trace_path(state)))
-        turn = agent.cost_meter.turn
-        if turn["calls"] and not turn["unpriced_calls"]:
-            result["cost_usd"] = round(turn["usd"], 6)  # 有一次调用没价格就整题不报，免得把偏低的数当真
+        totals = run_totals(agent, state)  # 目标模式下每轮一次运行：步数、token 都按全部轮次加总
+        result["round_stops"] = totals.pop("round_stops")
+        result.update(totals)
+        result["over_budget"] = result["steps"] > task.step_budget
+    if agent is not None:
+        # 花费和调用次数都取整个会话：目标模式的多轮、步数用尽时的总结调用都算进去，两种跑法同一把尺
+        spent = agent.cost_meter.session_totals
+        result["paid_calls"] = int(spent.get("calls", 0))
+        if spent.get("calls") and not spent.get("unpriced_calls"):
+            result["cost_usd"] = round(float(spent["usd"]), 6)  # 有一次调用没价格就整题不报，免得把偏低的数当真
+        goal = agent.session.get("goal")
+        if isinstance(goal, dict):
+            result["goal_status"] = str(goal.get("status", ""))
+            result["goal_reason"] = scrub(str(goal.get("reason", "")), root, real_home)[:200]
+            result["goal_rounds"] = len(goal.get("rounds", []))
     problems = []
     if stuck:
         problems.append(f"超过 {timeout}s 墙钟上限，且中止请求未能生效")
     elif error is not None:
         problems.append(f"运行出错：{type(error).__name__}: {_tail(error, 160)}")
     else:
+        result["check_passed"] = run_goal_check(task, root)
         problems = verify(task, root, answer, before)
         if result["timed_out"]:
             problems.insert(0, f"超过 {timeout}s 墙钟上限")
@@ -365,6 +462,7 @@ def run_bench(
     critic=False,
     prices=None,
     fix_proof="off",
+    goal_rounds=0,
 ):
     results = []
     for task in tasks:
@@ -379,6 +477,7 @@ def run_bench(
                 critic=critic,
                 prices=prices,
                 fix_proof=fix_proof,
+                goal_rounds=goal_rounds,
             )
             results.append(row)
             if on_result is not None:
