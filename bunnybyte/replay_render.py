@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime
 
+from .core.fix_proof import skip_text
 from .core.provider_failover import failover_notice
 from .tui.tool_cards import card_args_summary, clip_cells, format_duration, summarize_tool_output, tool_title
 
@@ -108,6 +109,13 @@ def _event_line(event):
     if name == "verification_run":
         icon = "✓" if event.get("status") == "passed" else ("✗" if event.get("status") in {"failed", "timeout"} else "·")
         return _join(f"  {icon} 验证 {clip_cells(str(event.get('command', '')), 60)}", event.get("status"), format_duration(event.get("duration_ms")))
+    if name == "fix_proof":
+        status = str(event.get("status", ""))
+        icon = {"proven": "✓", "theater": "⚠", "weak": "·"}.get(status, "·")
+        label = {"proven": "已证明", "theater": "测试没测到改动", "weak": "弱（导入失败）"}.get(status, f"跳过：{skip_text(str(event.get('reason', '')))}")
+        tests = clip_cells("、".join(event.get("tests") or []), 50)
+        seconds = float(event.get("control_seconds") or 0) + float(event.get("reverted_seconds") or 0)
+        return _join(f"  {icon} 修复证明 {tests}".rstrip(), label, format_duration(int(seconds * 1000)) if seconds else "")
     if name == "verification_declined":
         return f"  · 验证未运行（未获批准）：{clip_cells('；'.join(event.get('commands') or []), 60)}"
     if name == "critic_review":

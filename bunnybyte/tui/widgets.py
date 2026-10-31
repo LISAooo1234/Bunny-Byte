@@ -52,9 +52,10 @@ def format_tool_args(name: str, args: dict | None) -> str:
     args = args or {}
     if name in {"run_shell", "verify"}:
         commands = args.get("commands")
+        note = f"\n（{args['note']}）" if name == "verify" and args.get("note") else ""
         if isinstance(commands, list) and commands:
-            return " ; ".join(str(item) for item in commands)
-        return str(args.get("command", ""))
+            return " ; ".join(str(item) for item in commands) + note
+        return str(args.get("command", "")) + note
     if name in {"read_file", "write_file", "patch_file", "list_files"}:
         path = str(args.get("path", "."))
         if name == "read_file":

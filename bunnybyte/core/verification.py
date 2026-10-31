@@ -24,6 +24,7 @@ from .shell_segments import split_segments, stage_head
 from .workspace import IGNORED_PATH_NAMES
 
 VERIFY_MODES = ("off", "ask", "auto")
+FIX_PROOF_MODES = ("off", "report", "repair")
 DEFAULT_TIMEOUT = 120
 DEFAULT_REPAIR_ROUNDS = 1
 OUTPUT_TAIL_CHARS = 1800
@@ -91,6 +92,7 @@ class VerifyConfig:
     commands: tuple = ()
     timeout: int = DEFAULT_TIMEOUT
     max_repair_rounds: int = DEFAULT_REPAIR_ROUNDS
+    fix_proof: str = "report"
 
     @property
     def enabled(self):
@@ -113,7 +115,12 @@ def resolve_verify_config(values, *, mode=None, default_mode="ask"):
         raise ValueError("verify.timeout must be in [1, 1800]")
     if not 0 <= rounds <= 5:
         raise ValueError("verify.max_repair_rounds must be in [0, 5]")
-    return VerifyConfig(mode=resolved_mode, commands=commands, timeout=timeout, max_repair_rounds=rounds)
+    fix_proof = str(section.get("fix_proof", "report"))
+    if fix_proof not in FIX_PROOF_MODES:
+        raise ValueError(f"verify.fix_proof must be one of {list(FIX_PROOF_MODES)}")
+    return VerifyConfig(
+        mode=resolved_mode, commands=commands, timeout=timeout, max_repair_rounds=rounds, fix_proof=fix_proof
+    )
 
 
 def python_command(root):

@@ -113,12 +113,14 @@ mode = "ask"                  # off | ask | auto，默认 ask：遵循审批策�
 commands = ["pytest -q"]      # 可选；不写则按本回合改动的文件自动探测
 timeout = 120                 # 单条命令秒数，1-1800
 max_repair_rounds = 1         # 验证失败后让模型修复的轮数，0-5；0 表示只记录不重试
+fix_proof = "report"          # off | report | repair：验证通过后撤回源码、用旧代码重跑改过的测试
 ```
 
 - `ask`：`--approval auto` 直接跑，`--approval ask` 会先询问，`--approval never` 不跑；`auto` 一律直接跑；`off` 关闭。
 - 只对主 agent 生效；子 agent、plan mode、只读模式、纯文档改动不会触发。
 - 配置了 `[sandbox]` 时验证命令走同一个沙箱；`CI=1` 会注入环境。
 - 回执写入 `task_state.json`、`report.json` 的 `verification` 字段和 trace 的 `verification_run` 事件。
+- `fix_proof`：验证通过、本轮同时改了源码和测试时，在临时副本里只撤回源码、重跑改过的测试（说明见 README「修复证明」）。`report` 只记录（`verification.fix_proof`、trace `fix_proof` 事件），`repair` 在“撤回后测试照样通过”时退回给模型一轮，`off` 关闭。开了沙箱时跳过。
 
 ## 独立审查（`[critic]`）
 

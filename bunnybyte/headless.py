@@ -11,6 +11,7 @@ import time
 
 from .core.cost_meter import STOP_REASON_BUDGET_EXCEEDED
 from .core.critic_gate import critic_summary
+from .core.fix_proof_gate import fix_proof_summary
 from .core.pricing import format_usd
 from .core.run_usage import trace_usage
 from .core.task_state import STATUS_COMPLETED, STATUS_FAILED, STATUS_RUNNING
@@ -139,6 +140,7 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
             "status": verification.get("status", ""),
             "commands": [item.get("command", "") for item in verification.get("receipts", [])],
             "repairs": int(verification.get("repairs", 0)),
+            "fix_proof": fix_proof_summary(verification),
         },
         "critic": critic_summary(state) if state is not None else {},
         "hooks": {

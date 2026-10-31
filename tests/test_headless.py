@@ -263,7 +263,7 @@ def test_read_only_runs_do_not_need_a_receipt(tmp_path):
 
     code, out, _ = run(agent, output_format="json", require_verified=True)
 
-    assert code == EXIT_OK and json.loads(out)["verification"] == {"verdict": "not_needed", "status": "", "commands": [], "repairs": 0}
+    assert code == EXIT_OK and json.loads(out)["verification"] == {"verdict": "not_needed", "status": "", "commands": [], "repairs": 0, "fix_proof": {}}
 
 
 def test_stopping_early_outranks_the_unverified_exit_code(tmp_path):

@@ -1,6 +1,8 @@
 """回合收尾前的验证闸门：模型想交卷时，先真跑一遍项目检查，失败就把输出塞回去让它修。"""
 
 from .artifacts import build_artifact_graph
+from .fix_proof import is_test_path
+from .fix_proof_gate import fix_proof_gate, fix_proof_notice
 from .tool_loop_guard import current_turn_history
 from .verification import (
     NON_FAILURE_STATUSES,
@@ -49,10 +51,16 @@ def _planned_commands(config, root, paths):
     return [{"command": command, "reason": "配置的 [verify].commands"} for command in config.commands]
 
 
-def _approved(agent, config, commands):
+FIX_PROOF_NOTE = "通过后还会在临时副本里撤回源码改动、用旧代码重跑本轮改过的测试（修复证明）"
+
+
+def _approved(agent, config, commands, paths):
     if config.mode == "auto" or agent.approval_policy == "auto":
         return True
-    return bool(agent.approve("verify", {"commands": [item["command"] for item in commands]}))
+    args = {"commands": [item["command"] for item in commands]}
+    if config.fix_proof != "off" and any(is_test_path(path) for path in paths):
+        args["note"] = FIX_PROOF_NOTE
+    return bool(agent.approve("verify", args))
 
 
 def _overall(receipts):
@@ -83,7 +91,7 @@ def verification_gate(engine, task_state, final, allow_repair=True):
     commands = _planned_commands(config, agent.root, paths)
     if not commands:
         return False
-    if not _approved(agent, config, commands):
+    if not _approved(agent, config, commands, paths):
         state.update(status="declined", declined=True, fingerprint=fingerprint)
         agent.emit_trace(task_state, "verification_declined", {"commands": [item["command"] for item in commands]})
         return False
@@ -114,6 +122,8 @@ def verification_gate(engine, task_state, final, allow_repair=True):
         "verification_finished",
         {"run_id": task_state.run_id, "status": overall, "round": state["rounds"], "commands": [r["command"] for r in run_receipts]},
     )
+    if overall == STATUS_PASSED and not agent.abort_requested:
+        return (yield from fix_proof_gate(engine, task_state, allow_repair=allow_repair))
     if agent.abort_requested or not allow_repair or overall not in (STATUS_FAILED, STATUS_TIMEOUT) or state["repairs"] >= config.max_repair_rounds:
         return False
     state["repairs"] += 1
@@ -156,6 +166,8 @@ def verification_notice(agent, task_state, final):
     if status == STATUS_PASSED:
         suffix = f"，经 {repairs} 轮修复" if repairs else ""
         lines.append(f"✓ 已验证：`{last['command']}` 通过（{last['duration_ms'] / 1000:.1f}s{suffix}）")
+        if fix_proof_notice(state):
+            lines.append(fix_proof_notice(state))
     elif status in (STATUS_FAILED, STATUS_TIMEOUT):
         reason = "超时" if status == STATUS_TIMEOUT else f"退出码 {last.get('exit_code')}"
         fed_back = f"，失败输出已反馈给模型 {repairs} 轮仍未通过" if repairs else ""

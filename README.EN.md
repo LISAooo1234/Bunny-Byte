@@ -367,7 +367,27 @@ mode = "ask"                       # off | ask | auto; override with --verify
 commands = ["pytest -q", "ruff check ."]   # omit to auto-detect
 timeout = 120                      # per-command seconds
 max_repair_rounds = 1              # repair attempts after a failed check
+fix_proof = "report"               # off | report | repair, see "Fix proof" below
 ```
+
+## Fix proof
+
+A passing receipt says the tests are green now; it does not say the tests exercise the fix. Models readily hand in a test that would pass on the old code too: an assertion like `callable(add)`, a test of some other function, or a failing assertion simply deleted. When verification passes and the turn changed both sources and tests, the runtime copies the turn's snapshot into a temp directory, **reverts only the source changes, keeps the changed tests**, and runs those tests again:
+
+- ✓ **Proven**: the tests fail (or time out) on the reverted copy and pass on the new code, so they really catch the bug.
+- ⚠ **Not exercised**: the tests still pass on the old code. The card also calls out the two most suspicious cases: the changed tests never import the changed sources, or the only test change was deleting assertions.
+- · **Weak**: on the old code the tests fail only because an interface is missing (a new function cannot be imported, a new method or keyword argument does not exist), so whether behaviour is tested cannot be told; normal for new features, not flagged as a problem.
+
+Your working tree is never touched and no model call is made. Only the test files changed this turn are run: pytest projects use `--junitxml` and judge per test (a collection error counts as weak, exit codes 3/4/5 are not evidence), otherwise `unittest` or the assert script directly. Config files (`pyproject.toml`, `pytest.ini`, `conftest.py`, …) are not reverted, since reverting `--strict-markers` and the like would break collection and look like a proof; docs are not reverted either. A `sitecustomize` probe (first on the path; a project's own `sitecustomize.py` still runs) records where each module was imported from; if a changed module actually came from an editable install, `site-packages` or the original repo, or the probe recorded nothing, the proof is skipped instead of misreading "tested the wrong copy" as "not exercised". The proof uses the turn's last tool snapshot, so files the verification command writes (`coverage.xml`, …) do not count as changes.
+
+Default `report`: a card, one line at the end of the turn, `verification.fix_proof` in `report.json`, a `fix_proof` trace event (shown by `bunny replay`) and `verification.fix_proof` in `bunny -p` JSON. `repair` sends a "not exercised" result back to the model once, asking for a test that fails on the old code, or an explanation that the change is not meant to alter behaviour (refactor, logging, performance); an explanation without edits is not re-checked. Weak results and skips are never sent back.
+
+```toml
+[verify]
+fix_proof = "report"   # off | report | repair
+```
+
+Skipped when: no test or no source change, only non-Python files changed besides tests, the test edits add or remove no assertions (a new parametrize row counts as added), the sandbox is on (the copy would run unsandboxed), Windows, no shadow snapshot (nested git repo, …), more than 5000 files or 200MB, symlinks among the changes, or the changed tests already fail on the new code in the copy (often a test that needs a gitignored file that is not in the snapshot; the card shows the output tail). Python tests only; the reverted run is capped at `max(10 s, 3 × the new-code run + 5 s)` and never more than `[verify].timeout`.
 
 ## Critic review
 

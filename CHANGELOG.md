@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- 新增修复证明（`[verify].fix_proof = off|report|repair`，默认 `report`；新模块 `bunnybyte/core/fix_proof.py`、`fix_proof_gate.py`）：验证通过、本轮同时改了源码和测试时，在临时副本里只撤回源码改动、保留改过的测试再跑一遍：失败 = 已证明，照样通过 = 测试没测到改动（另外指出“测试没导入改过的源码”“测试只删了断言”），只因旧代码缺少接口而失败（导入不了、没有新方法、不认识新参数）= 弱（新功能常见）。pytest 用 junitxml 按测试判断，配置文件不撤回，`sitecustomize` 探针发现改动的模块来自可编辑安装 / 原仓库时跳过；开沙箱、Windows、无快照、超大仓库、副本里新代码就不通过时跳过并说明原因。TUI「修复证明」卡片、回合末尾一行提示、`report.json` / `bunny -p` JSON 的 `verification.fix_proof`、trace `fix_proof` 事件与 `bunny replay` 时间线；`repair` 模式在“没测到”时退回给模型一轮。审批验证命令时会说明还会跑修复证明。影子快照的 diff 记录旧文件模式，新增 `tree_entries`（含文件大小）。
 - 提示词改成缓存友好的顺序：说明、规则、工具、工作区快照、技能、记忆说明在前，会话历史居中，每次调用都会变的运行状态（工作记忆、待办、已读范围、检查点、git status）挪到历史之后、当前请求之前（新模块 `bunnybyte/core/prompt_layout.py`）。git status 从前缀的工作区快照里移出（工作区指纹仍包含它，续跑判断不变）。`bunny bench` 参考解离线回放：相邻两次调用的公共前缀 50.0% → 86.1%。超预算时先缩历史之后的部分，不变的部分最后才动。
 - Anthropic 协议把说明、规则和工具列表作为 `system` 发送（OneAPI 网关只对 `system` 打折，但这部分只有约 2k token，真实 bench 里按 token 算的网关费用看不出变化），官方 `api.anthropic.com` 额外加 `cache_control` 断点；拆分点在密钥遮蔽之后计算，无效时退回整段一条 user 消息。故障切换链、步数用尽总结也带上拆分点。
 - 新增"提示词前缀复用率"：trace 的 `model_requested` 事件记 `prompt_chars` / `reused_chars`，`bunny replay` 模型调用行显示"前缀复用 N%"，`bunny bench` 结果多 `prompt_reuse`。

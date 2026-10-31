@@ -328,6 +328,7 @@ class ShadowStore:
                     "mode": new_mode,
                     "oid": new_oid,
                     "old_oid": old_oid,
+                    "old_mode": old_mode,
                 }
             )
         return entries
@@ -348,6 +349,20 @@ class ShadowStore:
             if kind == "blob":
                 blobs[path.decode("utf-8", "surrogateescape")] = oid
         return blobs
+
+    def tree_entries(self, tree):
+        """Map of path -> (mode, blob id, size in bytes) for every file in a tree (gitlinks skipped)."""
+        with _LOCK:
+            raw = self._run(["ls-tree", "-r", "-l", "-z", "--full-tree", tree or EMPTY_TREE]).stdout
+        entries = {}
+        for record in raw.split(b"\0"):
+            if not record:
+                continue
+            meta, _, path = record.partition(b"\t")
+            mode, kind, oid, size = meta.decode().split()
+            if kind == "blob":
+                entries[path.decode("utf-8", "surrogateescape")] = (mode, oid, int(size))
+        return entries
 
     def _read_blobs(self, oids):
         found = {}
