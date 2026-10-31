@@ -108,7 +108,7 @@ def run_tool(agent, name, args):
             diff_summary=diff_summary,
         )
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
-        return f"error: tool {name} failed: {exc}" + render_notes(hook_notes)
+        return agent.redact_text(f"error: tool {name} failed: {exc}") + render_notes(hook_notes)
 
 
 def _argument_hint(agent, tool):

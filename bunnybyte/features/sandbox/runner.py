@@ -1,12 +1,12 @@
 """Optional shell sandbox runner."""
 
-import subprocess
 from pathlib import Path
 from shutil import which as default_which
 
 from .checker import SandboxChecker
 from .command_matcher import command_is_excluded
 from .config import SandboxConfig
+from .process import run_command
 
 
 class SandboxRunner:
@@ -16,13 +16,13 @@ class SandboxRunner:
         self.run_process = run
         self.emit_event = emit_event or (lambda event, payload: None)
 
-    def run(self, command, *, cwd, env, timeout):
+    def run(self, command, *, cwd, env, timeout, should_stop=None):
         config = self.config
         if config.mode == "off" or (
             config.mode != "required"
             and command_is_excluded(command, config.excluded_commands)
         ):
-            return self._plain(command, cwd=cwd, env=env, timeout=timeout)
+            return self._plain(command, cwd=cwd, env=env, timeout=timeout, should_stop=should_stop)
 
         backend_path = SandboxChecker(self.which).backend_path(config.backend)
         if not backend_path:
@@ -36,17 +36,19 @@ class SandboxRunner:
             )
             if config.mode == "required":
                 raise RuntimeError("sandbox required but unavailable")
-            return self._plain(command, cwd=cwd, env=env, timeout=timeout)
+            return self._plain(command, cwd=cwd, env=env, timeout=timeout, should_stop=should_stop)
 
         argv = self._bubblewrap_argv(backend_path, command, Path(cwd), config)
-        run_process = self.run_process or subprocess.run
-        return run_process(
+        if self.run_process is None:
+            return run_command(argv, cwd=cwd, env=env, timeout=timeout, should_stop=should_stop, shell=False)
+        return self.run_process(
             argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env
         )
 
-    def _plain(self, command, *, cwd, env, timeout):
-        run_process = self.run_process or subprocess.run
-        return run_process(
+    def _plain(self, command, *, cwd, env, timeout, should_stop=None):
+        if self.run_process is None:
+            return run_command(command, cwd=cwd, env=env, timeout=timeout, should_stop=should_stop)
+        return self.run_process(
             command,
             cwd=cwd,
             shell=True,

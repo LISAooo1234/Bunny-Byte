@@ -160,7 +160,8 @@ def test_run_shell_uses_allowlisted_environment_only(tmp_path):
 def test_bound_tool_methods_call_tools_module(tmp_path):
     agent = build_agent(tmp_path, [], approval_policy="auto")
 
-    with patch("bunnybyte.tools.registry.subprocess.run") as fake_run:
+    agent.sandbox_runner = None
+    with patch("bunnybyte.tools.registry.run_command") as fake_run:
         fake_run.return_value = type(
             "Result",
             (),

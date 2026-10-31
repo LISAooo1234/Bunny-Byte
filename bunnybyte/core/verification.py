@@ -9,7 +9,6 @@ import json
 import os
 import re
 import shlex
-import signal
 import subprocess
 import sys
 import time
@@ -19,6 +18,7 @@ from shutil import which
 
 from ..features.sandbox.checker import SandboxChecker
 from ..features.sandbox.command_matcher import command_is_excluded
+from ..features.sandbox.process import kill_group_now
 from .artifacts import build_artifact_graph
 from .shell_segments import split_segments, stage_head
 from .workspace import IGNORED_PATH_NAMES
@@ -264,8 +264,9 @@ def run_command(agent, command, timeout):
     code = None
     try:
         if _sandbox_active(agent, command):
-            done = agent.sandbox_runner.run(command, cwd=agent.root, env=env, timeout=timeout)
-            code, output = done.returncode, (done.stdout or "") + (done.stderr or "")
+            should_stop = lambda: bool(getattr(agent, "abort_requested", False))  # noqa: E731
+            done = agent.sandbox_runner.run(command, cwd=agent.root, env=env, timeout=timeout, should_stop=should_stop)
+            code, output, aborted = done.returncode, (done.stdout or "") + (done.stderr or ""), bool(getattr(done, "stopped", False))
         else:
             code, output, timed_out, aborted = _run_plain(command, agent.root, env, timeout, agent)
     except subprocess.TimeoutExpired as exc:
@@ -328,13 +329,7 @@ def _wait(process, deadline, agent):
 
 
 def _kill_group(process):
-    try:
-        if hasattr(os, "killpg"):
-            os.killpg(process.pid, signal.SIGKILL)
-        else:
-            process.kill()
-    except (OSError, ProcessLookupError):
-        pass
+    kill_group_now(process)
 
 
 def _decode(value):

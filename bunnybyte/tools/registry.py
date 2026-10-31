@@ -9,6 +9,7 @@ from functools import partial
 
 from ..core.transcript_fence import match_patch
 from ..core.workspace import IGNORED_PATH_NAMES
+from ..features.sandbox.process import run_command, timeout_message
 from .base import RegisteredTool
 
 CORE_TOOL_SPECS = {
@@ -303,26 +304,14 @@ def tool_run_shell(agent, args):
     timeout = int(args.get("timeout", 20))
     if timeout < 1 or timeout > 120:
         raise ValueError("timeout must be in [1, 120]")
+    # 传过滤后的环境变量而不是整个父 shell 环境；用户点停止时整个进程组立刻被杀掉，不等命令跑完。
+    should_stop = lambda: bool(getattr(agent, "abort_requested", False))  # noqa: E731
     runner = getattr(agent, "sandbox_runner", None)
-    if runner is None:
-        result = subprocess.run(
-            command,
-            cwd=agent.root,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            # 这里传入的是过滤后的环境变量，而不是直接继承整个父 shell 环境，
-            # 目的是减少敏感信息被意外带进命令执行环境的风险。
-            env=agent.shell_env(),
-        )
-    else:
-        result = runner.run(
-            command,
-            cwd=agent.root,
-            env=agent.shell_env(),
-            timeout=timeout,
-        )
+    run = runner.run if runner is not None else run_command
+    try:
+        result = run(command, cwd=agent.root, env=agent.shell_env(), timeout=timeout, should_stop=should_stop)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(timeout_message(exc)) from None
     return textwrap.dedent(
         f"""\
         exit_code: {result.returncode}
