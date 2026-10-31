@@ -202,7 +202,9 @@ def test_replay_by_index_and_prefix_list_and_diff(tmp_path, capsys):
     code, older = replay(tmp_path, "2")
     assert code == 0 and "请求：write notes" in older
 
-    code, by_prefix = replay(tmp_path, runs[1]["id"][:22])
+    # 两次运行常在同一秒：取能区分开的最短开头（固定切 22 位时随机后缀前两位撞上的概率是 1/256）
+    prefix = next(runs[1]["id"][:n] for n in range(22, 27) if not runs[0]["id"].startswith(runs[1]["id"][:n]))
+    code, by_prefix = replay(tmp_path, prefix)
     assert "请求：write notes" in by_prefix
 
     code, listing = replay(tmp_path, "--list")
