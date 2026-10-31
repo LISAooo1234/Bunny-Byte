@@ -792,7 +792,7 @@ class BunnyByteTuiApp(App):
             return
         if event_type == "model_parsed":
             kind = event.get("kind", "")
-            if kind in {"tool", "tools"}:
+            if kind in {"tool", "tools", "retry"}:  # 重试时流出来的是没法执行的原文（例如写成文字的工具调用），不留在聊天里
                 self._discard_model_stream()
             self.query_one(StatusBar).record_model_usage(event.get("input_tokens"), event.get("output_tokens"))
             detail = f"模型返回 {kind}"

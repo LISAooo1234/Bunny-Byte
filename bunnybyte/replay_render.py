@@ -124,6 +124,9 @@ def _event_line(event):
         label = {"blocked": "已拦下", "denied": "用户拒绝", "confirmed": "用户确认", "noted": "提示"}.get(str(event.get("decision", "")), "")
         names = "、".join(f"{item.get('name', '')}（{DEPENDENCY_VERDICTS.get(item.get('verdict'), item.get('verdict'))}）" for item in event.get("findings") or [])
         return _join(f"  {icon} 依赖守卫 {clip_cells(names, 60)}".rstrip(), label)
+    if name == "text_tool_call":
+        label = {"rescued": "已救回执行", "retry": "未执行，退回模型", "accepted": "退回次数用完，按回答收下"}.get(str(event.get("decision", "")), "")
+        return _join(f"  ⤷ 文字工具调用 {event.get('format', '')} {'、'.join(event.get('tools') or [])}".rstrip(), label)
     if name == "verification_declined":
         return f"  · 验证未运行（未获批准）：{clip_cells('；'.join(event.get('commands') or []), 60)}"
     if name == "critic_review":

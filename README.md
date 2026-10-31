@@ -47,6 +47,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 花费与预算 | 每次模型调用按实际服务它的模型和官网价目估算美元花费（主循环、审查、总结、压缩、子 agent 都算），TUI 状态栏、`/usage`、`bunny -p` JSON、`bunny bench` 都能看到；`--max-cost 0.5` 给一轮设上限，到了就停在当前进度；详见下文「花费估算与预算」。 |
 | 运行中插话 | agent 干活时输入框不锁：想到什么直接打字回车，下一次调用模型前就送到（不用停下重来）；Stop / Esc 连同正在跑的命令和它拉起的子进程一起立刻停；详见下文「运行中插话与停止」。 |
 | 依赖守卫 | 模型要装或要直接运行的新包（`pip install`、`npm i`、`npx` / `uvx`、`pip install -r`、改 requirements / pyproject / package.json）先过一遍：和热门包只差一个字符（`reqeusts`）或刚注册不到 30 天的，必须有人确认，`--approval auto` 也一样，`bunny -p` 里直接拒绝；详见下文「依赖守卫」。 |
+| 文字工具调用救回 | 模型把工具调用写进了正文（DeepSeek 的 `name{json}` / DSML、Qwen 的 `<tool_call>` / `<function=…>`）时，以前回合直接结束、你看到一段标记当回答；现在照常执行或退回模型重来，读文件以外的工具只在有人审批时执行；详见下文「写成文字的工具调用」。 |
 | 安全控制 | 支持 approval policy、sandbox，以及写文件前 fresh read 校验。 |
 | 运行留痕 | 落地 session JSON、events JSONL、trace、task state、report、checkpoint。 |
 
@@ -611,6 +612,18 @@ max_turn_cost = 0.5   # 每轮上限，等同 --max-cost 0.5
 - 实测：新增 `bunny bench --suite long`（八个约 300 行的模块，要改的都在文件末尾）。参考解离线回放，修复前读后 4 个文件的那几次调用都看不到刚读文件的结尾，现在 8/8 看得到，整轮前缀复用 71.7% → 78.0%；一个 20 次读文件的回合里，滑动窗口时第 11 次起每次只复用 66%，现在 20 次调用只断 2 次。Claude Haiku 4.5 每边 3 次（单题、样本很小）：修复前 1/3 通过（一次重读被拒、空转 21 步后被停下，一次漏改了 payments），修复后 3/3，平均 25.7 步、9 次模型调用，$0.204/次（修复前 $0.240/次）。
 
 边界：复用率只说明"最多能复用多少"，真正省多少取决于 provider：DeepSeek 自动缓存、OpenAI 官方接口按前缀缓存，Anthropic 官方只缓存到 `system` 上的断点、不缓存历史（工具定义加说明约 3000 token，Haiku 4.5 要求至少 4096 token，够不上就不缓存），网关不回报缓存 token 时 `/usage` 的花费估算仍按全价算，实际以网关账单为准。历史被压缩（超过预算、本轮工具结果太多被折叠、`/compact`）时，那一次调用的复用率会下降。
+
+## 写成文字的工具调用
+
+用 provider 原生工具调用时，模型偶尔会把调用写进正文而不是走工具接口：DeepSeek V4 在长回合里写出 `batch_crawl{"jobs": …}` 或 `<｜DSML｜invoke name="…">`（官方 API 上约 11% 的调用，见 deepseek-ai/DeepSeek-V3#1244），Ollama / vLLM 上的 Qwen 写出 `<tool_call>{json}</tool_call>` 或缺了开头标签的 `<function=read_file><parameter=path>…`。provider 返回的是 `finish_reason: stop`，以前 Bunny Byte 就把这段文字当最终回答，回合结束、什么都没执行。
+
+现在回复末尾是这类标记时（`bunnybyte/core/tool_call_rescue.py`）：
+
+- 工具名在这次请求实际提供的工具里、参数能解析、不在代码块（```、~~~、缩进、`>` 引用）里、写在行首或句末、后面没有别的文字 → 当作工具调用执行，前面的话作为前言保留；只有 `read_file` / `list_files` / `search` 直接跑，其他工具（`run_shell`、`write_file`、`remember`、`agent`、MCP 工具等）只在有人审批时执行（`--approval ask` 的主 agent；平时不用审批的工具也单独问一次），`--approval auto`、`never`、`bunny -p`、子 agent 下不执行；
+- 不执行的情况都退回模型，告诉它“没有运行，请用工具接口重新调用”：工具不存在或当前不可用（计划模式、空转保护暂时收走的）、参数解析不了、整条回复是一个 JSON、模仿历史记录的 `[tool:x] {…}`、高风险工具没人审批，以及标记和本会话里某条工具结果或你的消息逐字相同（文件里藏的注入被模型照抄；改写过的照抄认不出来，所以真正兜底的是上面的审批规则）；
+- 每轮最多退回 2 次，不占模型调用次数；还不行就按原文收下当回答。你的消息本身带 `<tool_call>`、`DSML` 这类标记时（比如在问格式）不处理。
+
+每次处理记进 trace（`bunny replay` 显示 `⤷ 文字工具调用 hermes read_file · 已救回执行`）、`report.json` / `bunny -p` JSON 的 `text_tool_calls`，`bunny bench` 汇总“救回执行 / 退回重试”次数。各格式的测试样例取自公开问题报告的原文；离线复现过，没有在线实测泄漏率（DeepSeek 账户余额不足，Claude 网关不出现这个问题）。
 
 ## 依赖守卫
 

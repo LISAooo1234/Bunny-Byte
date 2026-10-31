@@ -18,6 +18,7 @@ from ..core.run_usage import trace_prompt_reuse, trace_usage
 from ..core.runtime import BunnyByte
 from ..core.session_store import SessionStore
 from ..core.shadow_snapshots import _LOCK, ShadowError, ShadowStore
+from ..core.tool_call_rescue import text_tool_receipt
 from ..core.verification import VerifyConfig, claims_verified
 from ..core.workspace import WorkspaceContext
 from .tasks import PY
@@ -274,6 +275,8 @@ def run_task(
         "critic_issues": [],
         "fix_proof": "",
         "fix_proof_repairs": 0,
+        "text_tool_rescued": 0,
+        "text_tool_retries": 0,
     }
     verify_config = None
     if fix_proof != "off":
@@ -313,6 +316,9 @@ def run_task(
         result["verify_repairs"] = int(state.verification.get("repairs", 0))
         result["fix_proof"] = fix_proof_label(state.verification.get("fix_proof"))
         result["fix_proof_repairs"] = int(state.verification.get("fix_proof_repairs", 0))
+        text_tools = text_tool_receipt(agent, state)
+        result["text_tool_rescued"] = sum(1 for item in text_tools if item["decision"] == "rescued")
+        result["text_tool_retries"] = sum(1 for item in text_tools if item["decision"] == "retry")
         result.update(trace_usage(agent.run_store.trace_path(state)))
         result.update(trace_prompt_reuse(agent.run_store.trace_path(state)))
         turn = agent.cost_meter.turn

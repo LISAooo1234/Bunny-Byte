@@ -12,6 +12,7 @@ import time
 from .core.cost_meter import STOP_REASON_BUDGET_EXCEEDED
 from .core.critic_gate import critic_summary
 from .core.dependency_guard import dependency_receipt
+from .core.tool_call_rescue import text_tool_receipt
 from .core.fix_proof_gate import fix_proof_summary
 from .core.pricing import format_usd
 from .core.run_usage import trace_usage
@@ -145,6 +146,7 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
         },
         "critic": critic_summary(state) if state is not None else {},
         "dependencies": dependency_receipt(agent, state),
+        "text_tool_calls": text_tool_receipt(agent, state),
         "hooks": {
             "final_blocked": bool(hook_state.get("final_blocked")),
             "runs": len(hook_state.get("runs", [])),

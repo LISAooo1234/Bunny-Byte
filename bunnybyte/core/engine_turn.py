@@ -22,6 +22,7 @@ from .provider_failover import failover_events
 from .steering import TurnSteering
 from .stall_budget import STOP, StallBudget, finish_stalled, watch_tool_events
 from .task_state import TaskState
+from .tool_call_rescue import TextToolRescue
 from .tool_loop_guard import stall_notice
 from .verification_gate import verification_gate, verification_notice
 from .workspace import clip, now
@@ -130,6 +131,7 @@ def run_turn(engine, user_message, mention_text=None):
     stall = StallBudget(agent.max_steps)
     stalled = False
     steering = TurnSteering(engine, task_state)
+    text_tools = TextToolRescue(agent, task_state, user_message)
 
     while tool_steps < agent.max_steps and attempts < max_attempts:
         if agent.abort_requested:
@@ -328,10 +330,9 @@ def run_turn(engine, user_message, mention_text=None):
             )
             parse_metadata = {"native_tool_calls": len(native_tool_calls)}
         elif native_tools:
-            raw_text = str(raw or "").strip()
-            kind, payload, parse_metadata = (
-                ("final", raw_text, {}) if raw_text else ("retry", "Return a normal final answer or request a native tool call.", {})
-            )
+            kind, payload, parse_metadata = text_tools.classify(raw, native_tools)  # 写成文字的工具调用不再当回答
+            if kind == "retry" and parse_metadata.get("text_tool_format"):
+                max_attempts += 1  # 退回次数另有上限（每轮 2 次），不挤占模型调用预算
         else:
             kind, payload, parse_metadata = agent.parse_with_metadata(raw, allow_truncated_json_tool=True)
         preamble = str(parse_metadata.get("preamble", "") or "").strip()

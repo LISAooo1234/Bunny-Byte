@@ -105,6 +105,8 @@ def summarize(rows):
         "fix_proof": _proof_counts(rows),
         "fix_proof_repairs": sum(row.get("fix_proof_repairs", 0) for row in rows),
         "fix_proof_agreement": _proof_agreement(rows),
+        "text_tool_rescued": sum(row.get("text_tool_rescued", 0) for row in rows),
+        "text_tool_retries": sum(row.get("text_tool_retries", 0) for row in rows),
     }
 
 
@@ -272,6 +274,7 @@ def render_record(record, previous=None):
         *_verify_lines(record),
         *_critic_lines(record),
         *_proof_lines(record),
+        *_text_tool_lines(summary),
         _delta(record, previous),
         NOISE_NOTE.format(step=100 / max(len(record["task_ids"]) * record["repeat"], 1)),
     ]
@@ -293,6 +296,13 @@ def _reuse_lines(summary):
         f"提示词前缀复用：第 2 次起的模型调用平均有 {summary['prompt_reuse'] * 100:.1f}% 的提示词和上一次开头逐字相同"
         "（provider 前缀缓存最多能复用这么多）"
     ]
+
+
+def _text_tool_lines(summary):
+    rescued, retries = summary.get("text_tool_rescued", 0), summary.get("text_tool_retries", 0)
+    if not rescued and not retries:
+        return []  # 模型都用原生接口调用工具，或旧结果文件没有这一列
+    return [f"写成文字的工具调用：救回执行 {rescued} 次，退回重试 {retries} 次"]
 
 
 def _waste_lines(summary):
