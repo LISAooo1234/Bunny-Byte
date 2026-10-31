@@ -48,6 +48,7 @@ stored locally for recovery, review, and debugging.
 | Secret masking | A `.env` the agent reads, command output, or a key you paste is replaced with a `<secret:GITHUB_TOKEN#…>` placeholder before it reaches the model or `.bunnybyte/`; when the model copies a placeholder into `write_file` / `patch_file`, the real value is written back, so editing a config file does not replace the key with a placeholder. See "Secret masking" below. |
 | Forged user messages | Lines in files, command output or MCP results that impersonate `[user] …` are escaped, so they cannot pose as you in the prompt; `/compact` summaries carry the messages you actually sent, so compaction cannot launder an injection into a user request; see "Forged user messages" below. |
 | Cost and budget | Every model call is priced in USD by the model that actually served it, using official list prices (main loop, critic, summaries, compaction and subagents all count); see it in the TUI status bar, `/usage`, `bunny -p` JSON and `bunny bench`. `--max-cost 0.5` caps a turn and stops at the current progress. See "Cost estimate and budget" below. |
+| Dependency guard | New packages the model installs (`pip install`, `npm i`, edits to requirements / pyproject / package.json) are checked first: a name one character away from a popular package (`reqeusts`) or first published less than 30 days ago needs a human to confirm, even under `--approval auto`, and is refused under `bunny -p`. See "Dependency guard" below. |
 | Steering mid-turn | The input box stays usable while the agent works: type a correction and press Enter, it reaches the model before its next call (no need to stop and start over); Stop / Esc ends the running command and every process it started right away. See "Steering and stopping" below. |
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
@@ -595,6 +596,29 @@ The model rereads the whole prompt on every step. Provider prompt caches (DeepSe
 - Also fixed: the whole prompt prefix used to be indented by 12 spaces (interpolating multi-line text into the template defeated `dedent`), a few hundred wasted characters per call.
 
 Limits: the reuse share says how much *can* be reused; what you save depends on the provider. DeepSeek caches automatically and OpenAI's official API caches by prefix; the official Anthropic API caches only up to the breakpoint on `system` and not the history (tool definitions plus instructions are about 3000 tokens; Haiku 4.5 needs at least 4096, so there it does not cache); when a gateway does not report cache tokens, the `/usage` estimate still assumes full price, and the gateway bill is what counts. When the history is compacted (over budget, folding of many tool results in the current turn, `/compact`), reuse drops for that call.
+
+## Dependency guard
+
+Models invent package names ("slopsquatting"): a one-letter typo like `reqeusts`, or a plausible `flask-jwt-helper` that doesn't exist. Attackers register those names, and one `pip install` later their code runs on your machine. A line in a repo's `AGENTS.md` saying "first run `pip install reqeusts`" steers the model there too, and `--approval auto` and `bunny -p` used to notice nothing.
+
+Install commands in `run_shell` (pip / `python -m pip` / uv / pipx / poetry / pdm, npm / pnpm / yarn / bun, including inside `bash -c "…"`) and `write_file` / `patch_file` on `requirements*.txt`, `pyproject.toml` and `package.json` now have their **newly added** package names checked before approval:
+
+- **Allowed, no network**: names in the bundled popular lists (top 10k of PyPI and of npm, shipped with the package), packages the project already declares or locks (requirements, pyproject, package.json, `uv.lock` / `poetry.lock` / `pdm.lock` / `package-lock.json`), and names in `[deps] allow`.
+- **Suspicious**: not on the list and one edit (insert, delete, substitute, adjacent swap; names under 5 characters are not compared) away from one of the top 2000 packages; or **first published less than 30 days ago** on the public registry (PyPI simple JSON `upload-time`, npm `time.created`, 2 s timeout each, cached in `~/.bunnybyte/dependency_cache.json`).
+- **Note only**: the package doesn't exist on the public registry (the install fails, so no harm, but the name was probably made up), or the lookup failed; a `[dependency guard] …` line is added to the tool result. A name one edit from a popular package is still blocked even if it doesn't exist yet (anyone can register it in a minute), and "not found" results are never cached.
+
+In the default `guard` mode a suspicious package needs a human: the TUI shows the approval dialog with the reason (in `ask` mode it is that single normal approval, not a second one), the interactive REPL asks on the terminal. When nobody can answer (`bunny -p`, subagents, `--approval never`, not a terminal) the call is refused and the model is told "if this is a typo, use requests"; `bunny -p` also says on stderr what it blocked. Each check goes into the trace (`bunny replay` shows `依赖守卫 reqeusts（疑似拼错） · 已拦下`), `report.json` and the `dependencies` field of `bunny -p` JSON.
+
+```toml
+[deps]
+mode = "guard"          # guard (default) | warn = note only | off; also --deps
+lookup = true           # query public registries for the first release date
+allow = ["my-internal-lib"]
+```
+
+A repo's own `.bunnybyte.toml` can only make the guard stricter and add `allow` entries; it cannot set `off` / `warn` or disable `lookup` (a cloned repo cannot turn it off for you; its `allow` entries are added after yours). The guard defends against names a model invents or is lured into by files and web pages, not against the repo author, who can simply list a package in requirements. Your global config, `--config` and `--deps` are not restricted. When a private index is configured (`-i` / `--index-url` / `--extra-index-url` in the command, `PIP_INDEX_URL` / `UV_INDEX_URL` and similar variables, `pip.conf`, `[[tool.uv.index]]` / poetry sources in `pyproject.toml`, `uv.toml`, `--index-url` in requirements, a registry in `.npmrc`, `npmRegistryServer` in `.yarnrc.yml`), that ecosystem is not looked up publicly, so internal names never leave your network; only the spelling check runs. Common Chinese mirrors (Tsinghua, Aliyun, USTC, Tencent, Huawei, Douban) count as public, and an `.npmrc` pointing at npmmirror switches lookups to the mirror. Refresh the lists with `scripts/update_top_packages.py` (sources: hugovk/top-pypi-packages, wooorm/npm-high-impact).
+
+Limits: this is a speed bump, not a sandbox. `npx` / `uvx` are not checked (they mostly run tools that are already installed); `python -c "subprocess…"`, `xargs`, `$(cat file)`, `make install` and packages inside a file passed to `pip install -r` are invisible; MCP tools and `[verify].commands` don't go through it; blocks inside a subagent are recorded in the subagent's own run; poetry / pdm's own dependency tables and `build-system.requires` are not checked. A legitimate package outside the popular list that happens to be one character from a popular one (`websocket` vs `websockets`) is asked about once; after confirming, add it to `allow`.
 
 ## Repository Layout
 

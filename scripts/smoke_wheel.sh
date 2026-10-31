@@ -22,6 +22,9 @@ expected="bunny $("$work/venv/bin/python" -c 'from bunnybyte.version import __ve
 actual="$("$bunny" --version)"
 [[ "$actual" == "$expected" ]] || { echo "::error::--version printed '$actual', expected '$expected'"; exit 1; }
 "$work/venv/bin/bunnybyte-tui" --version >/dev/null
+# 依赖守卫的热门包名单是 package-data，漏打包时守卫会静默失效
+"$work/venv/bin/python" -c 'from bunnybyte.core.dependency_names import popular_names as p; assert len(p("pypi")[0]) > 5000 and len(p("npm")[0]) > 5000' \
+  || { echo "::error::bundled top package lists missing from the wheel"; exit 1; }
 
 (cd "$work/repo" && "$bunny" doctor --offline --json > "$work/doctor.json") || true
 grep -q '"版本"' "$work/doctor.json" || { echo "::error::doctor has no version row"; cat "$work/doctor.json"; exit 1; }

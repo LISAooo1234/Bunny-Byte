@@ -115,6 +115,7 @@ class BunnyByteTuiApp(App):
         self._previous_approve = getattr(agent, "approve", None)
         self._previous_ask_user = getattr(agent, "ask_user_callback", None)
         self.agent.approve = self._approval_callback
+        self.agent.dependency_confirm = self._approval_callback  # 依赖守卫在 auto 模式下也要弹窗
         self.agent.ask_user_callback = self._ask_user_callback
 
     def compose(self) -> ComposeResult:
@@ -158,6 +159,7 @@ class BunnyByteTuiApp(App):
         tui_theme.set_active_theme(tui_theme.DEFAULT_THEME)
         if self._previous_approve is not None:
             self.agent.approve = self._previous_approve
+        self.agent.dependency_confirm = None
         self.agent.ask_user_callback = self._previous_ask_user
         if self._memory_scope_startup_task is not None:
             self._memory_scope_startup_task.cancel()

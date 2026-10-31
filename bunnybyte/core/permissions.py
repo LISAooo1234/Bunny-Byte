@@ -1,7 +1,9 @@
 """Runtime permission decisions for tool execution."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+from .dependency_guard import guard_permission
 
 
 @dataclass(frozen=True)
@@ -9,14 +11,16 @@ class PermissionDecision:
     decision: str
     reason: str
     security_event_type: str = ""
+    message: str = ""  # 非空时作为拒绝时给模型的错误文字
+    notes: tuple = ()  # 放行时附在工具结果后面的提示（依赖守卫）
 
     @classmethod
     def allow(cls, reason):
         return cls("allow", reason)
 
     @classmethod
-    def deny(cls, reason, security_event_type=""):
-        return cls("deny", reason, security_event_type)
+    def deny(cls, reason, security_event_type="", message=""):
+        return cls("deny", reason, security_event_type, message)
 
     @property
     def allowed(self):
@@ -37,7 +41,12 @@ class PermissionChecker:
 
         if self.runtime.runtime_mode == "plan":
             return self._check_plan(tool, args)
+        # 依赖守卫排在 write_scope 和只读判断之前：worker 改 requirements.txt 也要过它
+        verdict = guard_permission(self.runtime, tool, args, PermissionDecision.allow, PermissionDecision.deny)
+        decision = verdict.decision or self._check_tool(tool, verdict.approval_args)
+        return replace(decision, notes=verdict.notes) if decision.allowed and verdict.notes else decision
 
+    def _check_tool(self, tool, args):
         if tool.name in {"write_file", "patch_file"} and getattr(self.runtime, "write_scope", ()):
             return self._check_write_scope(tool, args)
         if tool.read_only:

@@ -139,6 +139,21 @@ max_diff_chars = 12000        # 发给审查模型的 diff 上限（超出部分
 - 发出去的 diff 先按 secret 环境变量脱敏；`profile` 指向别的 provider 时，diff 会发给那个 provider。
 - 结果写入 `task_state.json` / `report.json` 的 `critic` 字段和 trace 的 `critic_review` 事件（含 token，`bunny bench` 与 `bunny -p` 的用量统计会算进去）。
 
+## 依赖守卫（`[deps]`）
+
+模型要装的新包（安装命令或依赖文件改动）在审批前检查：和热门包只差一个字符、或第一次发布不到 30 天的包必须有人确认（`--approval auto` 也一样），没人能确认时拒绝（说明见 README「依赖守卫」）。
+
+```toml
+[deps]
+mode = "guard"                # guard（默认）| warn | off，也可用 --deps 覆盖
+lookup = true                 # 查询 PyPI / npm 的首次发布时间（2 秒超时，缓存在 ~/.bunnybyte/dependency_cache.json）
+allow = ["my-internal-lib"]   # 不检查的包名
+```
+
+- 仓库里的 `.bunnybyte.toml` 只能调严（`warn` → `guard`）和追加 `allow`，设成 `off` / `warn` 或 `lookup = false` 会被忽略并提示；全局配置、`--config`、`--deps` 不受限制。
+- 配了私有索引（命令里的 `-i` / `--index-url`、`PIP_INDEX_URL` / `UV_INDEX_URL` 等环境变量、`pip.conf`、`[[tool.uv.index]]`、`.npmrc` 的 registry）时，该生态不去公共仓库查，只做拼写检查。
+- 结果写入 trace 的 `dependency_check` 事件、`report.json` 和 `bunny -p` JSON 的 `dependencies`。
+
 ## 钩子（`[[hooks.*]]`）
 
 `[[hooks.pre_tool]]`、`[[hooks.post_tool]]`、`[[hooks.on_final]]` 三类 shell 钩子，字段 `command`（必填）、`match`（工具名，`|` 分隔，支持 `*`）、`timeout`（1–300 秒，默认 10）、`on_error`（`allow` 默认 / `block`）、`only_if_changed`（仅 on_final）；`[hooks] max_final_rounds`（0–5，默认 2）。仓库里的 `.bunnybyte.toml` 的钩子要 `/hooks trust` 之后才运行，全局配置和 `--config` 直接生效。完整说明见 [hooks.md](hooks.md)。

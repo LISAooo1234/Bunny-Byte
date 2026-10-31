@@ -103,6 +103,9 @@ def _tool_line(event):
     return _join(f"  {icon} {tool_title(name)} {card_args_summary(name, args)}".rstrip(), summary, error, changed, format_duration(event.get("duration_ms")))
 
 
+DEPENDENCY_VERDICTS = {"typosquat": "疑似拼错", "new": "刚注册", "missing": "不存在", "unchecked": "未查到"}
+
+
 def _event_line(event):
     """白名单外的事件返回 None。"""
     name = str(event.get("event", ""))
@@ -116,6 +119,11 @@ def _event_line(event):
         tests = clip_cells("、".join(event.get("tests") or []), 50)
         seconds = float(event.get("control_seconds") or 0) + float(event.get("reverted_seconds") or 0)
         return _join(f"  {icon} 修复证明 {tests}".rstrip(), label, format_duration(int(seconds * 1000)) if seconds else "")
+    if name == "dependency_check":
+        icon = {"blocked": "✗", "denied": "✗", "confirmed": "✓"}.get(str(event.get("decision", "")), "·")
+        label = {"blocked": "已拦下", "denied": "用户拒绝", "confirmed": "用户确认", "noted": "提示"}.get(str(event.get("decision", "")), "")
+        names = "、".join(f"{item.get('name', '')}（{DEPENDENCY_VERDICTS.get(item.get('verdict'), item.get('verdict'))}）" for item in event.get("findings") or [])
+        return _join(f"  {icon} 依赖守卫 {clip_cells(names, 60)}".rstrip(), label)
     if name == "verification_declined":
         return f"  · 验证未运行（未获批准）：{clip_cells('；'.join(event.get('commands') or []), 60)}"
     if name == "critic_review":

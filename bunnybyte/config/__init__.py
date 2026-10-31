@@ -412,6 +412,19 @@ def resolve_project_budget_config(
     return resolve_budget_config(_load_config_values(start=start, explicit_path=config_path), max_cost=max_cost)
 
 
+def resolve_project_deps_config(
+    *, start: str | Path = ".", config_path: str | None = None, mode: str | None = None
+):
+    from ..core.dependency_guard import resolve_deps_config
+
+    values = _load_config_values(start=start, explicit_path=config_path)
+    if config_path:
+        return resolve_deps_config(values, mode=mode)
+    # 仓库里的 .bunnybyte.toml 只能调严，不能替用户关掉依赖守卫
+    trusted = _read_config_file(DEFAULT_CONFIG_PATH) if DEFAULT_CONFIG_PATH.exists() else {}
+    return resolve_deps_config(values, mode=mode, trusted=trusted)
+
+
 def resolve_tui_theme(
     *, start: str | Path = ".", config_path: str | None = None, cli_value: str | None = None, env=None
 ) -> str:
@@ -527,6 +540,8 @@ def _read_config_file(path: Path) -> dict[str, Any]:
         values["budget"] = data["budget"]  # 原样交给 core.cost_meter 校验
     if "pricing" in data:
         values["pricing"] = data["pricing"]
+    if "deps" in data:
+        values["deps"] = data["deps"]  # 原样交给 core.dependency_guard 校验
 
     for name in ("openai", "anthropic", "deepseek"):
         section = data.get(name, {})
@@ -610,7 +625,7 @@ def _merge_config_values(target: dict[str, Any], incoming: dict[str, Any]) -> No
     target.setdefault("verify", {}).update(incoming.get("verify", {}))
     target.setdefault("critic", {}).update(incoming.get("critic", {}))
     target.setdefault("tui", {}).update(incoming.get("tui", {}))
-    for name in ("budget", "pricing"):
+    for name in ("budget", "pricing", "deps"):
         section = incoming.get(name)
         if isinstance(section, dict) and isinstance(target.get(name, {}), dict):
             target.setdefault(name, {}).update(section)  # 项目配置按模型名覆盖全局配置里的价格

@@ -296,6 +296,7 @@ def run_task(
                 critic_config=BENCH_CRITIC if critic else None,
             )
             agent.cost_meter.prices = dict(prices or {})
+            agent.unattended = True  # 依赖守卫不会在 bench 线程里等终端输入
             answer, error, stuck = _drive(agent, task.prompt, timeout, result)
     except Exception as exc:
         error = exc

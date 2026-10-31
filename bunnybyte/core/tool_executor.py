@@ -48,7 +48,8 @@ def run_tool(agent, name, args):
         agent._last_tool_result_metadata = _tool_metadata(
             tool, "rejected", decision.reason, security_event_type=decision.security_event_type
         )
-        return _permission_error(agent, tool, decision)
+        return decision.message or _permission_error(agent, tool, decision)
+    hook_notes += list(decision.notes)
     policy = ToolPolicyChecker(agent).check(tool, args)
     _emit_tool_policy_decision(agent, tool, args, policy)
     if not policy.allowed:

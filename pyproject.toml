@@ -59,6 +59,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["bunnybyte*"]
 
+[tool.setuptools.package-data]
+"bunnybyte.data" = ["*.txt"]
+
 [tool.setuptools.dynamic]
 version = { attr = "bunnybyte.version.__version__" }
 

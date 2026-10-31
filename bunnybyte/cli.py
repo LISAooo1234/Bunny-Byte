@@ -47,6 +47,7 @@ from .config import (
     resolve_project_mcp,
     resolve_project_verify_config,
     resolve_project_budget_config,
+    resolve_project_deps_config,
     resolve_project_critic_config,
     resolve_provider_config,
     write_global_provider_config,
@@ -338,6 +339,11 @@ def build_agent(args):
         config_path=getattr(args, "config", None),
         max_cost=getattr(args, "max_cost", None),
     )
+    deps_config = resolve_project_deps_config(
+        start=workspace.repo_root,
+        config_path=getattr(args, "config", None),
+        mode=getattr(args, "deps", None),
+    )
     hookset = resolve_project_hooks(start=workspace.repo_root, config_path=getattr(args, "config", None))
     mcp_config = resolve_project_mcp(start=workspace.repo_root, config_path=getattr(args, "config", None))
     load_project_env(workspace.repo_root, override=False)
@@ -375,6 +381,7 @@ def build_agent(args):
         _attach_mcp(agent, mcp_config)
         _attach_critic(agent, args, critic_config)
         _attach_budget(agent, budget_config)
+        _attach_deps(agent, deps_config)
         return agent
     lazy_session = True
     agent = BunnyByte(
@@ -401,7 +408,14 @@ def build_agent(args):
     _attach_mcp(agent, mcp_config)
     _attach_critic(agent, args, critic_config)
     _attach_budget(agent, budget_config)
+    _attach_deps(agent, deps_config)
     return agent
+
+
+def _attach_deps(agent, deps_config):
+    agent.deps_config = deps_config
+    for problem in deps_config.problems:
+        print(f"⚠ 依赖守卫配置：{problem}", file=sys.stderr)
 
 
 def _attach_budget(agent, budget_config):
@@ -572,6 +586,12 @@ def build_arg_parser():
         choices=("off", "ask", "auto"),
         default=None,
         help="交卷前自动运行项目测试并留下验证回执：off 关闭，ask 遵循审批策略（默认），auto 不再询问。",
+    )
+    parser.add_argument(
+        "--deps",
+        choices=("off", "warn", "guard"),
+        default=None,
+        help="依赖守卫：模型要装拼错 / 仿冒 / 刚注册的包时，guard（默认）必须有人确认（--approval auto 也一样，无人值守时拒绝），warn 只提示，off 关闭。",
     )
     parser.add_argument(
         "--critic",

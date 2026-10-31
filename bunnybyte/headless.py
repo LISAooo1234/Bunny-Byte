@@ -11,6 +11,7 @@ import time
 
 from .core.cost_meter import STOP_REASON_BUDGET_EXCEEDED
 from .core.critic_gate import critic_summary
+from .core.dependency_guard import dependency_receipt
 from .core.fix_proof_gate import fix_proof_summary
 from .core.pricing import format_usd
 from .core.run_usage import trace_usage
@@ -143,6 +144,7 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
             "fix_proof": fix_proof_summary(verification),
         },
         "critic": critic_summary(state) if state is not None else {},
+        "dependencies": dependency_receipt(agent, state),
         "hooks": {
             "final_blocked": bool(hook_state.get("final_blocked")),
             "runs": len(hook_state.get("runs", [])),
@@ -259,6 +261,9 @@ def run_headless(
         emit(json.dumps(result, ensure_ascii=False))
     if error:
         err.write(f"bunny: {error}\n")
+    blocked = [item["name"] for entry in result["dependencies"] if entry["decision"] == "blocked" for item in entry["findings"] if item["verdict"] in {"typosquat", "new"}]
+    if blocked and not quiet:
+        err.write(f"bunny: 依赖守卫拦下了 {'、'.join(dict.fromkeys(blocked))}（疑似拼错 / 刚注册的包，无人值守时不安装；确认无误可加进 [deps] allow）。\n")
     if denials:
         err.write(f"bunny: {denials} 个工具调用因审批策略被拒绝（无人值守时 ask 等同 never；需要放行请加 --approval auto）。\n")
     if code == EXIT_UNVERIFIED:

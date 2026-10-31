@@ -50,6 +50,9 @@ __all__ = [
 
 def format_tool_args(name: str, args: dict | None) -> str:
     args = args or {}
+    if args.get("dependency_note"):  # 依赖守卫的提示：放在参数后面单独一行
+        rest = {key: value for key, value in args.items() if key != "dependency_note"}
+        return f"{format_tool_args(name, rest)}\n⚠ {args['dependency_note']}"
     if name in {"run_shell", "verify"}:
         commands = args.get("commands")
         note = f"\n（{args['note']}）" if name == "verify" and args.get("note") else ""
