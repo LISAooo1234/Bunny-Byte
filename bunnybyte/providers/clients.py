@@ -846,6 +846,23 @@ def _extract_anthropic_tool_calls(data):
     return calls
 
 
+def anthropic_prompt_payload(prompt, system_chars=0, base_url=""):
+    """把提示词拆成 system + 一条 user 消息。
+
+    前 system_chars 个字是一轮里不变的说明、规则和工具列表（runtime 算好的）；作为 system 发送时，
+    按前缀计费的网关会给这部分打折（OneAPI 实测：大段 system 便宜约 44%，我们这段只有约 1.5k token，
+    真实内容约 8%），官方 API 再加一个 cache_control 断点。拆分点无效时退回整段一条 user 消息。
+    """
+    system_chars = int(system_chars or 0)
+    head, rest = prompt[:system_chars].strip(), prompt[system_chars:].strip()
+    if system_chars <= 0 or not head or not rest:
+        return {"messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}]}
+    system = {"type": "text", "text": head}
+    if "api.anthropic.com" in str(base_url):
+        system["cache_control"] = {"type": "ephemeral"}  # 其他兼容端点（DeepSeek 等）会忽略这个字段，不发更稳
+    return {"system": [system], "messages": [{"role": "user", "content": [{"type": "text", "text": rest}]}]}
+
+
 class AnthropicCompatibleModelClient:
     supports_native_tools = True
     native_tool_protocol = "anthropic"
@@ -867,6 +884,7 @@ class AnthropicCompatibleModelClient:
         prompt_cache_retention=None,
         on_delta=None,
         tools=None,
+        system_chars=0,
     ):
         text = self.complete(
             prompt,
@@ -875,6 +893,7 @@ class AnthropicCompatibleModelClient:
             prompt_cache_retention=prompt_cache_retention,
             on_delta=on_delta,
             tools=tools,
+            system_chars=system_chars,
         )
         metadata = dict(self.last_completion_metadata or {})
         return ModelResult(
@@ -891,26 +910,12 @@ class AnthropicCompatibleModelClient:
         prompt_cache_retention=None,
         on_delta=None,
         tools=None,
+        system_chars=0,
     ):
-        # 为了保持统一接口，runtime 仍然会传缓存参数进来；
-        # 这里只是显式丢弃，因为当前 Anthropic-compatible 路径没有接缓存复用。
+        # Anthropic 协议没有 prompt_cache_key；缓存靠“开头逐字节相同”。
         del prompt_cache_key, prompt_cache_retention
         self.last_completion_metadata = {}
-        payload = {
-            "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt,
-                        }
-                    ],
-                }
-            ],
-            "stream": bool(on_delta),
-        }
+        payload = {"model": self.model, **anthropic_prompt_payload(prompt, system_chars, self.base_url), "stream": bool(on_delta)}
         if tools:
             payload["tools"] = list(tools)
             payload["tool_choice"] = {"type": "auto"}

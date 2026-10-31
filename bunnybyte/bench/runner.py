@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from ..core.critic import CriticConfig
-from ..core.run_usage import trace_usage
+from ..core.run_usage import trace_prompt_reuse, trace_usage
 from ..core.runtime import BunnyByte
 from ..core.session_store import SessionStore
 from ..core.shadow_snapshots import _LOCK, ShadowError, ShadowStore
@@ -268,6 +268,7 @@ def run_task(
         result["verify_rounds"] = int(state.verification.get("rounds", 0))
         result["verify_repairs"] = int(state.verification.get("repairs", 0))
         result.update(trace_usage(agent.run_store.trace_path(state)))
+        result.update(trace_prompt_reuse(agent.run_store.trace_path(state)))
         turn = agent.cost_meter.turn
         if turn["calls"] and not turn["unpriced_calls"]:
             result["cost_usd"] = round(turn["usd"], 6)  # 有一次调用没价格就整题不报，免得把偏低的数当真

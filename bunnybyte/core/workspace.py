@@ -5,7 +5,6 @@
 """
 
 import subprocess
-import textwrap
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -107,23 +106,22 @@ class WorkspaceContext:
 
     def text(self):
         # 这段文本会被塞进 prompt prefix，作为相对稳定的基线上下文。
-        commits = "\n".join(f"- {line}" for line in self.recent_commits) or "- none"
-        docs = "\n".join(f"- {path}\n{snippet}" for path, snippet in self.project_docs.items()) or "- none"
-        return textwrap.dedent(
-            f"""\
-            Workspace:
-            - cwd: {self.cwd}
-            - repo_root: {self.repo_root}
-            - branch: {self.branch}
-            - default_branch: {self.default_branch}
-            - status:
-            {self.status}
-            - recent_commits:
-            {commits}
-            - project_docs:
-            {docs}
-            """
-        ).strip()
+        # git status 每次改文件都会变，不放这里：它在历史之后的运行状态里（prompt_layout.memory_sections），
+        # 否则一次编辑就让 provider 前缀缓存从这里往后全部失效。指纹仍然包含它，续跑判断不变。
+        commits = [f"- {line}" for line in self.recent_commits] or ["- none"]
+        docs = [f"- {path}\n{snippet}" for path, snippet in self.project_docs.items()] or ["- none"]
+        lines = [
+            "Workspace:",
+            f"- cwd: {self.cwd}",
+            f"- repo_root: {self.repo_root}",
+            f"- branch: {self.branch}",
+            f"- default_branch: {self.default_branch}",
+            "- recent_commits:",
+            *commits,
+            "- project_docs:",
+            *docs,
+        ]
+        return "\n".join(lines).strip()
 
     def fingerprint(self):
         # 这个指纹用来判断仓库状态是否发生了足够大的变化，

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from ..features import memory as memorylib, skills as skillslib
+from ..features import skills as skillslib
 from .context_support import (
     SectionRender,
     build_context_metadata,
@@ -14,14 +14,20 @@ from .context_support import (
     render_sections_without_reduction,
 )
 from .memory_scope import durable_memory_enabled, retrieve_scoped_session_snippets
+from .prompt_layout import memory_sections
 from .transcript_recall import prompt_visible_event_ids, render_prompt_recall, retrieve_transcript_snippets
 from .turn_history import TurnHistoryBuilder, tail_clip
+from .turn_history_support import empty_history_details
 
-SECTION_ORDER = ("prefix", "memory", "skills", "relevant_memory", "transcript_recall", "history", "current_request")
+# 一轮里不变的在前（provider 前缀缓存能复用），每次调用都会变的运行状态（memory）放在历史之后
+SECTION_ORDER = (
+    "prefix", "skills", "memory_guide", "history", "relevant_memory", "transcript_recall", "memory", "current_request"
+)
 CURRENT_REQUEST_SECTION = "current_request"
 _DEFAULT_SECTION_WEIGHTS = {
     "prefix": 0.18,
-    "memory": 0.13,
+    "memory": 0.08,
+    "memory_guide": 0.05,  # 记忆说明约 4k 字，加上 30 条 MEMORY.md 索引约 6.6k
     "skills": 0.08,
     "relevant_memory": 0.04,
     "transcript_recall": 0.04,
@@ -68,13 +74,14 @@ DEFAULT_SECTION_BUDGETS = default_section_budgets(DEFAULT_TOTAL_BUDGET)
 DEFAULT_SECTION_FLOORS = {
     "prefix": 8_000,
     "memory": 4_000,
+    "memory_guide": 1_000,
     "skills": 2_000,
     "relevant_memory": 1_000,
     "transcript_recall": 800,
     "history": 20_000,
 }
-# 当 prompt 超预算时，会优先压缩这些 section。
-DEFAULT_REDUCTION_ORDER = ("transcript_recall", "relevant_memory", "skills", "memory", "prefix", "history")
+# 当 prompt 超预算时，会优先压缩这些 section：历史之后的先缩，不变的前缀部分最后才动（缩了会让缓存失效）。
+DEFAULT_REDUCTION_ORDER = ("transcript_recall", "relevant_memory", "memory", "skills", "memory_guide", "prefix", "history")
 RELEVANT_MEMORY_LIMIT = 3
 TRANSCRIPT_RECALL_LIMIT = 4
 
@@ -161,31 +168,13 @@ class ContextManager:
             transcript_recall_enabled = self.agent.feature_enabled("transcript_recall")
             context_reduction_enabled = self.agent.feature_enabled("context_reduction")
         durable_enabled = durable_memory_enabled(getattr(self.agent, "session", {}))
-        memory_text = "Memory:\n- disabled" if not memory_enabled else str(self.agent.memory_text())
-        if memory_enabled and not durable_enabled:
-            memory_lines = [line for line in memory_text.splitlines() if not line.startswith("- durable_topics:")]
-            memory_lines.append("- durable_topics: disabled by memory_scope")
-            memory_text = "\n".join(memory_lines)
         section_texts = {
             "prefix": str(getattr(self.agent, "prefix", "")),
-            "memory": memory_text,
             "skills": skillslib.render_prompt_section(getattr(self.agent, "skills", {})),
+            **memory_sections(self.agent, memory_enabled, durable_enabled),
             "history": "",
             CURRENT_REQUEST_SECTION: f"Current user request:\n{user_message}",
         }
-        if hasattr(self.agent, "todo_ledger"):
-            section_texts["memory"] += "\n\n" + self.agent.todo_ledger.render_prompt()
-        if hasattr(self.agent, "read_ledger"):
-            read_state_text = str(self.agent.read_ledger.render_prompt() or "").strip()
-            if read_state_text:
-                section_texts["memory"] += "\n\n" + read_state_text
-        checkpoint_text = ""
-        if hasattr(self.agent, "render_checkpoint_text"):
-            checkpoint_text = str(self.agent.render_checkpoint_text() or "").strip()
-        if checkpoint_text:
-            section_texts["memory"] += "\n\n" + checkpoint_text
-        if memory_enabled and durable_enabled and hasattr(self.agent, "memory_dir"):
-            section_texts["memory"] += "\n\n" + memorylib.build_memory_system_section(self.agent.memory_dir)
         selected_notes = []
         if (
             memory_enabled
@@ -373,23 +362,7 @@ class ContextManager:
         history = self.history_builder.prompt_history()
         raw = self.history_builder.raw_text(history)
         if not history:
-            rendered = "Transcript:\n- empty"
-            return SectionRender(
-                raw=raw,
-                budget=budget,
-                rendered=rendered,
-                details={
-                    "rendered_entries": [],
-                    "older_entries_count": 0,
-                    "collapsed_duplicate_reads": 0,
-                    "reused_file_summary_count": 0,
-                    "summarized_tool_count": 0,
-                    "same_turn_compacted_entries": 0,
-                    "same_turn_compacted_tools": 0,
-                    "same_turn_compacted_notifications": 0,
-                    "rendered_turns": 0,
-                },
-            )
+            return SectionRender(raw=raw, budget=budget, rendered="Transcript:\n- empty", details=empty_history_details())
 
         rendered, history_details = self.history_builder.render_section(budget)
 
@@ -401,7 +374,7 @@ class ContextManager:
         )
 
     def _assemble_prompt(self, rendered):
-        return "\n\n".join(rendered[section].rendered for section in SECTION_ORDER).strip()
+        return "\n\n".join(rendered[section].rendered for section in SECTION_ORDER if rendered[section].rendered).strip()
 
     def _metadata(self, prompt, rendered, budgets, reduction_log, selected_notes, selected_recall, user_message, section_texts):
         return build_context_metadata(

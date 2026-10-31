@@ -26,3 +26,25 @@ def trace_usage(trace_path):
             if isinstance(value, int) and not isinstance(value, bool):
                 totals[key] = (totals[key] or 0) + value
     return totals
+
+
+def trace_prompt_reuse(trace_path):
+    """一次运行里第 2 次起的模型调用，提示词开头和上一次逐字相同的比例（provider 前缀缓存最多能复用这么多）。
+
+    返回 {"prompt_chars", "reused_chars"}，没有可比较的调用时都是 None。
+    """
+    totals = {"prompt_chars": None, "reused_chars": None}
+    path = Path(trace_path)
+    if not path.exists():
+        return totals
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        reused = event.get("reused_chars")
+        if event.get("event") != "model_requested" or not isinstance(reused, int):
+            continue
+        totals["prompt_chars"] = (totals["prompt_chars"] or 0) + int(event.get("prompt_chars") or 0)
+        totals["reused_chars"] = (totals["reused_chars"] or 0) + reused
+    return totals

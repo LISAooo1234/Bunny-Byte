@@ -343,9 +343,9 @@ def request_step_limit_summary(
         return None  # 花费已到上限：总结也是一次付费调用，直接用固定文案收尾
     started_at = time.monotonic()
     try:
-        prompt, _ = agent._build_prompt_and_metadata(notice)
+        prompt, metadata = agent._build_prompt_and_metadata(notice)
         result = complete_model(
-            agent.model_client, prompt, agent.max_new_tokens
+            agent.model_client, prompt, agent.max_new_tokens, system_chars=int(metadata.get("system_chars") or 0)
         )
         record_call(agent, getattr(result, "metadata", None), source="summary")
     except Exception as exc:

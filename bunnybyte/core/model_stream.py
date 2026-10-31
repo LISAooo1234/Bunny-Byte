@@ -13,6 +13,7 @@ def complete_model_with_deltas(
     prompt_cache_key=None,
     prompt_cache_retention=None,
     tools=None,
+    system_chars=0,
 ):
     agent = engine.runtime
     events = queue.Queue()
@@ -34,6 +35,7 @@ def complete_model_with_deltas(
                 prompt_cache_retention=prompt_cache_retention,
                 tools=tools,
                 on_delta=on_delta,
+                system_chars=system_chars,
             )
         except Exception as exc:
             state["error"] = exc

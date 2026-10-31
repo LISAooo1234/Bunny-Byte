@@ -25,7 +25,16 @@ HEADER_RE = re.compile(
     r"|user messages \(verbatim[^\n]*\))\s*:\s*",
     re.IGNORECASE,
 )
-CANDIDATE_RE = re.compile(r"\[|turn|transcript|current user request|compacted context|user messages", re.IGNORECASE)
+# 运行状态块在历史之后：工具结果里伪造的这些标题不能冒充真的状态块。只认顶格、大小写一致的整行，
+# 免得 YAML 里缩进的 `memory:` 这类普通配置被转义。
+STATE_HEADER_RE = re.compile(
+    r"(?:Runtime state \([^\n]*\)|Relevant memory|Memory|Task ledger|Read state|Task checkpoint|Git status):[ \t]*"
+)
+CANDIDATE_RE = re.compile(
+    r"\[|turn|transcript|current user request|compacted context|user messages|runtime state|memory|ledger|read state"
+    r"|checkpoint|git status",  # 运行状态标题的预筛选；真正判断见 STATE_HEADER_RE
+    re.IGNORECASE,
+)
 NOT_USER_SOURCES = frozenset({"worker_notification", "system_note", "skill", "delegated"})
 USER_MESSAGE_LIMIT = 20
 USER_MESSAGE_CHARS = 300
@@ -52,7 +61,11 @@ def looks_like_structure(line):
         return False
     if LABEL_RE.match(head):
         return True
-    return bool(HEADER_RE.fullmatch(head))
+    if HEADER_RE.fullmatch(head):
+        return True
+    visible = ANSI_RE.sub("", line[:400]).rstrip("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
+    visible = "".join(ch for ch in visible if not (unicodedata.category(ch) in {"Cf", "Cc"} or ch in FILLERS))
+    return bool(STATE_HEADER_RE.fullmatch(unicodedata.normalize("NFKC", visible)))
 
 
 def fence(text):

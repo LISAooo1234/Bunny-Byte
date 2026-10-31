@@ -110,6 +110,7 @@ class FallbackModelClient:
         prompt_cache_retention=None,
         on_delta=None,
         tools=None,
+        system_chars=0,
     ):
         emitted = []
 
@@ -133,6 +134,7 @@ class FallbackModelClient:
                         tools, getattr(client, "native_tool_protocol", "")
                     ),
                     on_delta=tracked if on_delta is not None else None,
+                    system_chars=system_chars,
                 )
             except Exception as exc:
                 if emitted or not getattr(exc, "retryable", False):

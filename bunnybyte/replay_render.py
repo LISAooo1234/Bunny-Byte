@@ -68,6 +68,13 @@ def _usage(metadata):
     return " ".join(parts)
 
 
+def _reuse_text(event):
+    prompt, reused = event.get("prompt_chars"), event.get("reused_chars")
+    if not isinstance(reused, int) or not prompt:
+        return ""
+    return f"前缀复用 {reused * 100 // int(prompt)}%"
+
+
 def _join(*parts):
     return " · ".join(str(part) for part in parts if part not in (None, ""))
 
@@ -141,13 +148,16 @@ def render_timeline(events, report=None, state=None):
     tools_after = _tool_counts(events)
     other = Counter()
     shown = model_number = 0
+    reuse = ""
     for index, event in enumerate(events):
         name = str(event.get("event", ""))
+        if name == "model_requested":
+            reuse = _reuse_text(event)
         if name in QUIET_EVENTS:
             continue
         if name in MODEL_EVENTS:
             model_number += name == "model_parsed"
-            line = _model_line(event, model_number, tools_after.get(index, 0))
+            line = _join(_model_line(event, model_number, tools_after.get(index, 0)), reuse if name == "model_parsed" else "")
         elif name == "tool_executed":
             line = _tool_line(event)
         else:

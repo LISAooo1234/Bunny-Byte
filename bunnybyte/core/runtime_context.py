@@ -8,6 +8,7 @@ import textwrap
 
 from .cost_meter import record_call
 from .memory_scope import render_memory_scope, set_memory_scope
+from .prompt_layout import system_split
 from .transcript_recall import (
     refine_turn_index_with_model,
     retrieve_transcript_snippets,
@@ -217,6 +218,7 @@ class RuntimeContextMixin:
         )
         metadata.update(self.detected_secret_env_summary())
         prompt = self.redact_text(prompt)  # 最后一道：规则、记忆、技能、当前请求里的密钥也不发给 provider
+        metadata["system_chars"] = system_split(self, prompt)
         usage_payload = {
             "run_id": getattr(getattr(self, "current_task_state", None), "run_id", ""),
             "context_usage": metadata.get("context_usage", {}),

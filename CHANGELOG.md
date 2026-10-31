@@ -1,5 +1,14 @@
 # Changelog
 
+## 未发布
+
+- 提示词改成缓存友好的顺序：说明、规则、工具、工作区快照、技能、记忆说明在前，会话历史居中，每次调用都会变的运行状态（工作记忆、待办、已读范围、检查点、git status）挪到历史之后、当前请求之前（新模块 `bunnybyte/core/prompt_layout.py`）。git status 从前缀的工作区快照里移出（工作区指纹仍包含它，续跑判断不变）。`bunny bench` 参考解离线回放：相邻两次调用的公共前缀 50.0% → 86.1%。超预算时先缩历史之后的部分，不变的部分最后才动。
+- Anthropic 协议把说明、规则和工具列表作为 `system` 发送（OneAPI 网关只对 `system` 打折，但这部分只有约 2k token，真实 bench 里按 token 算的网关费用看不出变化），官方 `api.anthropic.com` 额外加 `cache_control` 断点；拆分点在密钥遮蔽之后计算，无效时退回整段一条 user 消息。故障切换链、步数用尽总结也带上拆分点。
+- 新增"提示词前缀复用率"：trace 的 `model_requested` 事件记 `prompt_chars` / `reused_chars`，`bunny replay` 模型调用行显示"前缀复用 N%"，`bunny bench` 结果多 `prompt_reuse`。
+- 修复提示词前缀整段缩进 12 个空格（多行内容插进模板后 `textwrap.dedent` 失效）。
+- 安全：工具结果里伪造的 `Runtime state…:`、`Memory:`、`Relevant memory:`、`Task ledger:`、`Read state:`、`Task checkpoint:`、`Git status:` 标题行也会被转义，不能冒充历史之后的真实状态块。
+- 测试：`test_replay_by_index_and_prefix_list_and_diff` 用固定 22 位 run id 前缀，同一秒里两次运行的随机后缀前两位相同（1/256）时会匹配到两次（CI run #22 在 py3.10 上变红），改为取能区分的最短前缀。
+
 ## 0.11.0
 
 M1「可靠好用」完成：空转保护、复合 shell 命令、项目规则、CI、`/undo`、密钥遮蔽、防伪造用户消息（见下方和更早的条目），以及这一版的运行中插话与立即停止。

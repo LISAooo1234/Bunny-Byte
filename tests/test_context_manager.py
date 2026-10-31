@@ -75,6 +75,7 @@ def test_context_manager_section_floors_use_configured_defaults_and_scale_down_f
     assert scaled_manager.section_floors == {
         "prefix": 30,
         "memory": 30,
+        "memory_guide": 20,
         "skills": 20,
         "relevant_memory": 20,
         "transcript_recall": 20,
@@ -90,20 +91,20 @@ def test_context_manager_assembles_sections_in_expected_order(tmp_path):
 
     prompt, metadata = ContextManager(agent).build("Where is the deploy key?")
 
-    assert prompt.index("You are BunnyByte") < prompt.index("Memory:")
-    assert prompt.index("Memory:") < prompt.index("Available skills:")
-    assert prompt.index("Available skills:") < prompt.index("Relevant memory:")
-    assert prompt.index("Relevant memory:") < prompt.index("Recovered transcript snippets:")
-    assert prompt.index("Recovered transcript snippets:") < prompt.index("Transcript:")
-    assert prompt.index("Transcript:") < prompt.index("Current user request:")
+    # 不变的在前、历史居中、每次都变的运行状态在历史之后：provider 前缀缓存能复用到历史末尾
+    order = ["You are BunnyByte", "Available skills:", "# Auto Memory", "Transcript:", "Relevant memory:",
+             "Recovered transcript snippets:", "Runtime state", "Memory:", "Task ledger:", "Current user request:"]
+    positions = [prompt.index(marker) for marker in order]
+    assert positions == sorted(positions)
     assert prompt.rstrip().endswith("Current user request:\nWhere is the deploy key?")
     assert metadata["section_order"] == [
         "prefix",
-        "memory",
         "skills",
+        "memory_guide",
+        "history",
         "relevant_memory",
         "transcript_recall",
-        "history",
+        "memory",
         "current_request",
     ]
 
@@ -189,6 +190,7 @@ def test_context_manager_renders_top_three_episodic_notes_per_note_under_budget(
         section_budgets={
             "prefix": 60,
             "memory": 60,
+            "memory_guide": 0,
             "skills": 80,
             "relevant_memory": 80,
             "history": 60,

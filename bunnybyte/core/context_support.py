@@ -56,25 +56,13 @@ def render_sections_without_reduction(
         selected_recall,
         budget=sum(len(str(snippet)) for snippet in selected_recall) + 400,
     )
+    plain = {
+        section: SectionRender(raw=text, budget=len(text), rendered=text, details={})
+        for section, text in section_texts.items()
+        if section not in {"history", current_request_section}
+    }
     return {
-        "prefix": SectionRender(
-            raw=section_texts["prefix"],
-            budget=len(section_texts["prefix"]),
-            rendered=section_texts["prefix"],
-            details={},
-        ),
-        "memory": SectionRender(
-            raw=section_texts["memory"],
-            budget=len(section_texts["memory"]),
-            rendered=section_texts["memory"],
-            details={},
-        ),
-        "skills": SectionRender(
-            raw=section_texts["skills"],
-            budget=len(section_texts["skills"]),
-            rendered=section_texts["skills"],
-            details={},
-        ),
+        **plain,
         "relevant_memory": SectionRender(
             raw=relevant_raw,
             budget=len(relevant_raw),

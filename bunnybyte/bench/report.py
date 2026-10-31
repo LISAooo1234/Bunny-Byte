@@ -35,6 +35,12 @@ def _per_pass(rows, keys):
     return round(sum(totals) / passed)
 
 
+def _reuse(rows):
+    prompt = sum(int(row.get("prompt_chars") or 0) for row in rows if row.get("reused_chars") is not None)
+    reused = sum(int(row.get("reused_chars") or 0) for row in rows if row.get("reused_chars") is not None)
+    return round(reused / prompt, 3) if prompt else None
+
+
 def _cost_per_pass(rows):
     total, passed = _cost_total(rows), sum(1 for row in rows if row["passed"])
     return round(total / passed, 6) if total is not None and passed else None
@@ -69,6 +75,7 @@ def summarize(rows):
         "input_tokens": _total(rows, "input_tokens"),
         "output_tokens": _total(rows, "output_tokens"),
         "cached_tokens": _total(rows, "cached_tokens"),
+        "prompt_reuse": _reuse(rows),
         "cost_usd": _cost_total(rows),
         "cost_per_pass": _cost_per_pass(rows),
         "verify_rounds": sum(row.get("verify_rounds", 0) for row in rows),
@@ -234,6 +241,7 @@ def render_record(record, previous=None):
         f"平均步数 {_fmt(summary['avg_steps'])}，平均模型调用 {_fmt(summary['avg_model_calls'])}，总耗时 {summary['total_wall_seconds']}s",
         f"Token：{_tokens(summary, record.get('protocol', ''))}",
         *_cost_lines(summary),
+        *_reuse_lines(summary),
         *_waste_lines(summary),
         *_verify_lines(record),
         *_critic_lines(record),
@@ -249,6 +257,15 @@ def _cost_lines(summary):
     per_pass = summary.get("cost_per_pass")
     tail = f"，每个通过任务 {format_usd(per_pass)}" if per_pass is not None else ""
     return [f"花费估算：{format_usd(summary['cost_usd'])}{tail}（按官网价目，经网关转发时以实际账单为准）"]
+
+
+def _reuse_lines(summary):
+    if summary.get("prompt_reuse") is None:
+        return []  # 旧结果文件没有这一列
+    return [
+        f"提示词前缀复用：第 2 次起的模型调用平均有 {summary['prompt_reuse'] * 100:.1f}% 的提示词和上一次开头逐字相同"
+        "（provider 前缀缓存最多能复用这么多）"
+    ]
 
 
 def _waste_lines(summary):

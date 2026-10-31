@@ -17,6 +17,7 @@ from .critic_gate import critic_gate
 from .hook_gate import final_hook_gate
 from .model_errors import finish_model_error
 from .model_stream import complete_model_with_deltas
+from .prompt_layout import note_prompt_reuse
 from .provider_failover import failover_events
 from .steering import TurnSteering
 from .stall_budget import STOP, StallBudget, finish_stalled, watch_tool_events
@@ -210,6 +211,8 @@ def run_turn(engine, user_message, mention_text=None):
                 "attempts": task_state.attempts,
                 "tool_steps": task_state.tool_steps,
                 "prompt_cache_key": prompt_metadata.get("prompt_cache_key"),
+                **note_prompt_reuse(agent, prompt),
+                "system_chars": prompt_metadata.get("system_chars", 0),
             },
         )
         agent.session_event_bus.emit(
@@ -238,6 +241,7 @@ def run_turn(engine, user_message, mention_text=None):
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
                 tools=native_tools,
+                system_chars=int(prompt_metadata.get("system_chars") or 0),
             )
         except Exception as exc:
             yield from failover_events(engine, task_state)
