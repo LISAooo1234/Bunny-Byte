@@ -15,7 +15,7 @@ from .report import (
     render_row,
     save_record,
 )
-from .runner import DEFAULT_MAX_STEPS, DEFAULT_TASK_TIMEOUT, run_bench
+from .runner import DEFAULT_MAX_STEPS, DEFAULT_TASK_TIMEOUT, FIX_PROOF_MODES, pytest_preflight, run_bench
 from .tasks import select_tasks, task_set_hash
 
 DEFAULT_BENCH_PROVIDER = "deepseek"
@@ -38,12 +38,13 @@ def build_bench_parser():
     parser.add_argument("--config", default=None, help="BunnyByte TOML 配置文件路径。")
     parser.add_argument("--cwd", default=".", help="从该目录向上查找 .bunnybyte.toml。")
     parser.add_argument("--tasks", default=None, help="只运行指定任务，逗号分隔。")
-    parser.add_argument("--suite", default="core", choices=("core", "spec"), help="任务套件：core 是默认 10 题；spec 是“测试全过、需求漏了一半”的 3 题，用来衡量独立审查。")
+    parser.add_argument("--suite", default="core", choices=("core", "spec", "proof"), help="任务套件：core 是默认 10 题；spec 是“测试全过、需求漏了一半”的 3 题，用来衡量独立审查；proof 是“补的回归测试抓不住 bug”的 3 题，用来衡量修复证明。")
     parser.add_argument("--repeat", type=int, default=1, help="每个任务重复次数；次数越多分数越稳。")
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS, help="agent 每题的工具步数硬上限（默认与正常 CLI 一致）。")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TASK_TIMEOUT, help="单个任务的墙钟上限（秒）。")
     parser.add_argument("--verify", action="store_true", help="给 agent 开启验证闸门（交卷前自动跑探测到的测试，失败可修复 1 轮）；结果单独对比。")
     parser.add_argument("--critic", action="store_true", help="给 agent 开启独立审查（交卷前对照需求和 diff 挑错，有证据的意见退回修复 1 轮）；结果单独对比。")
+    parser.add_argument("--fix-proof", default="off", choices=FIX_PROOF_MODES, help="给 agent 开启修复证明（同时开启验证闸门）：report 只记录，repair 在测试没测到改动时退回模型 1 轮；结果单独对比。")
     parser.add_argument("--out", default=None, help="结果目录；默认 ./benchmarks/results（存在时），否则 ~/.bunnybyte/bench-results。")
     parser.add_argument("--no-save", action="store_true", help="只打印，不写结果文件。")
     parser.add_argument("--save", action="store_true", help="用 --tasks 只跑部分任务时默认不写结果文件；加上它才保存。")
@@ -104,6 +105,10 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
             print(render_history(load_history(out_dir)), file=stream)
             return 0
         prices = {}
+        if args.fix_proof != "off" or args.suite == "proof":
+            problem = pytest_preflight()
+            if problem:
+                raise ValueError("修复证明需要 pytest：" + problem)
         if client_factory is None:
             client, provider, model, protocol = live_client(args)
             client_factory = lambda _task: client  # noqa: E731
@@ -119,7 +124,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
 
     progress = sys.stderr if args.json else stream
     print(
-        f"bunny bench：{provider}/{model}，{len(tasks)} 个任务 × {args.repeat} 次，步数上限 {args.max_steps}，单题 {args.timeout}s{'，验证闸门开启' if args.verify else ''}{'，独立审查开启' if args.critic else ''}",
+        f"bunny bench：{provider}/{model}，{len(tasks)} 个任务 × {args.repeat} 次，步数上限 {args.max_steps}，单题 {args.timeout}s{'，验证闸门开启' if args.verify or args.fix_proof != 'off' else ''}{'，修复证明 ' + args.fix_proof if args.fix_proof != 'off' else ''}{'，独立审查开启' if args.critic else ''}",
         file=progress,
     )
     rows = run_bench(
@@ -132,6 +137,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         verify_gate=args.verify,
         critic=args.critic,
         prices=prices,
+        fix_proof=args.fix_proof,
     )
     record = build_record(
         rows,
@@ -144,6 +150,7 @@ def run_bench_command(argv=None, *, client_factory=None, stream=None):
         protocol=protocol,
         verify=args.verify,
         critic=args.critic,
+        fix_proof=args.fix_proof,
     )
     record["temperature"] = BENCH_TEMPERATURE
     previous = previous_comparable(record, load_history(out_dir))

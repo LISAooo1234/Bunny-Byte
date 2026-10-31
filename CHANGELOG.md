@@ -2,6 +2,15 @@
 
 ## 未发布
 
+## 0.12.0
+
+M6「修复证明」完成（M5 缓存友好的提示词第 1 项也在这一版发布）。
+
+- 新增 `bunny bench --suite proof`（`bunnybyte/bench/catalog_proof.py`）：三道“修 bug 并补回归测试”的任务，提示词只描述症状，最顺手的测试修没修都能通过（清空没算过总价的购物车、只建一篇文章、记录数正好整页）；隐藏 verifier 要求修复正确、且新测试在原来有 bug 的模块上失败。共用的判分脚本（`bench/regression_check.py`）选运行方式的规则和修复证明一致，`spec` 套件以后也可复用。
+- 新增 `bunny bench --fix-proof off|report|repair`：同时打开验证闸门并按该模式跑修复证明；每行记 `fix_proof`（`proven` / `theater` / `weak` / `skipped:原因`）和 `fix_proof_repairs`，汇总有各状态次数、退回次数和与隐藏判分的一致率；修复证明模式单独成比较类。跑 proof 套件或修复证明时，开始前检查 PATH 上的 `python3` 能否导入 pytest。判分认 `test_*.py` / `*_test.py`，旧代码上只因缺少接口而失败不算抓住，与修复证明的“弱”一致。
+- 修复：`bunny bench --verify` 会顺带跑修复证明（`VerifyConfig` 默认 `fix_proof="report"`），和以前的 `--verify` 结果不再可比；现在 `--verify` 明确关掉修复证明。bench 跑修复证明时把当前解释器的目录放到 PATH 最前面，修复证明和判分用的是同一个 Python。
+- 实测（`Claude Haiku 4.5`，`--suite proof` 每题 3 次）：report 9/9（`20261031-092104`）、repair 9/9（`20261031-092451`），18 次全部“已证明”、0 次“没测到”、0 次退回，和隐藏判分 18/18 一致；这三题没咬到这个模型，`[verify].fix_proof` 默认保持 `report`。
+
 - 新增修复证明（`[verify].fix_proof = off|report|repair`，默认 `report`；新模块 `bunnybyte/core/fix_proof.py`、`fix_proof_gate.py`）：验证通过、本轮同时改了源码和测试时，在临时副本里只撤回源码改动、保留改过的测试再跑一遍：失败 = 已证明，照样通过 = 测试没测到改动（另外指出“测试没导入改过的源码”“测试只删了断言”），只因旧代码缺少接口而失败（导入不了、没有新方法、不认识新参数）= 弱（新功能常见）。pytest 用 junitxml 按测试判断，配置文件不撤回，`sitecustomize` 探针发现改动的模块来自可编辑安装 / 原仓库时跳过；开沙箱、Windows、无快照、超大仓库、副本里新代码就不通过时跳过并说明原因。TUI「修复证明」卡片、回合末尾一行提示、`report.json` / `bunny -p` JSON 的 `verification.fix_proof`、trace `fix_proof` 事件与 `bunny replay` 时间线；`repair` 模式在“没测到”时退回给模型一轮。审批验证命令时会说明还会跑修复证明。影子快照的 diff 记录旧文件模式，新增 `tree_entries`（含文件大小）。
 - 提示词改成缓存友好的顺序：说明、规则、工具、工作区快照、技能、记忆说明在前，会话历史居中，每次调用都会变的运行状态（工作记忆、待办、已读范围、检查点、git status）挪到历史之后、当前请求之前（新模块 `bunnybyte/core/prompt_layout.py`）。git status 从前缀的工作区快照里移出（工作区指纹仍包含它，续跑判断不变）。`bunny bench` 参考解离线回放：相邻两次调用的公共前缀 50.0% → 86.1%。超预算时先缩历史之后的部分，不变的部分最后才动。
 - Anthropic 协议把说明、规则和工具列表作为 `system` 发送（OneAPI 网关只对 `system` 打折，但这部分只有约 2k token，真实 bench 里按 token 算的网关费用看不出变化），官方 `api.anthropic.com` 额外加 `cache_control` 断点；拆分点在密钥遮蔽之后计算，无效时退回整段一条 user 消息。故障切换链、步数用尽总结也带上拆分点。

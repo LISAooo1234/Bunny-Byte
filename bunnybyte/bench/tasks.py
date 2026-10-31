@@ -65,7 +65,14 @@ def spec_tasks():
     return list(SPEC_TASKS)
 
 
-SUITES = {"core": all_tasks, "spec": spec_tasks}
+def proof_tasks():
+    """单独的“修复证明”套件：修 bug 补回归测试，顺手的测试抓不住 bug；不进默认任务集。"""
+    from .catalog_proof import PROOF_TASKS
+
+    return list(PROOF_TASKS)
+
+
+SUITES = {"core": all_tasks, "spec": spec_tasks, "proof": proof_tasks}
 
 
 def select_tasks(ids=None, suite="core"):
@@ -74,7 +81,7 @@ def select_tasks(ids=None, suite="core"):
     tasks = SUITES[suite]()
     if not ids:
         return tasks
-    by_id = {task.id: task for task in [*all_tasks(), *spec_tasks()]}
+    by_id = {task.id: task for task in [*all_tasks(), *spec_tasks(), *proof_tasks()]}
     unknown = [item for item in ids if item not in by_id]
     if unknown:
         raise ValueError(f"未知的 bench 任务：{', '.join(unknown)}；可用：{', '.join(by_id)}")

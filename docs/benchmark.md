@@ -9,6 +9,7 @@ bunny bench --list               # 列出任务
 bunny bench --tasks add_cli_flag,multi_file_rename   # 部分任务默认不写结果文件，加 --save 才保存
 bunny bench --repeat 3           # 每题跑 3 次，分数更稳
 bunny bench --verify             # 开启验证闸门（交卷前自动跑探测到的测试，失败可修复 1 轮）
+bunny bench --suite proof --fix-proof repair   # 修复证明套件，测试没测到改动时退回模型 1 轮
 bunny bench --history            # 查看历史分数
 bunny bench --provider openai --model gpt-x --no-save
 bunny bench --json > result.json
@@ -52,6 +53,22 @@ bunny bench --json > result.json
 实测（`Claude Haiku 4.5`，每题 3 次）：不开审查 4/9（`benchmarks/results/20261030-111807-…`），开审查 9/9（`20261030-114722-…`）；每次运行输入 token 1.31 倍，每个通过任务的 token 263k → 153k。默认 10 题开审查 9/10（`20261030-115214-…`），3 次反对全是“无法验证”类的多余意见，之后改为直接丢弃这类意见。更早一版审查提示词（没有告诉审查模型本回合跑过哪些命令）在默认 10 题上 7/10，其中 2 题是 provider 出错，6 次反对里 5 次是“看不到测试输出”类的多余意见；那份结果在提示词修正后删除，没有提交。`critic_regression` 统计的是“审查反对时能通过、最终没通过”，把之后的一切失败（超时、验证修复轮）都算在审查头上，是偏保守的上限。
 
 开启 `--critic` 时每行多一个 `[审查 N 次·反对 M]`，汇总多一行：审查次数、反对次数、**反对时代码本来已能通过判分**的次数（用审查那一刻的快照重跑 verifier；这类反对没帮上忙，但不一定是错的），以及**照意见修改后反而不通过**的题数（审查的真实代价）。
+
+### 修复证明套件（`--suite proof`）
+
+同样不进默认任务集，用 `bunny bench --suite proof --fix-proof report|repair` 运行，衡量[修复证明](../README.md#修复证明fix-proof)。三题都要求“修 bug 并补一个回归测试”，提示词只描述用户看到的症状，复现条件要 agent 自己找；最顺手的测试修没修都能通过：
+
+| 任务 | bug | 抓不住它的“顺手”测试 |
+| --- | --- | --- |
+| `cart_total_after_clear` | `clear()` 没清掉缓存的总价 | 清空一个还没算过总价的购物车 |
+| `posts_shared_default_tags` | `tags=[]` 可变默认参数被所有文章共用 | 只建一篇文章、打一个标签 |
+| `export_drops_last_page` | 分页循环漏掉不满一页的最后一页 | 记录数正好是每页条数的整数倍 |
+
+隐藏 verifier 要求修复正确，并且 agent 新增 / 改过的测试在现在的代码上通过、把有 bug 的模块换回去之后失败。它和修复证明用同一套规则：认 `test_*.py` 和 `*_test.py`，裸 `def test_` 用 pytest、unittest 按文件路径跑、其余当断言脚本；旧代码上只因缺少接口而失败（导入不了新函数、pytest 收集失败）不算抓住，修复证明那边叫“弱”。否则两边会在构造上就判得不一样。每个仓库自带一个 unittest 测试，保证验证闸门能跑通、修复证明有机会接着跑。
+
+`--fix-proof report|repair` 同时打开验证闸门；普通 `--verify` 不跑修复证明，和 0.12.0 之前的 `--verify` 结果保持可比。修复证明模式单独成一个比较类。跑 `--suite proof` 或开了修复证明时，开始前会检查 PATH 上的 `python3`（bench 把当前解释器放到 PATH 最前面）能否 `import pytest`，不能就直接退出，免得花了钱每行都是 `skipped:no_pytest`。每行多一个 `[修复证明 状态·退回N]`，汇总多一行：各状态次数、退回模型次数，以及给出结论（已证明 / 没测到）的行里有多少和隐藏判分一致。这个一致率接近“同一件事测两遍”，主要用来发现两边运行方式的分歧，不是功效指标；真正要看的是“没测到”出现的频率和 report / repair 两种模式的通过率。
+
+实测（0.12.0 定稿代码，`Claude Haiku 4.5` 经 OneAPI，每题 3 次，步数上限 50）：`--fix-proof report` 9/9 通过、9 次全部“已证明”（`benchmarks/results/20261031-092104-…`，平均 10.3 步，估算 $1.04）；`--fix-proof repair` 同样 9/9、9 次“已证明”、0 次退回（`20261031-092451-…`，平均 10.2 步，$1.05；repair 没有触发就不会多花步数）。两种模式 18 次里“没测到”出现 0 次，和隐藏判分 18/18 一致。判分规则修正之前的一对结果（同样 18/18 已证明）没有提交。也就是说：这个模型在只给症状的提示词下也会自己找到复现条件、写出能抓住 bug 的测试，这三题没能咬到它，repair 模式没有可救的对象。离线测试（`tests/test_bench_proof.py`）用脚本化模型证明陷阱是真的：顺手的测试让验证闸门通过、隐藏判分失败、修复证明标“没测到”；repair 模式退回一轮后换成正确的测试，判分通过。默认模式因此保持 `report`（事先定的规则：repair 要比 report 多过至少 2 题、且 report 至少看到 2 次“没测到”才改默认）。结论只到“Haiku 上没测出差别”，更弱的模型（DeepSeek 余额不足没测）或更难的陷阱留给以后。
 
 判分规则：
 

@@ -52,6 +52,13 @@ stored locally for recovery, review, and debugging.
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
 
+## Fix proof: green tests, and proof that they test this fix (0.12.0)
+
+A verification receipt only says the tests are green now. Milestone M6 adds the next step: when verification passes and the turn changed both sources and tests, the runtime **reverts only the source changes in a scratch copy, keeps the new tests**, and runs them again. Failing on the old code = ✓ proven; still passing = ⚠ the tests do not exercise the change (also flagging tests that never import the changed sources, or test edits that only delete assertions); failing only on a missing interface = weak (normal for new features). No model call, the working tree is never touched, pytest results are read per test from junitxml, and runs where an editable install or src layout would import code from outside the copy are skipped. `[verify].fix_proof = repair` sends a "not exercised" result back to the model once.
+
+- **Measurable**: `bunny bench --suite proof --fix-proof report|repair` has three "fix the bug and add a regression test" tasks where the obvious test cannot catch the bug; the hidden grader picks test runners with the same rules as fix proof.
+- **Measured**: on `Claude Haiku 4.5`, 3 runs per task, report and repair both scored 9/9; all 18 runs were proven and agreed with the hidden grader 18/18. This model did not fall into the traps, so the default stays `report` (a notice only, no extra steps). Offline tests show the traps are real: the obvious test gets past the verification gate, fix proof flags it, and after one repair round the run passes grading.
+
 ## Reliable: long tasks stay on track, don't spin, and stop when asked (0.11.0)
 
 Milestone M1 was about letting a cheap model finish real tasks while the user can take over at any moment:

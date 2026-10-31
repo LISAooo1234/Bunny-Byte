@@ -54,6 +54,23 @@ def _cost_total(rows):
     return round(sum(values), 6)
 
 
+def _proof_counts(rows):
+    """修复证明各状态的次数，跳过的按原因合并成 skipped:原因。"""
+    counts = {}
+    for row in rows:
+        label = row.get("fix_proof") or ""
+        if label:
+            counts[label] = counts.get(label, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _proof_agreement(rows):
+    """修复证明给出结论（已证明 / 没测到）的行里，有多少和隐藏判分一致：已证明 ⇔ 判分通过。"""
+    decided = [row for row in rows if row.get("fix_proof") in ("proven", "theater")]
+    agree = sum(1 for row in decided if (row["fix_proof"] == "proven") == bool(row["passed"]))
+    return {"decided": len(decided), "agree": agree}
+
+
 def summarize(rows):
     runs = len(rows)
     passed = sum(1 for row in rows if row["passed"])
@@ -85,6 +102,9 @@ def summarize(rows):
         "critic_objections": sum(row.get("critic_objections", 0) for row in rows),
         "objections_on_passing": sum(row.get("objection_on_passing", 0) for row in rows),
         "critic_regressions": sum(1 for row in rows if row.get("critic_regression")),
+        "fix_proof": _proof_counts(rows),
+        "fix_proof_repairs": sum(row.get("fix_proof_repairs", 0) for row in rows),
+        "fix_proof_agreement": _proof_agreement(rows),
     }
 
 
@@ -106,7 +126,9 @@ def package_version():
     return __version__
 
 
-def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False, critic=False):
+def build_record(
+    rows, tasks, *, provider, model, set_hash, repeat, max_steps=None, protocol="", verify=False, critic=False, fix_proof="off"
+):
     return {
         "schema_version": SCHEMA_VERSION,
         "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -120,8 +142,9 @@ def build_record(rows, tasks, *, provider, model, set_hash, repeat, max_steps=No
         "task_ids": [task.id for task in tasks],
         "repeat": repeat,
         "max_steps": max_steps,
-        "verify": bool(verify),
+        "verify": bool(verify) or fix_proof != "off",
         "critic": bool(critic),
+        "fix_proof": fix_proof,
         "summary": summarize(rows),
         "runs": rows,
     }
@@ -164,7 +187,7 @@ def load_history(out_dir):
 
 
 def previous_comparable(record, history):
-    """上一次同任务集、同 provider、同模型、同步数上限、同验证闸门开关的结果；任一项变了就不比较。"""
+    """上一次同任务集、同 provider、同模型、同步数上限、同验证闸门 / 审查 / 修复证明设置的结果；任一项变了就不比较。"""
     keys = ("task_set_hash", "provider", "model", "max_steps")
     older = [
         item
@@ -172,6 +195,7 @@ def previous_comparable(record, history):
         if all(item.get(key) == record.get(key) for key in keys)
         and bool(item.get("verify")) == bool(record.get("verify"))
         and bool(item.get("critic")) == bool(record.get("critic"))
+        and (item.get("fix_proof") or "off") == (record.get("fix_proof") or "off")  # 旧结果没有这一项：当时没跑修复证明
         and item["captured_at"] < record["captured_at"]
     ]
     return older[-1] if older else None
@@ -217,6 +241,8 @@ def render_row(row):
     budget = " (超预算)" if row.get("over_budget") else ""
     gate = f"  [验证 {row['verify_status']}{'·修复' + str(row['verify_repairs']) if row.get('verify_repairs') else ''}]" if row.get("verify_status") else ""
     wasted = f"，空转 {row['wasted_steps']}" if row.get("wasted_steps") else ""
+    if row.get("fix_proof"):
+        gate += f"  [修复证明 {row['fix_proof']}{'·退回' + str(row['fix_proof_repairs']) if row.get('fix_proof_repairs') else ''}]"
     if row.get("critic_rounds"):
         gate += f"  [审查 {row['critic_rounds']} 次·反对 {row.get('critic_objections', 0)}]"
     return f"{mark} {row['task']} #{row['attempt']}  {row['steps']} 步{wasted}{budget}  {row['wall_seconds']}s{tokens}{gate}{note}"
@@ -245,6 +271,7 @@ def render_record(record, previous=None):
         *_waste_lines(summary),
         *_verify_lines(record),
         *_critic_lines(record),
+        *_proof_lines(record),
         _delta(record, previous),
         NOISE_NOTE.format(step=100 / max(len(record["task_ids"]) * record["repeat"], 1)),
     ]
@@ -291,6 +318,24 @@ def _critic_lines(record):
         f"独立审查：审查 {summary.get('critic_rounds', 0)} 次，提出反对 {summary.get('critic_objections', 0)} 次；"
         f"其中 {summary.get('objections_on_passing', 0)} 次反对时代码本来已能通过判分，"
         f"照意见修改后反而不通过 {summary.get('critic_regressions', 0)} 题"
+    ]
+
+
+PROOF_NAMES = {"proven": "已证明", "theater": "没测到", "weak": "弱"}
+
+
+def _proof_lines(record):
+    if (record.get("fix_proof") or "off") == "off":
+        return []
+    summary = record["summary"]
+    counts = summary.get("fix_proof") or {}
+    parts = [f"{PROOF_NAMES.get(label, label)} {count}" for label, count in counts.items()]
+    agreement = summary.get("fix_proof_agreement") or {}
+    agree = ""
+    if agreement.get("decided"):
+        agree = f"；给出结论的 {agreement['decided']} 次里 {agreement['agree']} 次和隐藏判分一致（已证明 ⇔ 通过）"
+    return [
+        f"修复证明（{record['fix_proof']}）：{'、'.join(parts) or '一次也没跑'}；退回模型 {summary.get('fix_proof_repairs', 0)} 次{agree}"
     ]
 
 

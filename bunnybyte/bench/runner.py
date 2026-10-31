@@ -24,7 +24,9 @@ from .tasks import PY
 
 VERIFY_TIMEOUT = 60
 DEFAULT_TASK_TIMEOUT = 300
-BENCH_VERIFY = VerifyConfig(mode="auto", timeout=60, max_repair_rounds=1)  # 单次闸门远小于单题墙钟上限
+# 单次闸门远小于单题墙钟上限；修复证明默认关，`--verify` 的历史结果才和以前可比
+BENCH_VERIFY = VerifyConfig(mode="auto", timeout=60, max_repair_rounds=1, fix_proof="off")
+FIX_PROOF_MODES = ("off", "report", "repair")
 BENCH_CRITIC = CriticConfig(mode="auto", max_rounds=1)
 ABORT_GRACE_SECONDS = 5  # 请求中止后再等多久；agent 只在步与步之间检查中止标志
 DEFAULT_MAX_STEPS = 50  # 与正常 CLI 的 --max-steps 默认值一致，分数才代表真实使用
@@ -34,6 +36,27 @@ GIT_IDENTITY = ["-c", "user.name=bunny-bench", "-c", "user.email=bench@example.i
 
 def python_command():
     return shlex.quote(sys.executable)
+
+
+@contextlib.contextmanager
+def bench_path():
+    """修复证明用 PATH 上的 python3 跑测试，判分用当前解释器：把当前解释器的目录放到 PATH 最前面，两边才是同一个 Python。"""
+    folder = os.path.dirname(sys.executable)
+    with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([folder, os.environ.get("PATH", "")])}):
+        yield
+
+
+def pytest_preflight():
+    """修复证明会用 pytest 跑裸 `def test_` 文件：PATH 上的 python3 没装 pytest 时这些行全会变成 no_pytest，花了钱却量不到东西。"""
+    with bench_path():
+        python = shutil.which("python3") or sys.executable
+        try:
+            done = subprocess.run([python, "-c", "import pytest"], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"{python} 无法运行：{exc}"
+    if done.returncode != 0:
+        return f"{python} 没有安装 pytest（修复证明和判分都要用它跑 pytest 风格的测试）：pip install pytest"
+    return ""
 
 
 def write_tree(root, files):
@@ -170,6 +193,14 @@ def grade_objections(task, root, state, answer, before):
     return passing
 
 
+def fix_proof_label(result):
+    """一行结果里的修复证明：proven / theater / weak，跳过时是 skipped:原因，没跑是空串。"""
+    if not result:
+        return ""
+    status = str(result.get("status", ""))
+    return f"skipped:{result.get('reason', '')}" if status == "skipped" else status
+
+
 def _drive(agent, prompt, timeout, result):
     """在工作线程里跑 agent.ask：超时先请求中止，宽限期后仍不返回就放弃该线程。"""
     outcome = {}
@@ -201,11 +232,16 @@ def run_task(
     verify_gate=False,
     critic=False,
     prices=None,
+    fix_proof="off",
 ):
     """在全新的临时仓库里跑一次任务，返回一行可序列化的结果。
 
+    fix_proof 为 report / repair 时同时打开验证闸门，并按该模式跑修复证明。
+
     max_steps 是 agent 的硬上限；task.step_budget 只是“高效完成应有的步数”，超出记为 over_budget，不直接判负。
     """
+    if fix_proof not in FIX_PROOF_MODES:
+        raise ValueError(f"fix_proof 必须是 {', '.join(FIX_PROOF_MODES)} 之一")
     real_home = Path.home()
     root = Path(keep_dir or tempfile.mkdtemp(prefix=f"bunny-bench-{task.id}-"))
     write_tree(root, task.files)
@@ -236,12 +272,19 @@ def run_task(
         "objection_on_passing": 0,
         "critic_regression": False,
         "critic_issues": [],
+        "fix_proof": "",
+        "fix_proof_repairs": 0,
     }
+    verify_config = None
+    if fix_proof != "off":
+        verify_config = VerifyConfig(mode="auto", timeout=60, max_repair_rounds=1, fix_proof=fix_proof)
+    elif verify_gate:
+        verify_config = BENCH_VERIFY
     started = time.monotonic()
     agent = None
     answer, error, stuck = "", None, False
     try:
-        with isolated_home(root / ".home"):
+        with isolated_home(root / ".home"), bench_path() if fix_proof != "off" else contextlib.nullcontext():
             agent = BunnyByte(
                 model_client=client,
                 workspace=WorkspaceContext.build(root),
@@ -249,7 +292,7 @@ def run_task(
                 approval_policy="auto",
                 max_steps=max_steps,
                 auto_dream=False,
-                verify_config=BENCH_VERIFY if verify_gate else None,
+                verify_config=verify_config,
                 critic_config=BENCH_CRITIC if critic else None,
             )
             agent.cost_meter.prices = dict(prices or {})
@@ -267,6 +310,8 @@ def run_task(
         result["verify_status"] = str(state.verification.get("status", ""))
         result["verify_rounds"] = int(state.verification.get("rounds", 0))
         result["verify_repairs"] = int(state.verification.get("repairs", 0))
+        result["fix_proof"] = fix_proof_label(state.verification.get("fix_proof"))
+        result["fix_proof_repairs"] = int(state.verification.get("fix_proof_repairs", 0))
         result.update(trace_usage(agent.run_store.trace_path(state)))
         result.update(trace_prompt_reuse(agent.run_store.trace_path(state)))
         turn = agent.cost_meter.turn
@@ -312,6 +357,7 @@ def run_bench(
     verify_gate=False,
     critic=False,
     prices=None,
+    fix_proof="off",
 ):
     results = []
     for task in tasks:
@@ -325,6 +371,7 @@ def run_bench(
                 verify_gate=verify_gate,
                 critic=critic,
                 prices=prices,
+                fix_proof=fix_proof,
             )
             results.append(row)
             if on_result is not None:
