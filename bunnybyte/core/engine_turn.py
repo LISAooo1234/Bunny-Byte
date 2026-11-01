@@ -330,6 +330,9 @@ def run_turn(engine, user_message, mention_text=None):
                 else [_tool_call_payload(call) for call in native_tool_calls]
             )
             parse_metadata = {"native_tool_calls": len(native_tool_calls)}
+            if raw.strip():
+                # 原生工具调用前那句话也记进历史：只剩一串工具结果时，模型下一次调用会把它们当成“之前的会话已经做完了”
+                parse_metadata["preamble"] = raw.strip()  # 原样记下：渲染历史时再裁，CLI 也靠和流式内容相等来去重
         elif native_tools:
             kind, payload, parse_metadata = text_tools.classify(raw, native_tools)  # 写成文字的工具调用不再当回答
             if kind == "retry" and parse_metadata.get("text_tool_format"):

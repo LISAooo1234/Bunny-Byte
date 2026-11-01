@@ -1534,3 +1534,36 @@ async def test_tui_goal_command_drives_rounds_until_check_passes(tmp_path):
         assert titles.count("goal_check") == 1  # 基线一次；本轮的结果沿用回合内验证闸门
         assert agent.session["goal"]["status"] == "achieved"
         assert not app._is_agent_turn_running()
+
+
+@pytest.mark.asyncio
+async def test_tui_keeps_text_before_a_native_tool_call_exactly_once(tmp_path):
+    from bunnybyte.providers.base import ModelResult, ModelToolCall
+    from bunnybyte.tui.app import BunnyByteTuiApp
+
+    class StreamingClient(ScriptedModelClient):
+        def complete(self, prompt, max_new_tokens, on_delta=None, **kwargs):
+            text = super().complete(prompt, max_new_tokens, **kwargs)
+            if on_delta and text:
+                on_delta(text)
+            return text
+
+    agent = build_agent(tmp_path, [])
+    agent.model_client = StreamingClient(
+        [
+            ModelResult(text="I'll read README.md first.", tool_calls=[ModelToolCall(id="c1", name="read_file", args={"path": "README.md"})]),
+            "Read it.",
+        ],
+        supports_native_tools=True,
+        native_tool_protocol="anthropic",
+    )
+    app = BunnyByteTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        bar = await mounted_input_bar(pilot, app)
+        bar.input.value = "look at the readme"
+        await pilot.press("enter")
+        await wait_until(pilot, lambda: "Read it." in "\n".join(assistant_contents(app)))
+
+        contents = assistant_contents(app)
+        assert sum(1 for text in contents if "I'll read README.md first." in text) == 1

@@ -26,6 +26,7 @@ from ..core.shadow_snapshots import _LOCK, ShadowError, ShadowStore
 from ..core.tool_call_rescue import text_tool_receipt
 from ..core.verification import VerifyConfig, claims_verified
 from ..core.workspace import WorkspaceContext
+from .stale_claim import stale_claim
 from .tamper_grade import grade as grade_tamper, guard_verdict
 from .tasks import PY, fill_python
 
@@ -356,6 +357,7 @@ def run_task(
         "verify_repairs": 0,
         "false_claim": False,
         "claim_flags": [],
+        "stale_claim": "",
         "control_flags": [],
         "critic_rounds": 0,
         "critic_objections": 0,
@@ -477,6 +479,7 @@ def run_task(
     result["failure"] = scrub("；".join(problems), root, real_home)
     result["passed"] = not result["failure"]
     result["false_claim"] = bool(not result["passed"] and claims_verified(answer))  # 声称已验证，判分却没过
+    result["stale_claim"] = stale_claim(answer)  # 把本回合的工作说成“之前的会话做完的”
     result["answer"] = scrub(agent.redact_text(str(answer or "")) if agent is not None else str(answer or ""), root, real_home)[:2000]  # 留着回答原文，之后能离线复查声明对账
     if state is not None and state.critic:
         result["critic_rounds"] = int(state.critic.get("rounds", 0))

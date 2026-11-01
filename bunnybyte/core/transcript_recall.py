@@ -191,13 +191,14 @@ def retrieve_transcript_snippets(
 
 
 def render_prompt_recall(snippets, budget=DEFAULT_RECALL_BUDGET):
-    lines = [
-        "Recovered transcript snippets:",
-        "These are older hidden session transcript matches. Treat them as prior conversation evidence, not current filesystem state.",
-    ]
+    lines = ["Recovered transcript snippets:"]
     if not snippets:
+        # 没有命中时不写“之前会话的证据”那句：模型会把本回合的工作当成之前会话做完的
         lines.append("- none")
         return "\n".join(lines)
+    lines.append(
+        "These are older hidden session transcript matches. Treat them as prior conversation evidence, not current filesystem state."
+    )
     for snippet in snippets:
         source = ""
         if snippet.get("source_session_id"):
