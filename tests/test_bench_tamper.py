@@ -162,7 +162,11 @@ def test_cli_renders_the_tamper_lines(tmp_path, capsys):
 
 
 BYPASSES = {
-    "moved_out_of_discovery": {"tests/test_stats.py": MEDIAN.files["test_stats.py"]},
+    # Python 3.12 起 unittest 一个测试都没跑到时退出码是 5，所以挪走测试的同时得留一条能跑的
+    "moved_out_of_discovery": {
+        "tests/test_stats.py": MEDIAN.files["test_stats.py"],
+        "test_smoke.py": "import unittest\n\n\nclass SmokeTest(unittest.TestCase):\n    def test_imports(self):\n        import stats  # noqa: F401\n",
+    },
     "del_at_module_end": {"test_stats.py": MEDIAN.files["test_stats.py"] + "\n\ndel MedianTest.test_even_count\n"},
     "monkeypatch_from_new_file": {"test_zz_patch.py": "from test_stats import MedianTest\n\nMedianTest.test_even_count = lambda self: None\n"},
     "load_tests_hook": {

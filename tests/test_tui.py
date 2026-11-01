@@ -44,6 +44,14 @@ async def wait_until(pilot, condition, timeout=10.0):
         await pilot.pause(delay=0.05)
 
 
+async def mounted_input_bar(pilot, app):
+    """慢的 CI 机器上 run_test 交回控制时默认 screen 可能还没挂上组件：等 InputBar 出现再取。"""
+    from bunnybyte.tui.widgets import InputBar
+
+    await wait_until(pilot, lambda: app.query_one(InputBar))
+    return app.query_one(InputBar)
+
+
 def has_widget(app, widget_type) -> bool:
     return bool(list(app.query(widget_type)))
 
@@ -740,12 +748,12 @@ async def test_tui_ctrl_c_copies_selected_text_before_input_handles_key(tmp_path
 @pytest.mark.asyncio
 async def test_tui_slash_suggestions_complete_partial_command(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar, SlashSuggestions
+    from bunnybyte.tui.widgets import SlashSuggestions
 
     app = BunnyByteTuiApp(build_agent(tmp_path, []))
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "/sub"
         bar.update_slash_suggestions()
 
@@ -764,7 +772,7 @@ async def test_tui_slash_suggestions_complete_partial_command(tmp_path):
 async def test_tui_provider_profile_suggestions_complete_profile(tmp_path):
     from bunnybyte.config import ProviderConfig
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar, SlashSuggestions
+    from bunnybyte.tui.widgets import SlashSuggestions
 
     agent = build_agent(tmp_path, [])
     agent.provider_profiles_factory = lambda: [
@@ -786,7 +794,7 @@ async def test_tui_provider_profile_suggestions_complete_profile(tmp_path):
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "/provider deepseek-"
         bar.update_slash_suggestions()
 
@@ -805,7 +813,6 @@ async def test_tui_provider_profile_suggestions_complete_profile(tmp_path):
 async def test_tui_enter_executes_provider_profile_suggestion(tmp_path):
     from bunnybyte.config import ProviderConfig
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar
 
     class ProviderClient:
         provider = "deepseek-pro"
@@ -828,7 +835,7 @@ async def test_tui_enter_executes_provider_profile_suggestion(tmp_path):
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "/provider deepseek-"
         bar.update_slash_suggestions()
 
@@ -914,13 +921,12 @@ def test_subagent_slash_command_launches_explore_worker(tmp_path):
 @pytest.mark.asyncio
 async def test_tui_help_command_uses_existing_repl_commands(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar
 
     agent = build_agent(tmp_path, [])
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "/help"
         await pilot.press("enter")
         await pilot.pause(delay=0.1)
@@ -936,7 +942,6 @@ async def test_tui_dream_command_runs_without_blocking_event_loop(tmp_path, monk
     import time
 
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar
 
     started = threading.Event()
     release = threading.Event()
@@ -952,7 +957,7 @@ async def test_tui_dream_command_runs_without_blocking_event_loop(tmp_path, monk
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "/dream"
         await pilot.press("enter")
         await pilot.pause(delay=0.1)
@@ -985,13 +990,12 @@ async def test_tui_dream_command_runs_without_blocking_event_loop(tmp_path, monk
 @pytest.mark.asyncio
 async def test_tui_enter_executes_selected_slash_suggestion(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar
 
     agent = build_agent(tmp_path, [])
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "/"
         bar.update_slash_suggestions()
 
@@ -1007,13 +1011,12 @@ async def test_tui_enter_executes_selected_slash_suggestion(tmp_path):
 @pytest.mark.asyncio
 async def test_tui_enter_only_completes_argument_commands(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar
 
     agent = build_agent(tmp_path, [])
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "/pl"
         bar.update_slash_suggestions()
 
@@ -1028,7 +1031,7 @@ async def test_tui_enter_only_completes_argument_commands(tmp_path):
 @pytest.mark.asyncio
 async def test_tui_resume_command_renders_loaded_session_history(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar, UserMessage
+    from bunnybyte.tui.widgets import UserMessage
 
     first = build_agent(tmp_path, ["<final>Previous answer.</final>"])
     assert first.ask("previous question") == "Previous answer."
@@ -1038,7 +1041,7 @@ async def test_tui_resume_command_renders_loaded_session_history(tmp_path):
     app = BunnyByteTuiApp(second)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = f"/resume {first_id}"
         await pilot.press("enter")
         await pilot.pause(delay=0.1)
@@ -1136,7 +1139,7 @@ async def test_retry_notices_with_different_previews_are_coalesced_by_problem(tm
 @pytest.mark.asyncio
 async def test_tui_resume_command_renders_tool_history(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar, ToolCard
+    from bunnybyte.tui.widgets import ToolCard
 
     first = build_agent(tmp_path, [])
     first.record({"role": "user", "content": "inspect files"})
@@ -1155,7 +1158,7 @@ async def test_tui_resume_command_renders_tool_history(tmp_path):
     app = BunnyByteTuiApp(second)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = f"/resume {first_id}"
         await pilot.press("enter")
         await pilot.pause(delay=0.1)
@@ -1234,7 +1237,6 @@ async def test_tui_stop_button_aborts_running_agent_turn(tmp_path):
     import threading
 
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar
 
     class BlockingClient:
         provider = "test"
@@ -1261,7 +1263,7 @@ async def test_tui_stop_button_aborts_running_agent_turn(tmp_path):
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "stop me"
         await pilot.press("enter")
         await pilot.pause(delay=0.1)
@@ -1283,7 +1285,6 @@ async def test_tui_stop_button_sets_stopping_state_while_agent_turn_is_still_run
     import threading
 
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar
 
     class StickyAbortClient:
         provider = "test"
@@ -1310,7 +1311,7 @@ async def test_tui_stop_button_sets_stopping_state_while_agent_turn_is_still_run
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "stop me"
         await pilot.press("enter")
         await pilot.pause(delay=0.1)
@@ -1330,7 +1331,6 @@ async def test_tui_stop_button_cancels_running_command_task(tmp_path, monkeypatc
     import threading
 
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar
 
     started = threading.Event()
     release = threading.Event()
@@ -1345,7 +1345,7 @@ async def test_tui_stop_button_cancels_running_command_task(tmp_path, monkeypatc
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "/dream"
         await pilot.press("enter")
         await pilot.pause(delay=0.1)
@@ -1361,13 +1361,12 @@ async def test_tui_stop_button_cancels_running_command_task(tmp_path, monkeypatc
         release.set()
 
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar
 
     agent = build_agent(tmp_path, ["<final>Done from TUI.</final>"])
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "ship it"
         await pilot.press("enter")
         await wait_until(pilot, lambda: "Done from TUI." in "\n".join(assistant_contents(app)))
@@ -1376,7 +1375,7 @@ async def test_tui_stop_button_cancels_running_command_task(tmp_path, monkeypatc
 @pytest.mark.asyncio
 async def test_tui_renders_tool_card_result(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar, ToolCard
+    from bunnybyte.tui.widgets import ToolCard
 
     agent = build_agent(
         tmp_path,
@@ -1388,7 +1387,7 @@ async def test_tui_renders_tool_card_result(tmp_path):
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "write a file"
         await pilot.press("enter")
         await wait_until(pilot, lambda: "Wrote it." in "\n".join(assistant_contents(app)))
@@ -1402,7 +1401,7 @@ async def test_tui_renders_tool_card_result(tmp_path):
 @pytest.mark.asyncio
 async def test_tui_approval_prompt_controls_risky_tool(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import ConfirmPrompt, InputBar
+    from bunnybyte.tui.widgets import ConfirmPrompt
 
     agent = build_agent(
         tmp_path,
@@ -1415,7 +1414,7 @@ async def test_tui_approval_prompt_controls_risky_tool(tmp_path):
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "write a file"
         await pilot.press("enter")
         await wait_until(pilot, lambda: has_widget(app, ConfirmPrompt))
@@ -1429,7 +1428,7 @@ async def test_tui_approval_prompt_controls_risky_tool(tmp_path):
 @pytest.mark.asyncio
 async def test_tui_ask_user_prompt_returns_selected_choice(tmp_path):
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import AskUserPrompt, InputBar
+    from bunnybyte.tui.widgets import AskUserPrompt
 
     agent = build_agent(
         tmp_path,
@@ -1441,7 +1440,7 @@ async def test_tui_ask_user_prompt_returns_selected_choice(tmp_path):
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = "ask before shipping"
         await pilot.press("enter")
         await wait_until(pilot, lambda: has_widget(app, AskUserPrompt))
@@ -1513,7 +1512,7 @@ async def test_tui_goal_command_drives_rounds_until_check_passes(tmp_path):
 
     from bunnybyte.core.verification import VerifyConfig
     from bunnybyte.tui.app import BunnyByteTuiApp
-    from bunnybyte.tui.widgets import InputBar, ToolCard
+    from bunnybyte.tui.widgets import ToolCard
 
     (tmp_path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
     (tmp_path / "check.py").write_text("import app\nassert app.VALUE == 2\n", encoding="utf-8")
@@ -1527,7 +1526,7 @@ async def test_tui_goal_command_drives_rounds_until_check_passes(tmp_path):
     app = BunnyByteTuiApp(agent)
 
     async with app.run_test() as pilot:
-        bar = app.query_one(InputBar)
+        bar = await mounted_input_bar(pilot, app)
         bar.input.value = f'/goal --check "{check}" 让 check.py 通过'
         await pilot.press("enter")
         await wait_until(pilot, lambda: "目标已达成" in "\n".join(assistant_contents(app)))
