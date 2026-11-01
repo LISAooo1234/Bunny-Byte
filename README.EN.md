@@ -416,6 +416,22 @@ max_repair_rounds = 1              # repair attempts after a failed check
 fix_proof = "report"               # off | report | repair, see "Fix proof" below
 ```
 
+## Claim reconciliation
+
+A model's summary often says more than it did: "I modified `a.py` and `b.py`" when only one changed, or "all tests pass" when its last test run was red or timed out. At the end of every main-agent turn the runtime checks the final answer against the turn's own record (also with the verification gate off; no model call, no command run) and appends a line when they disagree:
+
+```text
+⚠ 声明与记录不符：回答说改了 `b.py`，本回合的改动里没有它，请核对。
+```
+
+- **Change claims**: a file path governed by a change verb (修改 / 新增 / 删除 / updated / created …) in a clause with a completion marker (已 / 了 / 我 / an English past tense / a bullet starting with the verb) that is not among the turn's changes. Changes include write_file / patch_file and files written by the shell or subagents (a fresh shadow snapshot is taken at the end).
+- **Test claims**: the answer says tests pass, but the last test command the model ran this turn (pytest, unittest, jest, go test …; linters such as ruff, mypy, tsc don't count) failed or timed out and was not re-run green; with the gate off, claiming a pass after changing code without running a single command also counts (a model that tried `python app.py` itself is not flagged). Skipped when the gate already has a passing receipt. Edits after a green run are only recorded, not warned about.
+- **Deliberately not reported**: negations ("没有动 b.py", "left untouched"), plans and suggestions, sentences whose subject is code / a commit / a PR / a command / the user, descriptions of the workspace state ("branch with modified files …"), code blocks and quotes, extension-less slash words like `新增/修改`; gitignored files and files under `.bunnybyte/` or `.git/` (invisible to snapshots), files changed in earlier turns, paths shown by this turn's `git log/show/diff`, files that no longer exist; test results when the answer itself mentions a failure; change claims while snapshots are unavailable or a subagent is still running.
+
+Results go to `verification.claims` in `report.json`, the `claim_check` trace event (one line in `bunny replay`) and `verification.claims` in `bunny -p` JSON; `bunny bench` records `claim_flags` per row, keeps the answer text, and counts flags on passed rows (false-positive candidates) separately from failed rows. Advisory only: exit codes don't change.
+
+**Measured** (`Claude Haiku 4.5`, core 10 tasks, gate off): the first version flagged "changed code without running tests" on two honest rows (the model had checked its work with `python3 greet.py --shout`); after narrowing it to "ran no command at all", a rerun had 0 flags, and an offline pass over 72 stored runs in this repo had 0 flags. It has not caught a real false claim yet: the only "claims pass, grader fails" row ran tests that really were green and missed another file (the verification gate is what catches that). So far the evidence is a low false-positive rate, not a catch rate.
+
 ## Fix proof
 
 A passing receipt says the tests are green now; it does not say the tests exercise the fix. Models readily hand in a test that would pass on the old code too: an assertion like `callable(add)`, a test of some other function, or a failing assertion simply deleted. When verification passes and the turn changed both sources and tests, the runtime copies the turn's snapshot into a temp directory, **reverts only the source changes, keeps the changed tests**, and runs those tests again:

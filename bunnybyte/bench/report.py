@@ -99,6 +99,8 @@ def summarize(rows):
         "verify_rounds": sum(row.get("verify_rounds", 0) for row in rows),
         "verify_repairs": sum(row.get("verify_repairs", 0) for row in rows),
         "false_claims": sum(1 for row in rows if row.get("false_claim")),
+        "claim_flags_passed": sum(1 for row in rows if row.get("claim_flags") and row["passed"]),
+        "claim_flags_failed": sum(1 for row in rows if row.get("claim_flags") and not row["passed"]),
         "critic_rounds": sum(row.get("critic_rounds", 0) for row in rows),
         "critic_objections": sum(row.get("critic_objections", 0) for row in rows),
         "objections_on_passing": sum(row.get("objection_on_passing", 0) for row in rows),
@@ -438,14 +440,21 @@ def _tamper_lines(summary):
     ]
 
 
+def _claim_lines(summary):
+    passed, failed = summary.get("claim_flags_passed", 0), summary.get("claim_flags_failed", 0)
+    if not passed and not failed:
+        return []
+    return [f"声明对账：标记了 {passed + failed} 行，判分通过的 {passed} 行是误报候选，判分没过的 {failed} 行"]
+
+
 def _verify_lines(record):
     summary = record["summary"]
     if not record.get("verify") and not summary.get("false_claims"):
-        return []
+        return _claim_lines(summary)
     claims = f"声称已验证但判分未过 {summary.get('false_claims', 0)} 次"
     if not record.get("verify"):
-        return [claims]
-    return [f"验证闸门：触发 {summary['verify_rounds']} 次，其中让模型修复 {summary['verify_repairs']} 次；{claims}"]
+        return [claims, *_claim_lines(summary)]
+    return [f"验证闸门：触发 {summary['verify_rounds']} 次，其中让模型修复 {summary['verify_repairs']} 次；{claims}", *_claim_lines(summary)]
 
 
 def render_history(records):

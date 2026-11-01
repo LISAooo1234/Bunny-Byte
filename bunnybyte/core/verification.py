@@ -69,7 +69,7 @@ HEDGE_RE = re.compile(
 SENTENCE_SPLIT_RE = re.compile(r"[。！!\n;；]|(?<=[a-z0-9])\.(?:\s|$)")
 RUNTIME_LINE_RE = re.compile(r"^\s*[✓✗⚠]")
 TEST_TOOL_RE = re.compile(
-    r"^(?:[\w./-]*python[\d.]*\s+-m\s+(?:pytest|unittest|compileall|mypy|ruff|flake8)\b"
+    r"^(?:[\w./-]*python[\d.]*\s+(?:-[BbdEIOqsSuv]+\s+|-[XW]\s*\S+\s+)*-m\s+(?:pytest|unittest|compileall|mypy|ruff|flake8)\b"
     r"|(?:pytest|py\.test|tox|nox|jest|vitest|mocha|ctest|mypy|tsc|eslint|ruff|flake8)\b"
     r"|cargo\s+(?:test|check|clippy)\b|go\s+(?:test|vet)\b|(?:npm|yarn|pnpm)\s+(?:run\s+)?test\b"
     r"|make\s+(?:test|check)\b)",

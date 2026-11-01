@@ -1,6 +1,7 @@
 """回合收尾前的验证闸门：模型想交卷时，先真跑一遍项目检查，失败就把输出塞回去让它修。"""
 
 from .artifacts import build_artifact_graph
+from .claim_gate import claims_line
 from .fix_proof import is_test_path
 from .fix_proof_gate import fix_proof_gate, fix_proof_notice
 from .tamper_guard import scan_turn, tamper_mode, tamper_notice
@@ -174,7 +175,7 @@ def verification_notice(agent, task_state, final):
     config = getattr(agent, "verify_config", None)
     tamper = _tamper_line(agent, task_state, config)
     if config is None or not config.enabled:
-        return tamper
+        return "\n".join(line for line in (claims_line(agent, task_state, final), tamper) if line)
     state = task_state.verification
     lines = []
     status = state.get("status", "")
@@ -200,6 +201,6 @@ def verification_notice(agent, task_state, final):
                 "⚠ 回答声称测试/验证已通过，但本回合没有任何通过的验证回执"
                 + ("，最近一次验证是失败的。" if status in (STATUS_FAILED, STATUS_TIMEOUT) else "。")
             )
-    if tamper:
-        lines.append(tamper)
+    claims = claims_line(agent, task_state, final, skip_tests=bool(state.get("claim_warning")))
+    lines.extend(line for line in (claims, tamper) if line)
     return "\n".join(lines)

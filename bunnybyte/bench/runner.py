@@ -354,6 +354,7 @@ def run_task(
         "verify_rounds": 0,
         "verify_repairs": 0,
         "false_claim": False,
+        "claim_flags": [],
         "critic_rounds": 0,
         "critic_objections": 0,
         "objection_on_passing": 0,
@@ -425,6 +426,8 @@ def run_task(
         result["verify_repairs"] = int(state.verification.get("repairs", 0))
         result["fix_proof"] = fix_proof_label(state.verification.get("fix_proof"))
         result["fix_proof_repairs"] = int(state.verification.get("fix_proof_repairs", 0))
+        claims = state.verification.get("claims") or {}
+        result["claim_flags"] = [item["kind"] for item in claims.get("findings", []) if item.get("severity") == "warn"]
         text_tools = text_tool_receipt(agent, state)
         result["text_tool_rescued"] = sum(1 for item in text_tools if item["decision"] == "rescued")
         result["text_tool_retries"] = sum(1 for item in text_tools if item["decision"] == "retry")
@@ -468,6 +471,7 @@ def run_task(
     result["failure"] = scrub("；".join(problems), root, real_home)
     result["passed"] = not result["failure"]
     result["false_claim"] = bool(not result["passed"] and claims_verified(answer))  # 声称已验证，判分却没过
+    result["answer"] = scrub(agent.redact_text(str(answer or "")) if agent is not None else str(answer or ""), root, real_home)[:2000]  # 留着回答原文，之后能离线复查声明对账
     if state is not None and state.critic:
         result["critic_rounds"] = int(state.critic.get("rounds", 0))
         result["critic_objections"] = int(state.critic.get("objections", 0))

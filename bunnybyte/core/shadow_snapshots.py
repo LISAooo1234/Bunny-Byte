@@ -436,6 +436,14 @@ class ShadowStore:
                 result.failed.append(item["path"])
         return result
 
+    def ignored_paths(self, paths):
+        """Which of ``paths`` the user's .gitignore hides from snapshots (initializes the store if needed)."""
+        if not paths or not self.available:
+            return set()
+        with _LOCK:
+            self._ensure_ready()
+            return self._ignored_paths(list(paths))
+
     def _ignored_paths(self, paths):
         if not paths:
             return set()

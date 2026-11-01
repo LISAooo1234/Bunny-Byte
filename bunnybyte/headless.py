@@ -19,6 +19,7 @@ from .core.goal import ACHIEVED, drive_goal, goal_summary
 from .core.pricing import format_usd
 from .core.run_usage import trace_usage
 from .core.task_state import STATUS_COMPLETED, STATUS_FAILED, STATUS_RUNNING
+from .core.claim_check import claims_summary
 from .core.tamper_guard import describe, require_block, tamper_summary
 from .core.verification_verdict import VERDICT_FAILED, VERDICT_TAMPERED, VERDICT_UNVERIFIED, verification_verdict
 from .core.workspace import clip
@@ -147,6 +148,7 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
             "repairs": int(verification.get("repairs", 0)),
             "fix_proof": fix_proof_summary(verification),
             "tamper": tamper_summary(verification.get("tamper")),
+            "claims": claims_summary(verification.get("claims")),
         },
         "critic": critic_summary(state) if state is not None else {},
         "dependencies": dependency_receipt(agent, state),

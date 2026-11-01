@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import datetime
 
 from .core.fix_proof import skip_text
+from .core.claim_check import describe as describe_claim
 from .core.tamper_guard import describe
 from .core.provider_failover import failover_notice
 from .tui.tool_cards import card_args_summary, clip_cells, format_duration, summarize_tool_output, tool_title
@@ -125,6 +126,11 @@ def _event_line(event):
         if event.get("status") == "suspicious":
             return _join(f"  ⚠ 测试篡改守卫 {clip_cells('；'.join(describe(item) for item in findings[:2]), 70)}".rstrip(), "不算已验证" if event.get("mode") == "block" else "")
         return _join("  · 测试篡改守卫", "跳过" if event.get("status") == "skipped" else "未发现削弱")
+    if name == "claim_check":
+        findings = [item for item in event.get("findings") or [] if item.get("severity") == "warn"]
+        if findings:
+            return f"  ⚠ 声明对账 {clip_cells('；'.join(describe_claim(item) for item in findings[:2]), 80)}"
+        return _join("  · 声明对账", f"{event.get('checked', 0)} 条声明与记录一致")
     if name == "dependency_check":
         icon = {"blocked": "✗", "denied": "✗", "confirmed": "✓"}.get(str(event.get("decision", "")), "·")
         label = {"blocked": "已拦下", "denied": "用户拒绝", "confirmed": "用户确认", "noted": "提示"}.get(str(event.get("decision", "")), "")
