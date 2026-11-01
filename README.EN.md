@@ -55,6 +55,15 @@ stored locally for recovery, review, and debugging.
 | Safety controls | Supports approval policy, sandboxing, and fresh-read validation before file writes. |
 | Run artifacts | Persists session JSON, events JSONL, traces, task state, reports, and checkpoints. |
 
+## Goal mode: the runtime runs the check to decide "done", and keeps going when one turn isn't enough (0.15.0)
+
+When a long task didn't fit in one turn you had to type "continue", and "done" was only the model's word. Milestone M8 adds `/goal --check "pytest -q" <objective>` and `bunny -p --goal`: the runtime drives the model turn after turn and **runs the check command itself after every turn**; only exit code 0 counts as achieved. Unlike Claude Code's `/goal` (a second model reads the transcript) or OpenCode (a reviewer model), the verdict is a command that actually ran, and there are brakes for cheap models:
+
+- **No wasted spend**: the check runs once first; if it already passes, collects no tests or can't run, the goal is refused before any model call. Two rounds in a row with unchanged files and unchanged check output (timings, addresses and temp paths stripped), a round with no tool call, the round limit or the goal's total cost cap all stop it.
+- **Resumable**: state lives in the session, so `/goal resume` works, also after `--resume`; continuation messages are written by the runtime, marked as not typed by the user, and carry the escaped check output so it can't pose as transcript structure. `bunny -p --goal` exits 0 when achieved and 3 otherwise, the JSON has per-round receipts, and `bunny replay` shows one line per round.
+- **Measurable**: new `bunny bench --suite goal` (three multi-file tasks that don't fit in 12 steps). Claude Haiku 4.5, 3 runs each: one 12-step turn 0/9, goal mode with up to 4 rounds 6/9; a single turn with the step cap raised to 48 also scores 6/9, and goal mode costs about 26% more.
+- **Stated plainly**: the value is "no human typing continue, and a verdict you can trust", not lower cost; a check weaker than the spec still fools it (3 runs per arm passed the check and failed the hidden grader). The optional goal evaluator (`[goal] evaluator`) vetoed nothing in 18 reviews, zero measured benefit, so it is off by default.
+
 ## Cache-friendly prompts: long tasks stop paying for the same prefix every step, and see the files they just read (0.14.0)
 
 An agent resends the whole prompt on every step, and provider prefix caches only reuse the part that is byte-identical from the start. M5 moves the per-call runtime state (working memory, todos, read ranges, checkpoint, git status) after the session history, sends instructions, rules and tools as `system` on the Anthropic protocol, and makes long turns fold history in batches so it only grows at the end.

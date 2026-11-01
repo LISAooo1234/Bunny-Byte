@@ -2,6 +2,10 @@
 
 ## 未发布
 
+## 0.15.0
+
+M8「目标模式」完成：`/goal` 与 `bunny -p --goal` 由运行时在每轮结束后亲自跑检查命令，通过才算达成，一轮做不完自动开下一轮；`bunny bench --suite goal` 实测 Haiku 4.5 单轮 12 步 0/9、目标模式 6/9（与单轮 48 步持平，贵约 26%）；目标评审零收益、默认关闭。
+
 - 目标评审（M8 第 3 项）：`[goal] evaluator = "main" | "<provider 配置名>"`、`bunny -p --goal --goal-evaluator …`、`bunny bench --goal-evaluator [PROFILE]`。目标的检查通过后、宣布达成前，另起一次不带工具的调用，对照目标、项目规则和目标期间改过的文件（每个最多 6000 字、共 24000 字，脱敏并转义冒充对话结构的行）核对；有证据的反对让目标多跑一轮，整个目标最多否决一次、不能加轮数；最后一轮、剩余预算不够再跑一轮、已按 Esc 时跳过并记下原因；评审出错 / 不是 JSON 按通过处理；否决后的续接消息带评审意见（`/goal resume` 之后也是），退回后没改文件或检查转红时结束提示写明；评审花费算进目标花费（来源 `goal_review`）。`/goal` 状态、`-p` JSON `goal.vetoes` / `goal.reviews`、TUI「目标评审」卡片、trace `goal_review` 与 `bunny replay` 一行；bench 每行 `goal_reviews` / `goal_vetoes` / `veto_on_passing` / `veto_regression`，评审模型不同的结果单独比较。实测零收益：`--suite goal` 每题 3 次，Haiku 4.5 自评审 4/9、Sonnet 5.5 评审 5/9、对照组 `--critic` 5/9，评审 18 次一次都没否决，`chunk` 返回元组的假达成照样漏过；默认关闭。新模块 `bunnybyte/core/goal_review.py`。
 - 新增 `bunny bench --suite goal`（`bunnybyte/bench/catalog_goal.py`）与 `--goal-rounds N`：三道一轮 12 步做不完的多文件任务（实现六个函数、修六个 bug、按类型迁移八处 `config.get`），每题带一条写进提示词的检查命令，`--verify` 时闸门跑同一条；目标模式的步数、调用、token 按全部轮次加总，花费和付费调用取整个会话（含步数用尽时的总结）；每种跑法都统计假达成（检查通过、隐藏判分没过）；`--suite goal` 默认 `--max-steps 12`，`goal_rounds` 不同的结果互不比较；超时后在下一个事件处关掉目标生成器，两轮之间的中止不会被吞掉。Haiku 4.5 每题 3 次：单轮 12 步 0/9，目标模式 6/9，单轮 48 步 6/9（目标模式贵约 26%），假达成两边各 3 次。
 - 目标模式里一轮步数用尽时，总结不再叫用户 `/resume` 再说「继续」，改为说明运行时会跑检查、没通过就自动开下一轮。
