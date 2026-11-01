@@ -27,7 +27,8 @@ REPAIR_MESSAGE = (
     "{tail}\n\n"
     "Your final answer was held back because of this. Fix the problem with tools, then answer again. "
     "If these failures already existed before your change and are unrelated to it, say so in your final "
-    "answer instead of editing. The check re-runs automatically when you answer again, so do not run "
+    "answer instead of editing. If a failing test contradicts the documented behavior, do not bend the code to satisfy it; "
+    "leave it failing and name the contradiction in your final answer. The check re-runs automatically when you answer again, so do not run "
     "it yourself through run_shell."
 )
 

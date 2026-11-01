@@ -45,12 +45,13 @@ FIRST_ROUND_NOTE = (
     "\n\n[Goal mode] After this turn the runtime itself runs `{command}`; the goal counts as done only when it "
     "passes. Before you started it {status}; run it yourself to see the output. If the task is too large for one "
     "turn, make as much progress as you can; the runtime continues in a new turn. Do not edit the check to make it pass."
+    " If a test contradicts the documented behavior, do not bend the code to it: leave it failing and explain the contradiction."
 )
 CONTINUE_MESSAGE = (
     "{objective}\n\n[Goal mode, round {number}/{limit}: this message was written by the runtime, not typed by the "
     "user.] After your previous turn the runtime ran `{command}`: {status} (exit {code}). Output tail:\n```\n{tail}\n```\n"
     "Continue working toward the goal above. The runtime re-runs the check when this turn ends; only a pass counts. "
-    "Do not edit the check to make it pass."
+    "Do not edit the check to make it pass. If a test contradicts the documented behavior, do not bend the code to it: leave it failing and explain the contradiction."
 )
 
 

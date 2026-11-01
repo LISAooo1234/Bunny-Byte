@@ -538,6 +538,7 @@ class BunnyByte(
             - If the user asks you to create or update a specific file and the path is clear, use write_file or patch_file instead of repeatedly listing files.
             - Before writing tests for existing code, read the implementation first.
             - When writing tests, match the current implementation unless the user explicitly asked you to change the code.
+            - If an existing test contradicts the documented behavior (docstring or spec) and the user did not ask to change that behavior, never bend the code to satisfy it (special cases, matching the wrong value) and do not edit the test unless asked: implement the documented behavior, leave that test failing, and name the contradiction in your final answer. Tests made obsolete by a behavior change the user requested should be updated as usual.
             - New files should be complete and runnable, including obvious imports.
             - Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.
             - Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or agent with args={{}}.
