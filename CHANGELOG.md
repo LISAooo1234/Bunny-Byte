@@ -2,6 +2,10 @@
 
 ## 未发布
 
+## 0.17.0
+
+M11「控制面守卫」完成（第 1 项 provider 地址信任已在 0.16.0 发布）；README / README.EN 新增亮点章节。本版同时包含声明对账（M10 第 1 项）。
+
 - 新增控制面守卫（M11 第 2–4 项；新模块 `bunnybyte/core/control_plane.py`、`control_watch.py`）：模型用 `write_file` / `patch_file` 改规则文件（任意目录的 AGENTS.md / CLAUDE.md 等）、`.bunnybyte.toml`、`.bunnybyte/{rules,skills}`、`skills/*/SKILL.md`、`.git/hooks`、`.git/config`、仓库根目录下其他 agent 的配置，而用户这一轮没有点名这个文件时，`--approval auto` 下也要有人确认（复用依赖守卫的审批弹窗，弹窗提示的参数名从 `dependency_note` 改为 `guard_note`），`bunny -p` / 子 agent / `never` 下拒绝；shell 和需要审批的 MCP 工具前后对固定清单（仓库里快照看不见的控制面文件、shell 启动脚本、`~/.gitconfig`、`~/.ssh`、全局配置、信任记录、其他 agent 的全局配置、LaunchAgents）做 stat 比对，`.git/config` 只看会执行程序的键，`~/.claude.json` 只看 `mcpServers` / `hooks`；改动未被点名时问人是否保留，拒绝或无人可问时备份后恢复原内容，等待期间又被改过则只报告。`.bunnybyte/memory` 只记录，dream / 技能进化会话豁免。`[control] mode = guard|warn|off`、`--control`，仓库配置只能调严；回合末尾 ⚠ 一行、trace `control_plane`、`bunny replay`、`report.json` / `bunny -p` JSON 的 `control_plane` 与 stderr 提示。
 - 新增声明对账（M10 第 1 项；新模块 `bunnybyte/core/claim_check.py`、`claim_parse.py`、`claim_gate.py`）：每个主 agent 回合结束时，拿最终回答和本回合自己的记录对一遍，验证闸门关着也运行，不调用模型、不跑命令。回答说改了某个文件、本回合的改动里却没有它（shell 和子 agent 的写入也算，收尾时重新拍快照），或者说测试通过、本回合最后一次测试命令却失败 / 超时之后没再跑通（lint 不算测试；闸门关着时改了代码却一条命令都没跑也算），就追加 `⚠ 声明与记录不符：…`。否定、计划、主语是代码 / 提交 / PR / 你的句子、描述工作区现状的句子、代码块、gitignore / `.bunnybyte/` 里的文件、更早回合改过的、本回合 git 历史输出里出现的、已不存在的路径都不报；回答自己提到失败时不对账测试。测试通过后又改文件只记录。`report.json` / `bunny -p` JSON 的 `verification.claims`、trace `claim_check` 与 `bunny replay` 一行；旧的“声称通过却没有回执”警告照旧，两者不重复。`bunny bench` 每行记 `claim_flags` 和回答原文（最多 2000 字），汇总分开统计判分通过和没过的被标记行。
 - 修复：`python -B -m pytest` 这类在 `-m` 前带解释器参数的命令不被认作测试命令（模型自己跑测试的证据、声明对账都受影响）。
