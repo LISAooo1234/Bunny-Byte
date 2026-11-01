@@ -15,6 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
+from ..core.control_plane import control_receipt
 from ..core.critic import CriticConfig
 from ..core.goal import drive_goal, start_goal
 from ..core.goal_review import resolve_goal_review_config
@@ -355,6 +356,7 @@ def run_task(
         "verify_repairs": 0,
         "false_claim": False,
         "claim_flags": [],
+        "control_flags": [],
         "critic_rounds": 0,
         "critic_objections": 0,
         "objection_on_passing": 0,
@@ -428,6 +430,10 @@ def run_task(
         result["fix_proof_repairs"] = int(state.verification.get("fix_proof_repairs", 0))
         claims = state.verification.get("claims") or {}
         result["claim_flags"] = [item["kind"] for item in claims.get("findings", []) if item.get("severity") == "warn"]
+        result["control_flags"] = [  # 正常任务上控制面守卫一次都不该拦：有就是误报
+            f"{change['path']}:{change['decision']}" for entry in control_receipt(agent, state) for change in entry["changes"]
+            if change["category"] != "memory" and change["decision"] != "mentioned"
+        ]
         text_tools = text_tool_receipt(agent, state)
         result["text_tool_rescued"] = sum(1 for item in text_tools if item["decision"] == "rescued")
         result["text_tool_retries"] = sum(1 for item in text_tools if item["decision"] == "retry")

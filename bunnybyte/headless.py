@@ -12,6 +12,7 @@ import time
 
 from .core.cost_meter import STOP_REASON_BUDGET_EXCEEDED
 from .core.critic_gate import critic_summary
+from .core.control_plane import control_receipt, describe_change
 from .core.dependency_guard import dependency_receipt
 from .core.tool_call_rescue import text_tool_receipt
 from .core.fix_proof_gate import fix_proof_summary
@@ -152,6 +153,7 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
         },
         "critic": critic_summary(state) if state is not None else {},
         "dependencies": dependency_receipt(agent, state),
+        "control_plane": control_receipt(agent, state),
         "text_tool_calls": text_tool_receipt(agent, state),
         "hooks": {
             "final_blocked": bool(hook_state.get("final_blocked")),
@@ -284,6 +286,9 @@ def run_headless(
     blocked = [item["name"] for entry in result["dependencies"] if entry["decision"] == "blocked" for item in entry["findings"] if item["verdict"] in {"typosquat", "new", "unverifiable"}]
     if blocked and not quiet:
         err.write(f"bunny: 依赖守卫拦下了 {'、'.join(dict.fromkeys(blocked))}（疑似拼错 / 刚注册 / 无法检查的包，无人值守时不安装；确认无误可加进 [deps] allow）。\n")
+    guarded = [describe_change(change, entry["tool_name"]) for entry in result["control_plane"] for change in entry["changes"] if change["decision"] in {"blocked", "restored", "reported", "changed_again"}]
+    if guarded and not quiet:
+        err.write(f"bunny: 控制面守卫：{'；'.join(dict.fromkeys(guarded))}（会改变 agent 行为的文件，你的请求里没提到；确需修改请在提示词里点名该文件，或用 --control warn）。\n")
     if denials:
         err.write(f"bunny: {denials} 个工具调用因审批策略被拒绝（无人值守时 ask 等同 never；需要放行请加 --approval auto）。\n")
     if code == EXIT_UNVERIFIED and goal and (result["goal"].get("tamper") or {}).get("blocked"):

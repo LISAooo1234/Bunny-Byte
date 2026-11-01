@@ -3,6 +3,7 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from .control_plane import guard_write
 from .dependency_guard import guard_permission
 
 
@@ -41,10 +42,16 @@ class PermissionChecker:
 
         if self.runtime.runtime_mode == "plan":
             return self._check_plan(tool, args)
-        # 依赖守卫排在 write_scope 和只读判断之前：worker 改 requirements.txt 也要过它
+        # 控制面守卫和依赖守卫排在 write_scope 和只读判断之前：worker 改 AGENTS.md / requirements.txt 也要过它们
+        control, control_notes = guard_write(self.runtime, tool, args, PermissionDecision.allow, PermissionDecision.deny)
+        if control is not None:  # 用户确认过也不能越过只读和 write_scope
+            if control.allowed and (self.runtime.read_only or getattr(self.runtime, "write_scope", ())):
+                return self._check_tool(tool, args)
+            return control
         verdict = guard_permission(self.runtime, tool, args, PermissionDecision.allow, PermissionDecision.deny)
         decision = verdict.decision or self._check_tool(tool, verdict.approval_args)
-        return replace(decision, notes=verdict.notes) if decision.allowed and verdict.notes else decision
+        notes = tuple(control_notes) + tuple(verdict.notes)
+        return replace(decision, notes=notes) if decision.allowed and notes else decision
 
     def _check_tool(self, tool, args):
         if tool.name in {"write_file", "patch_file"} and getattr(self.runtime, "write_scope", ()):

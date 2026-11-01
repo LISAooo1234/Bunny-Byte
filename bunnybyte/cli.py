@@ -50,6 +50,7 @@ from .config import (
     resolve_project_mcp,
     resolve_project_verify_config,
     resolve_project_budget_config,
+    resolve_project_control_config,
     resolve_project_deps_config,
     resolve_project_critic_config,
     resolve_project_goal_review_config,
@@ -348,6 +349,9 @@ def build_agent(args):
         config_path=getattr(args, "config", None),
         mode=getattr(args, "deps", None),
     )
+    control_config = resolve_project_control_config(
+        start=workspace.repo_root, config_path=getattr(args, "config", None), mode=getattr(args, "control", None)
+    )
     hookset = resolve_project_hooks(start=workspace.repo_root, config_path=getattr(args, "config", None))
     mcp_config = resolve_project_mcp(start=workspace.repo_root, config_path=getattr(args, "config", None))
     load_project_env(workspace.repo_root, override=False)
@@ -390,6 +394,7 @@ def build_agent(args):
         _attach_goal_review(agent, args)
         _attach_budget(agent, budget_config)
         _attach_deps(agent, deps_config)
+        _attach_control(agent, control_config)
         return agent
     lazy_session = True
     agent = BunnyByte(
@@ -419,6 +424,7 @@ def build_agent(args):
     _attach_goal_review(agent, args)
     _attach_budget(agent, budget_config)
     _attach_deps(agent, deps_config)
+    _attach_control(agent, control_config)
     return agent
 
 
@@ -426,6 +432,12 @@ def _attach_deps(agent, deps_config):
     agent.deps_config = deps_config
     for problem in deps_config.problems:
         print(f"⚠ 依赖守卫配置：{problem}", file=sys.stderr)
+
+
+def _attach_control(agent, control_config):
+    agent.control_config = control_config
+    for problem in control_config.problems:
+        print(f"⚠ 控制面守卫配置：{problem}", file=sys.stderr)
 
 
 def _attach_budget(agent, budget_config):
@@ -606,6 +618,12 @@ def build_arg_parser():
         choices=("off", "ask", "auto"),
         default=None,
         help="交卷前自动运行项目测试并留下验证回执：off 关闭，ask 遵循审批策略（默认），auto 不再询问。",
+    )
+    parser.add_argument(
+        "--control",
+        choices=("off", "warn", "guard"),
+        default=None,
+        help="控制面守卫：模型要改 AGENTS.md / .bunnybyte.toml / .git/hooks / ~/.zshrc 这类会改变 agent 行为的文件、而你这一轮没提到它们时，guard（默认）必须有人确认（--approval auto 也一样，无人值守时拒绝或恢复原内容），warn 只提示，off 关闭。",
     )
     parser.add_argument(
         "--deps",

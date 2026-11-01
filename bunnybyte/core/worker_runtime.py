@@ -40,6 +40,8 @@ def build_child_runtime(parent, subagent_type, write_scope):
     child.cost_meter = parent.cost_meter  # worker 花的钱算进父 agent 的本轮和会话
     child.secret_vault = parent.secret_vault  # 同一个密钥在父子 agent 里是同一个占位符
     child.dependency_baseline = declared_baseline(parent)  # “项目已声明”按父会话开始时的依赖文件算
+    child.control_config = getattr(parent, "control_config", None)
+    child.control_parent = parent  # 父 agent 这一轮的用户请求里点名的文件，子 agent 也可以改
     child.hooks = parent.hooks  # pre_tool / post_tool 对子 agent 同样生效；on_final 只在主 agent 上跑
     if getattr(parent, "mcp", None) is not None:
         # 共用父 agent 的连接；需要审批的 MCP 工具不在 worker / readonly 档位里，后台 worker 只拿到免审批的那些

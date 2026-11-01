@@ -50,6 +50,7 @@ from .tool_profiles import build_tool_profiles
 from .todo_ledger import TodoLedger
 from .turn_history import TurnHistoryBuilder
 from .critic import CriticConfig
+from .control_plane import control_receipt
 from .dependency_guard import dependency_receipt
 from .tool_call_rescue import text_tool_receipt
 from .verification import VerifyConfig
@@ -885,6 +886,7 @@ class BunnyByte(
             "hooks": dict(task_state.hooks),
             "critic": dict(task_state.critic),
             "dependencies": dependency_receipt(self, task_state),
+            "control_plane": control_receipt(self, task_state),
             "text_tool_calls": text_tool_receipt(self, task_state),
             "cost": self.cost_meter.turn_snapshot(),
             "changes": turn_changes_record(self),

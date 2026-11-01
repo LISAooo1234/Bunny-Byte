@@ -170,6 +170,18 @@ allow = ["my-internal-lib"]   # 不检查的包名
 - 配了私有索引（命令里的 `-i` / `--index-url`、`PIP_INDEX_URL` / `UV_INDEX_URL` 等环境变量、`pip.conf`、`[[tool.uv.index]]`、`.npmrc` 的 registry）时，该生态不去公共仓库查，只做拼写检查。
 - 结果写入 trace 的 `dependency_check` 事件、`report.json` 和 `bunny -p` JSON 的 `dependencies`。
 
+## 控制面守卫（`[control]`）
+
+模型改会改变 agent 自己行为的文件（规则文件、`.bunnybyte.toml`、`.bunnybyte/{rules,skills}`、`.git/hooks`、`.git/config`、其他 agent 的配置；shell 命令改的 `~/.zshrc`、`~/.gitconfig`、信任记录等）而你这一轮没提到它们时，要有人确认，`--approval auto` 也一样；没人能确认时拒绝写入或恢复原内容（说明见 README「控制面守卫」）。
+
+```toml
+[control]
+mode = "guard"   # guard（默认）| warn | off，也可用 --control 覆盖
+```
+
+- 仓库里的 `.bunnybyte.toml` 只能调严，设成 `warn` / `off` 会被忽略并提示；全局配置、`--config`、`--control` 不受限制。
+- 结果写入 trace 的 `control_plane` 事件、`report.json` 和 `bunny -p` JSON 的 `control_plane`。
+
 ## 钩子（`[[hooks.*]]`）
 
 `[[hooks.pre_tool]]`、`[[hooks.post_tool]]`、`[[hooks.on_final]]` 三类 shell 钩子，字段 `command`（必填）、`match`（工具名，`|` 分隔，支持 `*`）、`timeout`（1–300 秒，默认 10）、`on_error`（`allow` 默认 / `block`）、`only_if_changed`（仅 on_final）；`[hooks] max_final_rounds`（0–5，默认 2）。仓库里的 `.bunnybyte.toml` 的钩子要 `/hooks trust` 之后才运行，全局配置和 `--config` 直接生效。完整说明见 [hooks.md](hooks.md)。

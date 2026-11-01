@@ -292,7 +292,7 @@ def guard_permission(agent, tool, args, allow, deny):
     config = getattr(agent, "deps_config", None) or DepsConfig()
     note = "依赖守卫：" + "；".join(check.notes())
     # 复制一份：permission_decision 事件里记的还是原参数。默认的 runtime.approve 会把中文转成 \uXXXX，不给它看提示
-    approval_args = dict(args, dependency_note=note) if not _default_approve(agent) else args
+    approval_args = dict(args, guard_note=note) if not _default_approve(agent) else args
     if not check.suspicious or config.mode == "warn":
         record_check(agent, tool.name, check, "noted")
         return GuardVerdict(approval_args=approval_args, notes=(f"[dependency guard] {note}",))
@@ -300,7 +300,7 @@ def guard_permission(agent, tool, args, allow, deny):
     if confirm is None:
         record_check(agent, tool.name, check, "blocked")
         return GuardVerdict(decision=deny("dependency_blocked", "dependency_guard", deny_message(tool.name, check)))
-    if confirm(tool.name, dict(args, dependency_note=note)):  # 这一次确认同时算普通审批，不会再弹第二次
+    if confirm(tool.name, dict(args, guard_note=note)):  # 这一次确认同时算普通审批，不会再弹第二次
         record_check(agent, tool.name, check, "confirmed")
         confirmed = {(item["ecosystem"], normalize(item["ecosystem"], item["name"])) for item in check.suspicious}
         agent.dependency_baseline = declared_baseline(agent) | confirmed  # 确认过的包，之后 `pip install -r` 不再问
@@ -330,7 +330,7 @@ def _default_approve(agent):
 
 def _stdin_confirm(name, args):
     try:
-        answer = input(f"{args.get('dependency_note', '')}\n仍然执行 {name}？[y/N] ")
+        answer = input(f"{args.get('guard_note', '')}\n允许 {name}？[y/N] ")
     except EOFError:
         return False
     return answer.strip().lower() in {"y", "yes"}

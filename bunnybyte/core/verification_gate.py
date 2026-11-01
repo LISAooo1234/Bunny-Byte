@@ -2,6 +2,8 @@
 
 from .artifacts import build_artifact_graph
 from .claim_gate import claims_line
+from .control_plane import control_line
+from .control_watch import report_turn_paths
 from .fix_proof import is_test_path
 from .fix_proof_gate import fix_proof_gate, fix_proof_notice
 from .tamper_guard import scan_turn, tamper_mode, tamper_notice
@@ -170,10 +172,22 @@ def _tamper_line(agent, task_state, config):
     return tamper_notice(result, mode)
 
 
+def _control_line(agent, task_state):
+    """控制面守卫：本轮被拦下 / 恢复 / 改过的 agent 配置文件，一行列出来。"""
+    if agent.depth != 0:
+        return ""
+    try:
+        report_turn_paths(agent, task_state)
+    except Exception as exc:  # 只是提示，出错也不能让回合收尾半途而废
+        agent.emit_trace(task_state, "control_plane_failed", {"error": clip(f"{type(exc).__name__}: {exc}", 300)})
+    return control_line(agent, task_state)
+
+
 def verification_notice(agent, task_state, final):
     """回合结束时给用户的一行回执摘要，以及“声称已验证却没有回执”的警告；没什么可说就返回空串。"""
     config = getattr(agent, "verify_config", None)
-    tamper = _tamper_line(agent, task_state, config)
+    tamper = _tamper_line(agent, task_state, config) + ("\n" + _control_line(agent, task_state)).rstrip()
+    tamper = tamper.strip()
     if config is None or not config.enabled:
         return "\n".join(line for line in (claims_line(agent, task_state, final), tamper) if line)
     state = task_state.verification

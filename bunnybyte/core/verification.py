@@ -269,7 +269,19 @@ def changes_fingerprint(root, paths):
 
 
 def run_command(agent, command, timeout):
-    """执行一条验证命令并返回回执；超时或用户中止会杀掉整个进程组，避免 pytest/jest 子进程残留。"""
+    """执行一条验证命令并返回回执；超时或用户中止会杀掉整个进程组，避免 pytest/jest 子进程残留。
+
+    验证闸门和 /goal 的检查都走这里：模型写的测试 / conftest 也可能去改 ~/.zshrc，所以前后同样过控制面守卫。
+    """
+    from .control_watch import watch_command
+
+    receipt, notes = watch_command(agent, "verify", lambda: _run_command(agent, command, timeout))
+    if notes:
+        receipt["control_notes"] = notes
+    return receipt
+
+
+def _run_command(agent, command, timeout):
     started = time.monotonic()
     env = dict(agent.shell_env(), CI="1")  # CI=1 让 jest/vitest 之类不进入 watch 模式
     timed_out = aborted = False

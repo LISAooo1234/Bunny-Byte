@@ -11,6 +11,7 @@ from datetime import datetime
 
 from .core.fix_proof import skip_text
 from .core.claim_check import describe as describe_claim
+from .core.control_plane import describe_change
 from .core.tamper_guard import describe
 from .core.provider_failover import failover_notice
 from .tui.tool_cards import card_args_summary, clip_cells, format_duration, summarize_tool_output, tool_title
@@ -131,6 +132,12 @@ def _event_line(event):
         if findings:
             return f"  ⚠ 声明对账 {clip_cells('；'.join(describe_claim(item) for item in findings[:2]), 80)}"
         return _join("  · 声明对账", f"{event.get('checked', 0)} 条声明与记录一致")
+    if name == "control_plane":
+        changes = [item for item in event.get("changes") or [] if item.get("category") != "memory" and item.get("decision") != "mentioned"]
+        if not changes:
+            return None  # 只是记忆写入 / 用户点名的文件：折进“其他事件”
+        icon = "✓" if all(item.get("decision") == "confirmed" for item in changes) else "⚠"
+        return f"  {icon} 控制面守卫 " + clip_cells("；".join(describe_change(item) for item in changes[:3]), 90)
     if name == "dependency_check":
         icon = {"blocked": "✗", "denied": "✗", "confirmed": "✓"}.get(str(event.get("decision", "")), "·")
         label = {"blocked": "已拦下", "denied": "用户拒绝", "confirmed": "用户确认", "noted": "提示"}.get(str(event.get("decision", "")), "")

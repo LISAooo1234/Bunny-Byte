@@ -344,7 +344,7 @@ def test_human_confirmation_is_required_even_under_auto(tmp_path):
 
     result = agent.run_tool("run_shell", shell(f"{pip} install reqeusts"))
 
-    assert len(asked) == 1 and "reqeusts" in asked[0][1]["dependency_note"] and "requests" in asked[0][1]["dependency_note"]
+    assert len(asked) == 1 and "reqeusts" in asked[0][1]["guard_note"] and "requests" in asked[0][1]["guard_note"]
     assert "installed" in result and "用户确认后执行" in result
     assert (tmp_path / "installed.txt").read_text(encoding="utf-8").strip() == "install reqeusts"
 
@@ -369,11 +369,11 @@ def test_ask_mode_shows_one_prompt_with_the_warning_for_a_requirements_patch(tmp
     result = agent.run_tool("patch_file", {"path": "requirements.txt", "old_text": "flask\n", "new_text": "flask\nreqeusts\n"})
 
     assert [name for name, _ in asked] == ["patch_file"]  # 一次确认，不是两次
-    assert "reqeusts" in asked[0][1]["dependency_note"]
+    assert "reqeusts" in asked[0][1]["guard_note"]
     assert "reqeusts" in (tmp_path / "requirements.txt").read_text(encoding="utf-8")
     assert "用户确认后执行" in result
     decision = [event for event in read_events(agent) if event["event"] == "permission_decision"][-1]
-    assert "dependency_note" not in decision["args"]  # 事件里记的是模型给的原参数
+    assert "guard_note" not in decision["args"]  # 事件里记的是模型给的原参数
 
 
 def test_workers_with_a_write_scope_cannot_add_a_typo_to_requirements(tmp_path):
@@ -561,8 +561,8 @@ def test_poisoned_agents_md_cannot_make_headless_auto_install_a_typosquat(tmp_pa
     assert "依赖守卫 reqeusts（疑似拼错）" in timeline and "已拦下" in timeline
 
 
-def test_tui_dialog_shows_the_dependency_note():
-    text = format_tool_args("run_shell", {"command": "pip install reqeusts", "dependency_note": "依赖守卫：reqeusts 可能拼错"})
+def test_tui_dialog_shows_the_guard_note():
+    text = format_tool_args("run_shell", {"command": "pip install reqeusts", "guard_note": "依赖守卫：reqeusts 可能拼错"})
     assert text.splitlines() == ["pip install reqeusts", "⚠ 依赖守卫：reqeusts 可能拼错"]
     assert "⚠" not in format_tool_args("todo_add", {"content": "x", "note": "备注"})  # 工具自己的 note 参数不是守卫提示
 
@@ -727,7 +727,7 @@ def test_a_confirmed_package_is_not_asked_again_when_installed_from_the_file(tmp
     agent.dependency_confirm = lambda name, args: asked.append(args) or True
     pip = fake_pip(tmp_path)
     agent.run_tool("write_file", {"path": "requirements.txt", "content": "websocket\n"})
-    assert len(asked) == 1 and "websocket" in asked[0]["dependency_note"]
+    assert len(asked) == 1 and "websocket" in asked[0]["guard_note"]
     assert (tmp_path / "requirements.txt").read_text(encoding="utf-8") == "websocket\n"
     agent.dependency_confirm = lambda name, args: pytest.fail("asked twice")
     assert "installed" in agent.run_tool("run_shell", shell(f"{pip} install -r requirements.txt"))

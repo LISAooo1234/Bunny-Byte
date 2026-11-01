@@ -1,7 +1,7 @@
 import re
 
 from .hook_runner import post_tool_hooks, pre_tool_hooks, render_notes
-from .secret_vault import execute_masked
+from .control_watch import execute_watched, pop_notes
 from .read_ledger import read_stub_metadata, render_read_file_result
 from .tool_loop_guard import escalate_reply, read_stub
 from .tool_policy import ToolPolicyChecker
@@ -61,8 +61,8 @@ def run_tool(agent, name, args):
     before_snapshot = take_snapshot(agent, tool, args, "before") if tool.risky else {}
     after_snapshot = before_snapshot
     try:
-        full_result = execute_masked(agent, tool, args)
-        hook_notes += post_tool_hooks(agent, tool, args, full_result)
+        full_result = execute_watched(agent, tool, args)
+        hook_notes += pop_notes(agent) + post_tool_hooks(agent, tool, args, full_result)
         result, full_output_artifact = _render_tool_result(agent, name, full_result)
         after_snapshot = take_snapshot(agent, tool, args, "after") if tool.risky else before_snapshot
         affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
