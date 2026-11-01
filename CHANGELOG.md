@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- 测试篡改守卫接上目标模式（M9 第 3 项；新模块 `bunnybyte/core/goal_tamper.py`）：`/goal` 开始时记下影子快照，检查通过、评审之前拿整个目标期间的改动和它比一次（一轮删测试、下一轮才通过也看得见；先加后删的测试互相抵消），检查命令点名的非测试文件被删、Makefile 之类被改、.py 文件断言变少也算可疑（`python calc.py` 自测时修实现不算），目标期间新增测试不再提示（取代原来按路径猜的“改过检查涉及的文件”）。可疑时追加一轮（整个目标一次，最后一轮也给，显示为「追加一轮（恢复测试）」），续接消息带上目标开始时那几个测试的原文，要求恢复测试、改代码满足，真矛盾就保持原样并说明；Esc / `--resume` 后重发同一条要求。恢复后检查没过 → 未达成「恢复测试后检查未通过（模型的说明见最终回答）」；仍可疑 → `warn` 达成带 ⚠，`block` 未达成；剩余预算不够时不追加；Esc / provider 出错时暂停，resume 先发恢复要求；`-p` JSON 的 `check_files_changed` 现在只列检查命令点名的非测试文件。`bunny -p --goal` 现在可以加 `--require-verified`（守卫默认 `block`，被削弱时退出码 4、stderr 写明测试名）；`/goal` 状态行、`-p` JSON `goal.tamper`、trace `goal_tamper`、`bunny replay` 一行。
+
 - 新增测试篡改守卫（M9 第 1、2 项；新模块 `bunnybyte/core/tamper_guard.py`）：每轮结束时对比本轮前后的影子快照（`run_shell rm` / `sed -i` 也算），只看测试文件和 pytest 收集配置，不调用模型、不运行命令，标出删除了测试（找不到同名或函数体相同 / 名字相近且相似的新测试来配对的，新写的不相干测试抵不掉，改成不被收集的文件名算删除，随被测源码一起删的只提示）、删除了断言（按测试计，挪进同文件辅助函数的照样算，新加 parametrize / subTest 时不算）、断言被架空（新增 `assert True`、吞掉 AssertionError / Exception 的 `try`）、已有文件里新增 skip / xfail / importorskip（按平台 / 版本跳过的只提示）、pytest 配置新增 `--deselect` / `--ignore` / `-k` / `norecursedirs`、缩小 `testpaths`、conftest 新增 `collect_ignore` / `pytest_collection_modifyitems`；只改期望值不算削弱，只列出测试名。回合末尾 `⚠ 测试可能被削弱：…`，`report.json` / `bunny -p` JSON 的 `verification.tamper`，trace `test_tamper` 与 `bunny replay` 一行。`[verify] tamper = off|warn|block`（默认 warn，验证闸门关着也运行；仓库配置只能调严），`block` 时这样换来的通过判为 `tampered`，`bunny -p --require-verified` 退出码 4 并在 stderr 写明，`--require-verified` 下不配置时默认 `block`。没有测试或配置改动的回合不读快照。
 
 ## 0.15.0

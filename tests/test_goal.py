@@ -447,13 +447,15 @@ def test_normalized_tail_ignores_timings_and_addresses():
 
 
 def test_achieved_flags_changes_to_check_files(tmp_path):
-    agent = make_agent(tmp_path, ['<tool name="read_file" path="check.py"></tool>', write("check.py", "print('ok')"), "<final>好</final>"])
+    rewrite = ['<tool name="read_file" path="check.py"></tool>', write("check.py", "print('ok')")]
+    agent = make_agent(tmp_path, [*rewrite, "<final>好</final>", *rewrite, "<final>还是这样。</final>"])
     start_goal(agent, "让 check.py 通过", check=CHECK)
 
     events = drive(agent)
 
-    assert agent.session["goal"]["status"] == ACHIEVED
-    assert "check.py" in notices(events)[-1] and "改过检查" in notices(events)[-1]
+    assert agent.session["goal"]["status"] == ACHIEVED  # 默认 warn：追加一轮后仍未恢复，照常达成但带 ⚠
+    assert "check.py" in notices(events)[-1] and "检查可能被削弱" in notices(events)[-1] and "改了检查命令用到的文件" in notices(events)[-1]
+    assert agent.session["goal"]["tamper"]["escalated"]
 
 
 def test_fork_does_not_inherit_goal(tmp_path):

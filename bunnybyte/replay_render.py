@@ -137,6 +137,12 @@ def _event_line(event):
         icon = "✓" if event.get("status") == "passed" else ("✗" if event.get("status") in {"failed", "timeout"} else "·")
         reused = "沿用验证结果" if event.get("reused") else ""
         return _join(f"  🎯 目标检查 第 {event.get('round')} 轮 {icon} {clip_cells(str(event.get('command', '')), 50)}", event.get("status"), reused)
+    if name == "goal_tamper":
+        findings = [item for item in event.get("findings") or [] if item.get("severity") == "warn"]
+        if event.get("status") == "suspicious":
+            label = "追加一轮恢复测试" if not event.get("escalated") else ("不算达成" if event.get("mode") == "block" else "仍未恢复")
+            return _join(f"  ⚠ 目标篡改检查 第 {event.get('round')} 轮 {clip_cells('；'.join(describe(item) for item in findings[:2]), 60)}".rstrip(), label)
+        return _join(f"  · 目标篡改检查 第 {event.get('round')} 轮", "跳过" if event.get("status") == "skipped" else "未发现削弱")
     if name == "goal_review":
         objections = event.get("objections") or []
         verdict = f"{len(objections)} 条意见，目标多跑一轮" if event.get("verdict") == "object" else "通过"

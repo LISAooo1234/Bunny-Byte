@@ -686,7 +686,7 @@ def build_arg_parser():
     parser.add_argument(
         "--require-verified",
         action="store_true",
-        help="-p 下要求改动有通过的验证回执，否则退出码 4；隐含 --verify auto。",
+        help="-p 下要求改动有通过的验证回执，否则退出码 4；隐含 --verify auto。和 --goal 同用时：检查靠削弱测试才通过的目标不算达成，退出码 4。",
     )
     parser.add_argument(
         "--goal",
@@ -1824,8 +1824,6 @@ def run_print_mode(args):
     if args.goal:
         from .core.goal import MAX_ROUNDS, start_goal
 
-        if args.require_verified:
-            return usage_error("--goal 自己就以检查通过为准，不能和 --require-verified 同用。")
         if args.goal_rounds is not None and not 1 <= args.goal_rounds <= MAX_ROUNDS:
             return usage_error(f"--goal-rounds 应在 1 到 {MAX_ROUNDS} 之间。")
         if not args.goal_check and agent.approval_policy != "auto":

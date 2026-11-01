@@ -71,6 +71,7 @@ LABELS = {
     "collection_narrowed": "测试收集范围被缩小",
     "config_changed": "改了测试收集配置",
     "expectations_changed": "改了已有测试的断言",
+    "check_file_changed": "改了检查命令用到的文件",
 }
 
 
@@ -601,10 +602,15 @@ def scan_turn(agent, task_state):
     if entry is None or not store.available:
         return {"status": SKIPPED, "reason": "no_snapshot", "findings": []}
     after = store.snapshot() or entry.get("after_tree")  # 子 agent 的写入不在主 agent 的快照里，现在重新拍一次
+    return scan_trees(store, entry.get("before_tree"), after)
+
+
+def scan_trees(store, before, after, scope="本轮"):
+    """两个 tree 之间的篡改检查（单轮 / 整个目标共用）；读不了快照或文件太多时记为跳过而不是干净。"""
     try:
-        return scan_changes(_turn_changes(store, entry.get("before_tree"), after))
+        return scan_changes(_turn_changes(store, before, after))
     except _TooMany as exc:
-        return {"status": SKIPPED, "reason": f"本轮改了 {exc.args[0]} 个测试 / 配置文件（上限 {MAX_FILES}），没有检查", "findings": []}
+        return {"status": SKIPPED, "reason": f"{scope}改了 {exc.args[0]} 个测试 / 配置文件（上限 {MAX_FILES}），没有检查", "findings": []}
     except (ShadowError, OSError, ValueError, KeyError) as exc:
         return {"status": SKIPPED, "reason": f"{type(exc).__name__}: {exc}"[:200], "findings": []}
 

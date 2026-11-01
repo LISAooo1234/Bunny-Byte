@@ -10,9 +10,10 @@ import re
 from dataclasses import replace
 
 from .cost_meter import STOP_REASON_BUDGET_EXCEEDED
-from .fix_proof import is_test_path
 from .goal_review import review_skip_reason, review_summary, run_review, veto_message, vetoes
+from .goal_tamper import ROUND_NOTICE, achieved_line, check_files_changed, escalation_message, goal_tamper_summary, guard_pass, start_tree
 from .pricing import format_usd
+from .tamper_guard import describe
 from .task_state import STATUS_FAILED, STATUS_RUNNING
 from .transcript_fence import fence
 from .verification import (
@@ -94,6 +95,7 @@ def start_goal(agent, objective, *, check="", max_rounds=None, max_cost=None):
         "baseline": {},
         "rounds": [],
         "paths": [],
+        "start_tree": start_tree(agent),  # 测试篡改守卫：达成前拿整个目标期间的改动和它比
         "created_at": now(),
     }
     agent._goal_approved = tuple(checks) if check else None
@@ -119,6 +121,7 @@ def resume_goal(agent):
     if goal["status"] == ACHIEVED:
         return "这个目标已经达成。设定新目标会替换它。"
     goal.update(round_base=len(goal["rounds"]), reason="")
+    goal.pop("tamper", None)  # 上次的篡改结论（比如“不算达成”）等下次检查通过时重新对比，别在 /goal 里一直显示
     if goal["status"] == BUDGET_LIMITED:  # 预算用完后再 resume = 同意再花一份同样的预算
         goal.update(cost_at_start=_session_usd(agent), cost_round_base=len(goal["rounds"]))
     agent._goal_pending = True
@@ -186,7 +189,11 @@ def _drive(agent, goal, mention_text=None):
             return
         done = len(goal["rounds"]) - int(goal.get("round_base", 0))
         number = len(goal["rounds"]) + 1
-        yield _notice(f"🎯 目标 第 {done + 1}/{goal['max_rounds']} 轮")
+        restoring = bool((_last_checked(goal) or {}).get("tamper_escalated"))
+        if restoring and done >= goal["max_rounds"]:
+            yield _notice(ROUND_NOTICE)  # 最后一轮才发现测试被削弱：多给这一轮，不显示成“第 6/5 轮”
+        else:
+            yield _notice(f"🎯 目标 第 {done + 1}/{goal['max_rounds']} 轮" + ("（恢复测试）" if restoring else ""))
         if agent.abort_requested:  # 提示显示时按的 Esc：run_turn 一开始会清掉这个标记，必须在这里接住
             agent.abort_requested = False
             yield _notice(_finish(agent, goal, PAUSED, "已停止（Esc / Stop）"))
@@ -223,13 +230,24 @@ def _after_round(agent, goal, state, number):
         agent.abort_requested = False
         return _finish(agent, goal, PAUSED, "检查运行时被停止")
     if receipt["status"] == STATUS_PASSED:
+        stop = yield from guard_pass(agent, goal, entry, state)  # 先查测试有没有被削弱：要追加一轮的话评审就白花了
+        if stop is not None:
+            if stop[0]:
+                return _finish(agent, goal, stop[0], stop[1])
+            _save(agent)
+            return ""
         return (yield from _review_or_achieve(agent, goal, entry, receipt, state))
     if failed:  # 模型 / provider 出错：检查照跑（也许已经改好了），没通过就暂停而不是接着花钱
+        if previous and previous.get("tamper_escalated"):
+            entry["tamper_escalated"] = True  # 恢复测试的那一轮出错：resume 之后还要发同一条要求
         return _finish(agent, goal, PAUSED, f"这一轮出错（{state.stop_reason}），处理好后用 /goal resume 继续")
     if receipt["status"] not in (CHECK_FAILED, STATUS_TIMEOUT):
         return _finish(agent, goal, UNMET, f"检查结果是 {receipt['status']}（{clip(receipt['output_tail'], 120)}），不能据此判断")
     if state.stop_reason == STOP_REASON_BUDGET_EXCEEDED:
         return _finish(agent, goal, BUDGET_LIMITED, "花费到了上限")
+    if previous and previous.get("tamper_escalated"):
+        # 恢复测试之后检查不过：任务可能本身就和测试矛盾。停下让人看模型的说明，而不是再给一轮让它重新改测试
+        return _finish(agent, goal, UNMET, "恢复测试后检查未通过（模型的说明见最终回答）")
     if state.tool_steps == 0:
         return _finish(agent, goal, PAUSED, "这一轮模型没有调用任何工具，继续下去只会空转")
     if previous and previous.get("fingerprint") == entry["fingerprint"] and previous["check"].get("tail_key") == entry["check"]["tail_key"]:
@@ -246,6 +264,7 @@ def _review_or_achieve(agent, goal, entry, receipt, state):
         goal.setdefault("reviews", []).append({"round": entry["round"], "verdict": "skipped", "reason": skip})
         yield _notice(f"目标评审跳过：{skip}")
     if skip is not None:
+        agent.abort_requested = False  # 已经达成：别把 Esc 留给下一个目标
         return _finish(agent, goal, ACHIEVED, "")
     review = yield from run_review(agent, goal, receipt, state)
     if review["verdict"] != "object":
@@ -283,6 +302,8 @@ def _round_message(goal, number, shown):
         status = "failed (exit {})".format(base.get("exit_code")) if base.get("status") == CHECK_FAILED else str(base.get("status", "failed"))
         return goal["objective"] + FIRST_ROUND_NOTE.format(command=_command_text(goal), status=status)
     last = _last_checked(goal) or {}
+    if last.get("tamper_escalated"):
+        return escalation_message(goal)
     if last.get("vetoed"):
         return veto_message(goal, number, shown)
     check = last.get("check") or goal.get("baseline") or {}
@@ -383,9 +404,8 @@ def _finish(agent, goal, status, reason):
     used = len(goal["rounds"]) - int(goal.get("round_base", 0))
     if status == ACHIEVED:
         text = f"🎯 目标已达成：`{_command_text(goal)}` 通过，用了 {used} 轮 · 估算 {spent}"
-        touched = check_files_changed(goal)
-        if touched:
-            text += f"\n⚠ 目标期间改过检查涉及的文件：{'、'.join(touched[:5])}——请确认没有为了通过而改检查"
+        if achieved_line(goal):
+            text += "\n" + achieved_line(goal)
         vetoed, after = _veto_rounds(goal)
         if vetoed and after and after[-1].get("fingerprint") == vetoed.get("fingerprint"):
             text += "\n⚠ 评审退回后模型没有再改文件：评审意见没有处理（`/goal` 查看）"
@@ -407,11 +427,6 @@ def _veto_rounds(goal):
     rounds = goal["rounds"]
     index = next((i for i in range(len(rounds) - 1, -1, -1) if rounds[i].get("vetoed")), None)
     return (None, []) if index is None else (rounds[index], rounds[index + 1:])
-
-
-def check_files_changed(goal):
-    commands = " ".join(goal.get("checks") or [])
-    return [path for path in goal.get("paths") or [] if is_test_path(path) or path in commands]
 
 
 def _last_checked(goal):
@@ -475,6 +490,7 @@ def goal_summary(agent):
             for item in goal["rounds"]
         ],
         "check_files_changed": check_files_changed(goal),
+        "tamper": goal_tamper_summary(goal),
         "vetoes": vetoes(goal),
         "reviews": review_summary(goal),
     }
@@ -495,6 +511,11 @@ def render_goal_status(agent):
     for item in goal["rounds"][-8:]:
         check = item.get("check") or {}
         lines.append(f"  - 第 {item['round']} 轮：{item.get('tool_steps', 0)} 步 · {item.get('stop_reason', '')} · 检查 {check.get('status', '未运行')}" + (" · 评审退回" if item.get("vetoed") else ""))
+    tamper = goal.get("tamper") or {}
+    if tamper:
+        label = {"suspicious": "⚠ 测试可能被削弱" + ("，不算达成" if tamper.get("blocked") else ""), "clean": "未发现削弱", "skipped": f"跳过（{tamper.get('reason', '')}）"}.get(tamper.get("status"), tamper.get("status"))
+        lines.append(f"- 测试篡改守卫（对比目标开始时）：{label}" + ("；追加过一轮恢复测试" if goal.get("tamper_escalated") else ""))
+        lines.extend(f"  - {describe(item)}" for item in tamper.get("findings") or [] if item.get("severity") == "warn")
     for review in (goal.get("reviews") or [])[-3:]:
         label = {"object": "退回", "accept": "通过", "skipped": "跳过"}.get(review.get("verdict"), review.get("verdict"))
         lines.append(f"  - 评审（第 {review.get('round')} 轮后）：{label}" + (f"（{review['reason']}）" if review.get("reason") else ""))

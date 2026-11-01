@@ -2,7 +2,7 @@
 
 退出码：0 完成；1 运行出错；2 用法/配置错误（由 CLI 返回）；3 中途停止（步数上限、空转、重试耗尽、花费到达 --max-cost）；
 4 只在 --require-verified 下出现：改了代码，但没有覆盖当前文件内容的通过回执；130 被中断。
---goal 模式下由目标结果决定：达成 0，暂停 / 未达成 / 预算用完 3。
+--goal 模式下由目标结果决定：达成 0，暂停 / 未达成 / 预算用完 3，检查靠削弱测试才通过（`[verify] tamper = block`）4。
 """
 
 import contextlib
@@ -266,6 +266,8 @@ def run_headless(
         result["goal"] = goal_summary(agent)
         if result["goal"].get("status") == ACHIEVED and not error:
             result["exit_code"] = EXIT_OK
+        elif (result["goal"].get("tamper") or {}).get("blocked") and not error:  # 检查是靠削弱测试通过的：和单轮的 tampered 同一个退出码
+            result["exit_code"] = EXIT_UNVERIFIED
         elif result["exit_code"] != EXIT_ERROR:  # 运行出错（provider 报错等）仍是 1，其余没做完都是 3
             result["exit_code"] = EXIT_UNFINISHED
     code = EXIT_INTERRUPTED if interrupted else result["exit_code"]
@@ -282,7 +284,10 @@ def run_headless(
         err.write(f"bunny: 依赖守卫拦下了 {'、'.join(dict.fromkeys(blocked))}（疑似拼错 / 刚注册 / 无法检查的包，无人值守时不安装；确认无误可加进 [deps] allow）。\n")
     if denials:
         err.write(f"bunny: {denials} 个工具调用因审批策略被拒绝（无人值守时 ask 等同 never；需要放行请加 --approval auto）。\n")
-    if code == EXIT_UNVERIFIED and result["verification"]["verdict"] == VERDICT_TAMPERED:
+    if code == EXIT_UNVERIFIED and goal and (result["goal"].get("tamper") or {}).get("blocked"):
+        warn = [item for item in (agent.session["goal"].get("tamper") or {}).get("findings", []) if item["severity"] == "warn"]
+        err.write(f"bunny: 目标检查通过了，但和目标开始时相比测试可能被削弱（{'；'.join(describe(item) for item in warn[:3])}），不算达成，退出码 4。\n")
+    elif code == EXIT_UNVERIFIED and result["verification"]["verdict"] == VERDICT_TAMPERED:
         warn = [item for item in (state.verification.get("tamper") or {}).get("findings", []) if item["severity"] == "warn"]
         err.write(f"bunny: 验证通过了，但本轮测试可能被削弱（{'；'.join(describe(item) for item in warn[:3])}），不算已验证，退出码 4。\n")
     elif code == EXIT_UNVERIFIED:
