@@ -6,10 +6,12 @@
 
 import os
 import re
+import sys
 from pathlib import Path
 
 from . import (
     ProviderConfig,
+    UntrustedEndpointError,
     _load_config_values,
     normalize_provider_name,
     resolve_provider_config,
@@ -83,6 +85,9 @@ def resolve_fallback_configs(
                 config_path=config_path,
                 include_generic_env=False,
             )
+        except UntrustedEndpointError as exc:
+            print(f"⚠ 跳过备用 provider {name!r}：项目配置把它指向 {exc.origin}，不会用你的 key 去请求。", file=sys.stderr)
+            continue
         except ValueError:
             continue
         if config.api_key and config.base_url and config.model:

@@ -10,6 +10,7 @@ from typing import Any
 
 from ..core.verification import resolve_verify_config
 from ..features.sandbox import resolve_sandbox_config as resolve_sandbox_values
+from .endpoint_trust import UntrustedEndpointError, check_endpoint, is_control_env_name  # noqa: F401
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -179,20 +180,61 @@ def find_project_config(start):
     return None
 
 
+def _provider_env_names():
+    names = {ENV_PROVIDER, ENV_API_KEY, ENV_BASE_URL, ENV_MODEL, "BUNNYBYTE_PROTOCOL"}
+    for table in (PROVIDER_ENV_NAMES, LEGACY_ENV_NAMES):
+        for fields in table.values():
+            for env_names in fields.values():
+                names.update(env_names)
+    return names
+
+
 def load_project_env(start, override=True):
+    """把项目 .env 里的普通变量补进 os.environ，返回补进去的那些。
+
+    决定请求发往哪里、用哪个 key、信任什么的变量（provider key / 地址、BUNNYBYTE_*、代理、证书）
+    不进 os.environ：克隆来的仓库不能靠 .env 把用户的 key 引到别的主机。旧式 .env 里的 provider
+    配置仍由 resolve_provider_config 按“仓库来源”读取。
+    """
     env_path = find_project_env(start)
     if env_path is None:
         return {}
+    control = _provider_env_names()
+    own = _user_owned(env_path)  # 家目录下的 ~/.env 是用户自己的，照旧全部生效
     loaded = {}
     for line in env_path.read_text(encoding="utf-8").splitlines():
         parsed = _parse_env_line(line)
         if parsed is None:
             continue
         name, value = parsed
+        if not own and is_control_env_name(name, control):
+            continue
         loaded[name] = value
         if override or name not in os.environ:
             os.environ[name] = value
     return loaded
+
+
+def ignored_project_env_names(start):
+    """项目 .env 里被忽略、也不会被旧式 provider 配置用到的控制变量（代理、证书、BUNNYBYTE_HOME 等）。"""
+    env_path = find_project_env(start)
+    if env_path is None or _user_owned(env_path):
+        return []
+    control = _provider_env_names()
+    return sorted(
+        name for name in _load_legacy_env_values(start) if is_control_env_name(name, control) and name not in control
+    )
+
+
+def project_env_secret_items(start):
+    """项目 .env 里没写进环境、但名字像密钥的值：仍要按已知密钥遮蔽（模型读到 .env 时不外泄）。"""
+    from ..core.runtime_secrets import RuntimeSecretsMixin
+
+    return sorted(
+        (name, value)
+        for name, value in _load_legacy_env_values(start).items()
+        if value and RuntimeSecretsMixin.looks_sensitive_env_name(name) and os.environ.get(name) != value
+    )
 
 
 def provider_env(name, legacy_names=(), default=""):
@@ -252,23 +294,42 @@ def resolve_provider_config(
         legacy_values.get("model"),
         default_values.get("model"),
     )
-    resolved_base_url = _first_value(
-        base_url,
-        generic_env.get(ENV_BASE_URL),
-        env_values.get("base_url"),
-        profile_values.get("base_url"),
-        generic_legacy.get(ENV_BASE_URL),
-        legacy_values.get("base_url"),
-        default_values.get("base_url"),
+    # 每个候选值记下来源：仓库里的 .bunnybyte.toml / .env 算 "repo"，其余都是用户自己的
+    user_providers, repo_providers, repo_file = _provider_layers(start, config_path)
+    user_profile = user_providers.get(provider_name, {})
+    repo_profile = repo_providers.get(provider_name, {})
+    env_file = find_project_env(start)
+    repo_config = ("repo", repo_file)
+    repo_env = ("user", "~/.env") if env_file is None or _user_owned(env_file) else ("repo", env_file)
+    resolved_base_url, url_source = _first_sourced(
+        (base_url, ("user", "命令行")),
+        (generic_env.get(ENV_BASE_URL), ("user", "环境变量")),
+        (env_values.get("base_url"), ("user", "环境变量")),
+        (repo_profile.get("base_url"), repo_config),
+        (user_profile.get("base_url"), ("user", "全局配置")),
+        (generic_legacy.get(ENV_BASE_URL), repo_env),
+        (legacy_values.get("base_url"), repo_env),
+        (default_values.get("base_url"), ("user", "内置默认值")),
     )
-    resolved_api_key = _first_value(
-        api_key,
-        generic_env.get(ENV_API_KEY),
-        env_values.get("api_key"),
-        profile_values.get("api_key"),
-        generic_legacy.get(ENV_API_KEY),
-        legacy_values.get("api_key"),
-        "",
+    resolved_api_key, key_source = _first_sourced(
+        (api_key, ("user", "命令行 --api-key")),
+        (generic_env.get(ENV_API_KEY), ("user", f"环境变量 {ENV_API_KEY}")),
+        (env_values.get("api_key"), ("user", "环境变量")),
+        (repo_profile.get("api_key"), repo_config),
+        (user_profile.get("api_key"), ("user", "全局配置")),
+        (generic_legacy.get(ENV_API_KEY), repo_env),
+        (legacy_values.get("api_key"), repo_env),
+    )
+    if url_source[0] == "repo" and key_source[0] == "user" and repo_profile.get("api_key") and url_source == repo_config:
+        # 仓库文件自己写了 key 和地址：成对使用它的 key，不把 shell / 全局配置里的 key 发给它的地址
+        resolved_api_key, key_source = repo_profile["api_key"], repo_config
+    check_endpoint(
+        provider_name,
+        resolved_base_url,
+        url_source,
+        resolved_api_key,
+        key_source,
+        safe_urls=(user_profile.get("base_url"), default_values.get("base_url")),
     )
 
     return ProviderConfig(
@@ -659,6 +720,38 @@ def _profile_values(
     values = dict(PROVIDER_DEFAULTS.get(provider_name, {}))
     values.update(providers.get(provider_name, {}))
     return values
+
+
+def _user_owned(path) -> bool:
+    """`find_project_*` 会一路找到家目录：~/.bunnybyte.toml、~/.env 是用户自己的，不算仓库文件。"""
+    try:  # 只解析目录：~/.bunnybyte.toml 是指向 dotfiles 仓库的软链接时仍算用户自己的
+        return Path(path).parent.resolve() == Path.home().resolve()
+    except OSError:
+        return False
+
+
+def _provider_layers(start, explicit_path):
+    """按来源分开的 [providers]：(用户自己的, 仓库 .bunnybyte.toml 里的, 仓库配置文件路径)。"""
+    if explicit_path:
+        return _read_config_file(Path(explicit_path).expanduser())["providers"], {}, None
+    user = _read_config_file(DEFAULT_CONFIG_PATH)["providers"] if DEFAULT_CONFIG_PATH.exists() else {}
+    project = find_project_config(start)
+    if project is None:
+        return user, {}, None
+    providers = _read_config_file(project)["providers"]
+    if not _user_owned(project):
+        return user, providers, project
+    merged = {name: dict(section) for name, section in user.items()}
+    for name, section in providers.items():
+        merged.setdefault(name, {}).update(section)
+    return merged, {}, None
+
+
+def _first_sourced(*candidates):
+    for value, source in candidates:
+        if value:
+            return value, source
+    return "", ("user", "")
 
 
 def _load_legacy_env_values(start: str | Path) -> dict[str, str]:

@@ -115,10 +115,15 @@ def test_cli_build_agent_loads_project_env_secrets_before_redaction_setup(tmp_pa
 
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     (tmp_path / ".env").write_text("BUNNYBYTE_DEEPSEEK_API_KEY=sk-project-secret\n", encoding="utf-8")
-    with patch.dict(os.environ, {}, clear=True), patch("bunnybyte.cli.AnthropicCompatibleModelClient", DummyModelClient):
+    with patch.dict(os.environ, {}, clear=True), patch("bunnybyte.cli.AnthropicCompatibleModelClient", DummyModelClient), patch(
+        "bunnybyte.config.DEFAULT_CONFIG_PATH", tmp_path / "no-global.toml"
+    ):
         args = bunnybyte_cli.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
         agent = bunnybyte_cli.build_agent(args)
-        assert agent.secret_env_summary()["secret_env_names"] == ["BUNNYBYTE_DEEPSEEK_API_KEY"]
+        # 项目 .env 里的 provider key 照常用于请求，但不再写进环境（子进程、`env` 都看不到），并按已知密钥遮蔽
+        assert agent.model_client.kwargs["api_key"] == "sk-project-secret"
+        assert "BUNNYBYTE_DEEPSEEK_API_KEY" not in os.environ
+        assert "sk-project-secret" not in agent.redact_text("key=sk-project-secret", known=[("api_key", "sk-project-secret")])
 
 
 def test_cli_build_agent_reads_secret_names_from_environment_config(tmp_path):

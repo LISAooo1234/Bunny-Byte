@@ -475,7 +475,8 @@ def test_provider_command_uses_profile_values_when_switching(tmp_path, monkeypat
     assert "| Provider | `deepseek` |" in output
     assert agent.model_client.provider == "deepseek"
     assert agent.model_client.protocol == "anthropic"
-    assert agent.model_client.api_key == "sk-env-deepseek"
+    # 项目文件自带 key 和地址时成对使用：shell 里的 DEEPSEEK_API_KEY 不会被发到项目指定的地址
+    assert agent.model_client.api_key == "sk-project-deepseek"
     assert agent.model_client.base_url == "https://project.deepseek.example/anthropic"
     assert agent.model_client.model == "project-deepseek-model"
 

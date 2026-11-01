@@ -46,7 +46,7 @@ class RuntimeSecretsMixin:
 
     def known_secret_items(self):
         """Values we know are secret: secret-looking env vars plus every configured provider key."""
-        items = list(self.detected_secret_env_items())
+        items = list(self.detected_secret_env_items()) + list(self.__dict__.get("extra_secret_items") or [])
         client = getattr(self, "model_client", None)
         clients = [client, getattr(self, "critic_client", None)]
         clients += list(getattr(client, "fallback_clients", None) or []) if client is not None else []

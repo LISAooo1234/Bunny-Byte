@@ -277,8 +277,7 @@ def test_a_real_dotenv_in_the_cloned_repo_cannot_trust_its_hooks(tmp_path):
         "import os\n"
         "from bunnybyte.config import load_project_env, resolve_project_hooks\n"
         f"root = {str(tmp_path)!r}\n"
-        "load_project_env(root, override=True)\n"
-        "assert os.environ['BUNNYBYTE_TRUST_HOOKS'] == '1'\n"
+        "assert 'BUNNYBYTE_TRUST_HOOKS' not in load_project_env(root, override=True)\n"  # .env 里的控制变量进不了环境
         "hookset = resolve_project_hooks(start=root)\n"
         "print(len(hookset.specs), len(hookset.pending))\n"
     )

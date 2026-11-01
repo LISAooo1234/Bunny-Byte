@@ -42,6 +42,8 @@ from .config import (
     default_provider_values,
     default_max_tokens_for_provider,
     list_provider_profiles,
+    ignored_project_env_names,
+    project_env_secret_items,
     load_project_env,
     resolve_project_sandbox_config,
     resolve_project_hooks,
@@ -349,6 +351,9 @@ def build_agent(args):
     hookset = resolve_project_hooks(start=workspace.repo_root, config_path=getattr(args, "config", None))
     mcp_config = resolve_project_mcp(start=workspace.repo_root, config_path=getattr(args, "config", None))
     load_project_env(workspace.repo_root, override=False)
+    ignored_env = ignored_project_env_names(workspace.repo_root)
+    if ignored_env:
+        print(f"⚠ 项目 .env 里的 {'、'.join(ignored_env)} 没有生效：代理、证书和 BUNNYBYTE_* 只认你自己 shell 里的设置。", file=sys.stderr)
     configured_secret_names = _configured_secret_names(args)
     session_id = args.resume
     if session_id == "latest":
@@ -406,6 +411,7 @@ def build_agent(args):
         ask_user_callback=ask_user_callback,
         lazy_session=lazy_session,
     )
+    agent.extra_secret_items = project_env_secret_items(workspace.repo_root)  # .env 里没进环境的 key 照样遮蔽
     _attach_provider_switching(agent, args)
     _attach_hooks(agent, hookset)
     _attach_mcp(agent, mcp_config)
@@ -769,10 +775,12 @@ def build_config_parser():
     parser.add_argument(
         "action",
         nargs="?",
-        choices=("path", "show"),
+        choices=("path", "show", "trust-endpoint"),
         default="show",
-        help="What to inspect.",
+        help="What to inspect; trust-endpoint trusts this repo's provider base_url for your own key.",
     )
+    parser.add_argument("--provider", default=None, help="Provider profile for trust-endpoint.")
+    parser.add_argument("--cwd", default=".", help="Repository for trust-endpoint.")
     parser.add_argument(
         "--config-path",
         default=str(DEFAULT_CONFIG_PATH),
@@ -840,9 +848,27 @@ def run_setup_command(argv=None):
     return 0
 
 
+def _trust_project_endpoint(args):
+    from .config.endpoint_trust import UntrustedEndpointError, trust_endpoint
+
+    try:
+        resolve_provider_config(args.provider, start=args.cwd)
+    except UntrustedEndpointError as exc:
+        trust_endpoint(exc.source, exc.provider, exc.origin)
+        print(f"已信任：{exc.source} 里 provider {exc.provider!r} 的地址 {exc.origin}（只对这个文件、这个 provider、这个地址有效）。")
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print("没有需要信任的地址：这个仓库的配置没有把你的 key 引到别的主机。")
+    return 0
+
+
 def run_config_command(argv=None):
     args = build_config_parser().parse_args(argv)
     config_path = Path(args.config_path).expanduser()
+    if args.action == "trust-endpoint":
+        return _trust_project_endpoint(args)
     if args.action == "path":
         print(config_path)
         return 0

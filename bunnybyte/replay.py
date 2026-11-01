@@ -219,7 +219,10 @@ def known_secrets(root):
         from .config import list_provider_profiles, resolve_provider_config
 
         for profile in list_provider_profiles(start=root):
-            key = resolve_provider_config(profile.name, start=root).api_key
+            try:
+                key = resolve_provider_config(profile.name, start=root).api_key
+            except ValueError:
+                continue  # 某个 profile 被拒（仓库地址配用户 key）不影响其他 profile 的遮蔽
             if key and key.strip():
                 items.append(("api_key", key.strip()))
     except Exception:
