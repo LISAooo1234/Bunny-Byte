@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import datetime
 
 from .core.fix_proof import skip_text
+from .core.tamper_guard import describe
 from .core.provider_failover import failover_notice
 from .tui.tool_cards import card_args_summary, clip_cells, format_duration, summarize_tool_output, tool_title
 
@@ -119,6 +120,11 @@ def _event_line(event):
         tests = clip_cells("、".join(event.get("tests") or []), 50)
         seconds = float(event.get("control_seconds") or 0) + float(event.get("reverted_seconds") or 0)
         return _join(f"  {icon} 修复证明 {tests}".rstrip(), label, format_duration(int(seconds * 1000)) if seconds else "")
+    if name == "test_tamper":
+        findings = [item for item in event.get("findings") or [] if item.get("severity") == "warn"]
+        if event.get("status") == "suspicious":
+            return _join(f"  ⚠ 测试篡改守卫 {clip_cells('；'.join(describe(item) for item in findings[:2]), 70)}".rstrip(), "不算已验证" if event.get("mode") == "block" else "")
+        return _join("  · 测试篡改守卫", "跳过" if event.get("status") == "skipped" else "未发现削弱")
     if name == "dependency_check":
         icon = {"blocked": "✗", "denied": "✗", "confirmed": "✓"}.get(str(event.get("decision", "")), "·")
         label = {"blocked": "已拦下", "denied": "用户拒绝", "confirmed": "用户确认", "noted": "提示"}.get(str(event.get("decision", "")), "")

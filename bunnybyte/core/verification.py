@@ -25,6 +25,7 @@ from .workspace import IGNORED_PATH_NAMES
 
 VERIFY_MODES = ("off", "ask", "auto")
 FIX_PROOF_MODES = ("off", "report", "repair")
+TAMPER_MODES = ("off", "warn", "block")
 DEFAULT_TIMEOUT = 120
 DEFAULT_REPAIR_ROUNDS = 1
 OUTPUT_TAIL_CHARS = 1800
@@ -93,6 +94,7 @@ class VerifyConfig:
     timeout: int = DEFAULT_TIMEOUT
     max_repair_rounds: int = DEFAULT_REPAIR_ROUNDS
     fix_proof: str = "report"
+    tamper: str = ""  # 测试篡改守卫 off | warn | block；空 = 没人设置，按 warn
 
     @property
     def enabled(self):
@@ -118,8 +120,11 @@ def resolve_verify_config(values, *, mode=None, default_mode="ask"):
     fix_proof = str(section.get("fix_proof", "report"))
     if fix_proof not in FIX_PROOF_MODES:
         raise ValueError(f"verify.fix_proof must be one of {list(FIX_PROOF_MODES)}")
+    tamper = str(section.get("tamper", "") or "")
+    if tamper and tamper not in TAMPER_MODES:
+        raise ValueError(f"verify.tamper must be one of {list(TAMPER_MODES)}")
     return VerifyConfig(
-        mode=resolved_mode, commands=commands, timeout=timeout, max_repair_rounds=rounds, fix_proof=fix_proof
+        mode=resolved_mode, commands=commands, timeout=timeout, max_repair_rounds=rounds, fix_proof=fix_proof, tamper=tamper
     )
 
 

@@ -114,6 +114,7 @@ commands = ["pytest -q"]      # 可选；不写则按本回合改动的文件自
 timeout = 120                 # 单条命令秒数，1-1800
 max_repair_rounds = 1         # 验证失败后让模型修复的轮数，0-5；0 表示只记录不重试
 fix_proof = "report"          # off | report | repair：验证通过后撤回源码、用旧代码重跑改过的测试
+tamper = "warn"               # off | warn | block：本轮删测试 / 加 skip / 删断言 / 缩小收集范围时提示（block = 不算已验证）
 ```
 
 - `ask`：`--approval auto` 直接跑，`--approval ask` 会先询问，`--approval never` 不跑；`auto` 一律直接跑；`off` 关闭。
@@ -121,6 +122,7 @@ fix_proof = "report"          # off | report | repair：验证通过后撤回源
 - 配置了 `[sandbox]` 时验证命令走同一个沙箱；`CI=1` 会注入环境。
 - 回执写入 `task_state.json`、`report.json` 的 `verification` 字段和 trace 的 `verification_run` 事件。
 - `fix_proof`：验证通过、本轮同时改了源码和测试时，在临时副本里只撤回源码、重跑改过的测试（说明见 README「修复证明」）。`report` 只记录（`verification.fix_proof`、trace `fix_proof` 事件），`repair` 在“撤回后测试照样通过”时退回给模型一轮，`off` 关闭。开了沙箱时跳过。
+- `tamper`：测试篡改守卫（说明见 README「测试篡改守卫」），验证闸门关着（`mode = "off"`）也照样运行。不写时按 `warn` 只提示；`bunny -p --require-verified` 下不写时按 `block`，测试被削弱换来的通过退出码 4。仓库自带的 `.bunnybyte.toml` 只能把它调严（`warn` → `block`），关掉要写在你自己的全局配置或用 `--config` 指定的文件里。
 
 ## 独立审查（`[critic]`）
 

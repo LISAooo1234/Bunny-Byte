@@ -37,6 +37,7 @@ Bunny Byte 运行在本地仓库中，通过受控工具完成代码检索、命
 | 记忆系统 | 提供 working memory、daily logs、durable topics，以及 `/remember`、`/dream`。 |
 | 验证回执 | 改完代码、准备交卷前，运行时真正跑一遍项目自己的测试；失败就把输出塞回去让模型修，最后给出 ✓/✗ 回执，并拦下“声称测试通过却没跑过”的回答；详见下文「验证回执」。 |
 | 修复证明 | 验证通过后在临时副本里撤回源码改动、用旧代码重跑本轮改过的测试：失败才算“已证明”，照样通过就提示测试没测到这次改动；详见下文「修复证明」。 |
+| 测试篡改守卫 | 每轮对比前后快照，发现删测试、加 skip、删断言或吞掉断言失败、在 pytest 配置里排除测试时提示；`--require-verified` 下这样换来的通过不算已验证（退出码 4）；详见下文「测试篡改守卫」。 |
 | 无人值守 | `bunny -p` 给脚本和 CI 用：stdout 只出结果（text / json / stream-json），退出码说明做完没有；`--require-verified` 让退出码绑定“真的跑过且覆盖当前文件的验证回执”；详见下文「无人值守模式」。 |
 | 项目规则 | 仓库里的 `AGENTS.md`、`CLAUDE.md`、`.bunnybyte/rules/*.md` 会放进提示词前缀，有独立预算，超长时明确提示去读原文件；`bunny doctor` 会列出实际读到了哪些；详见下文「项目规则」。 |
 | 空转保护 | 便宜模型常反复读同一个没变的文件。这类“已读/重复调用”不再占用步数预算；连续空转时先暂时收走被重复的只读工具，仍不改就让它不带工具汇报进展并提前收尾（`loop_stalled`），避免烧光 50 步。 |
@@ -421,6 +422,25 @@ fix_proof = "report"   # off | report | repair
 ```
 
 跳过的情况：没改测试或没改源码、测试之外只改了非 Python 文件、测试改动里没有新增或删除断言（parametrize 新增的数据行算新增）、开了沙箱（副本里的命令不经过沙箱，宁可不跑）、Windows、没有影子快照（嵌套 git 仓库等）、仓库超过 5000 个文件或 200MB、改动里有符号链接、改过的测试在副本里用新代码就不通过（常见原因是测试依赖被 .gitignore 忽略、没进快照的文件，卡片会附上输出末尾）。只支持 Python 测试；撤回后的那次运行超时上限是 `max(10 秒, 3 × 新代码上的耗时 + 5 秒)`，且不超过 `[verify].timeout`。
+
+## 测试篡改守卫
+
+模型最省事的“修复”往往是改测试：删掉失败的测试、加上 `@pytest.mark.skip`、删掉断言、把断言包进 `try/except`、在 pytest 配置里 `--deselect` 掉它。这时“全部通过”是假的，验证回执、修复证明、目标模式的“达成”都会被骗。每轮结束时，Bunny Byte 对比这一轮前后的影子快照（`run_shell rm`、`sed -i` 改的也看得见），只看测试文件和 pytest 收集配置，不调用模型、不运行任何命令：
+
+- **删除了测试**：消失的 `def test_*` 要能和一个新测试配对（同名、函数体相同，或名字有共同的词且函数体大体相同）才算改名 / 搬家，顺手新写一个不相干的测试抵不掉被删的那个；把测试文件改名成 pytest 不收集的名字算删除；连同被测源码（整个模块或被测的函数）一起删掉的只提示“随源码一起删除”。
+- **删除了断言 / 断言被架空**：每个测试的断言数（挪进同文件 `check(...)` 辅助函数的照样算）净减少，或已有文件里新增 `assert True`、吞掉 `AssertionError` / `Exception` 的 `try`；本轮新加了 `parametrize` / `subTest` 时不算（合并用例很正常）。
+- **新增跳过标记**：已有测试文件或 conftest.py 里新增 `pytest.mark.skip` / `xfail`、`pytest.skip(` / `importorskip(`、`unittest.skip*`、`skipTest(`；按平台、解释器版本、命令是否存在跳过的（`sys.platform`、`shutil.which` 等）只提示。本轮新建的测试文件不查。
+- **测试收集范围被缩小**：`pytest.ini` / `tox.ini` / `setup.cfg` 的 pytest 段、`pyproject.toml` 的 `[tool.pytest.ini_options]` 里 `addopts` 新增 `--deselect` / `--ignore` / `-k`、`norecursedirs` 新增目录、`testpaths` 去掉目录；conftest.py 新增 `collect_ignore` / `pytest_collection_modifyitems` / `pytest_ignore_collect`。ruff 之类别的工具的配置不看。
+- 只改期望值（`== 3` → `== 2`）不算削弱（你要求改错误的期望值时很常见），只在结果里列出改过断言的测试名。
+
+发现可疑改动时回合末尾多一行 `⚠ 测试可能被削弱：删除了测试（少了 1 个：test_sub）…`，结果写进 `report.json` / `task_state.json` 的 `verification.tamper`、`bunny -p` JSON 的 `verification.tamper`、trace `test_tamper` 事件和 `bunny replay`。`[verify] tamper = "block"` 时测试被削弱换来的通过不算已验证：`bunny -p --require-verified` 退出码 4，stderr 写明是哪些测试；`--require-verified` 下不配置时默认就是 `block`，交互使用默认 `warn`。
+
+```toml
+[verify]
+tamper = "warn"   # off | warn | block
+```
+
+一轮改了超过 60 个测试 / 配置文件时不检查，结果记为“跳过”而不是“干净”；超过 4000 行的文件改用按行计数比较。限制：只认 Python 测试和 pytest / unittest 的写法；提前 `return`、`if False:`、`contextlib.suppress(AssertionError)` 之类的写法还认不出；断言“变松”（`== 2` 改成 `>= 0`）、重新生成的 golden 文件、在源码里写死测试输入这些还看不出来；目标模式还没有接上（目前仍是达成时那一行“改过检查涉及的文件”提示）。
 
 ## 独立审查（critic）
 

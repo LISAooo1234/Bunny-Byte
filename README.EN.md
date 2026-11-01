@@ -40,6 +40,7 @@ stored locally for recovery, review, and debugging.
 | Task orchestration | Includes plan mode, todo ledger, `ask_user`, and `Explore` / `worker` subagents. |
 | Memory | Includes working memory, daily logs, durable topics, `/remember`, and `/dream`. |
 | Verification receipts | Before the agent hands in a turn that changed code, the runtime actually runs the project's own tests, feeds failures back for repair, records a pass/fail receipt, and flags answers that claim "tests pass" without any evidence. See "Verification receipts" below. |
+| Test-tamper guard | Every turn compares before/after snapshots and flags deleted tests, new skip markers, deleted or swallowed assertions, and pytest config that excludes tests; under `--require-verified` such a pass does not count as verified (exit 4); see "Test-tamper guard" below. |
 | Headless mode | `bunny -p` for scripts and CI: stdout carries only the result (text / json / stream-json) and the exit code says whether the job got done; `--require-verified` ties it to a verification receipt that really ran against the current files. See "Headless mode" below. |
 | Project rules | `AGENTS.md`, `CLAUDE.md` and `.bunnybyte/rules/*.md` from the repository are placed in the prompt prefix with their own budget, and a long file is cut with an explicit pointer to read the rest; `bunny doctor` lists what was actually loaded. See "Project rules" below. |
 | Stall guard | Cheap models often re-read a file that has not changed. Those "already read" / repeated-call replies no longer eat the step budget. Repeated waste first takes the repeated read-only tool away for a couple of calls, and a model that still loops is asked to report progress without tools and stopped early (`loop_stalled`) instead of burning all 50 steps. |
@@ -425,6 +426,25 @@ fix_proof = "report"   # off | report | repair
 ```
 
 Skipped when: no test or no source change, only non-Python files changed besides tests, the test edits add or remove no assertions (a new parametrize row counts as added), the sandbox is on (the copy would run unsandboxed), Windows, no shadow snapshot (nested git repo, …), more than 5000 files or 200MB, symlinks among the changes, or the changed tests already fail on the new code in the copy (often a test that needs a gitignored file that is not in the snapshot; the card shows the output tail). Python tests only; the reverted run is capped at `max(10 s, 3 × the new-code run + 5 s)` and never more than `[verify].timeout`.
+
+## Test-tamper guard
+
+The cheapest "fix" for a model is often to change the tests: delete the failing test, add `@pytest.mark.skip`, delete assertions, wrap them in `try/except`, or `--deselect` it in the pytest config. Then "all tests pass" is false, and verification receipts, fix proof and goal mode's "achieved" are all fooled. At the end of every turn Bunny Byte compares the turn's before and after shadow snapshots (so `run_shell rm` and `sed -i` edits are seen too), looks only at test files and pytest collection config, and calls no model and runs no command:
+
+- **Tests removed**: a vanished `def test_*` must pair with a new test (same name, identical body, or a shared name word and a similar body) to count as a rename or move, so adding an unrelated test does not cancel a deleted one; renaming a test file to a name pytest doesn't collect counts as deleting it; tests deleted together with the code they test (the whole module or the tested function) are only noted as obsolete.
+- **Assertions removed / neutralised**: a net drop in per-test assertions (assertions moved into a same-file helper like `check(...)` still count), or a new `assert True` or a `try` that swallows `AssertionError` / `Exception` in an existing file; not flagged when the turn added `parametrize` / `subTest` (merging cases is normal).
+- **Skip markers added**: new `pytest.mark.skip` / `xfail`, `pytest.skip(` / `importorskip(`, `unittest.skip*` or `skipTest(` in existing test files or conftest.py; skips conditioned on platform, interpreter version or a command being installed (`sys.platform`, `shutil.which`, …) are only noted. New test files written in the turn are not checked.
+- **Collection narrowed**: in the pytest section of `pytest.ini` / `tox.ini` / `setup.cfg` or `[tool.pytest.ini_options]` of `pyproject.toml`, new `--deselect` / `--ignore` / `-k` in `addopts`, new `norecursedirs` entries, or directories dropped from `testpaths`; new `collect_ignore` / `pytest_collection_modifyitems` / `pytest_ignore_collect` in conftest.py. Other tools' config (ruff etc.) is ignored.
+- Changing an expected value (`== 3` → `== 2`) is not weakening (common when you ask to fix a wrong expectation); the result only lists the tests whose assertions changed.
+
+On a suspicious change the turn ends with `⚠ 测试可能被削弱：删除了测试（少了 1 个：test_sub）…`; the result goes into `verification.tamper` in `report.json` / `task_state.json` and the `bunny -p` JSON, a `test_tamper` trace event and `bunny replay`. With `[verify] tamper = "block"` a pass obtained by weakening tests does not count as verified: `bunny -p --require-verified` exits 4 and names the tests on stderr. Under `--require-verified` the default is `block` when nothing is configured; interactive use defaults to `warn`.
+
+```toml
+[verify]
+tamper = "warn"   # off | warn | block
+```
+
+A turn that changes more than 60 test / config files is not checked and is recorded as skipped, not clean; files over 4000 lines are compared by line counts. Limits: Python tests and pytest / unittest idioms only; an early `return`, `if False:` or `contextlib.suppress(AssertionError)` are not recognised yet; loosened assertions (`== 2` → `>= 0`), regenerated golden files and hard-coding test inputs in the source are not detected yet; goal mode is not wired up yet (it still shows the "files named in the check were changed" note when achieved).
 
 ## Critic review
 

@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- 新增测试篡改守卫（M9 第 1、2 项；新模块 `bunnybyte/core/tamper_guard.py`）：每轮结束时对比本轮前后的影子快照（`run_shell rm` / `sed -i` 也算），只看测试文件和 pytest 收集配置，不调用模型、不运行命令，标出删除了测试（找不到同名或函数体相同 / 名字相近且相似的新测试来配对的，新写的不相干测试抵不掉，改成不被收集的文件名算删除，随被测源码一起删的只提示）、删除了断言（按测试计，挪进同文件辅助函数的照样算，新加 parametrize / subTest 时不算）、断言被架空（新增 `assert True`、吞掉 AssertionError / Exception 的 `try`）、已有文件里新增 skip / xfail / importorskip（按平台 / 版本跳过的只提示）、pytest 配置新增 `--deselect` / `--ignore` / `-k` / `norecursedirs`、缩小 `testpaths`、conftest 新增 `collect_ignore` / `pytest_collection_modifyitems`；只改期望值不算削弱，只列出测试名。回合末尾 `⚠ 测试可能被削弱：…`，`report.json` / `bunny -p` JSON 的 `verification.tamper`，trace `test_tamper` 与 `bunny replay` 一行。`[verify] tamper = off|warn|block`（默认 warn，验证闸门关着也运行；仓库配置只能调严），`block` 时这样换来的通过判为 `tampered`，`bunny -p --require-verified` 退出码 4 并在 stderr 写明，`--require-verified` 下不配置时默认 `block`。没有测试或配置改动的回合不读快照。
+
 ## 0.15.0
 
 M8「目标模式」完成：`/goal` 与 `bunny -p --goal` 由运行时在每轮结束后亲自跑检查命令，通过才算达成，一轮做不完自动开下一轮；`bunny bench --suite goal` 实测 Haiku 4.5 单轮 12 步 0/9、目标模式 6/9（与单轮 48 步持平，贵约 26%）；目标评审零收益、默认关闭。

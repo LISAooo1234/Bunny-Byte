@@ -19,7 +19,8 @@ from .core.goal import ACHIEVED, drive_goal, goal_summary
 from .core.pricing import format_usd
 from .core.run_usage import trace_usage
 from .core.task_state import STATUS_COMPLETED, STATUS_FAILED, STATUS_RUNNING
-from .core.verification_verdict import VERDICT_FAILED, VERDICT_UNVERIFIED, verification_verdict
+from .core.tamper_guard import describe, require_block, tamper_summary
+from .core.verification_verdict import VERDICT_FAILED, VERDICT_TAMPERED, VERDICT_UNVERIFIED, verification_verdict
 from .core.workspace import clip
 
 EXIT_OK = 0
@@ -145,6 +146,7 @@ def build_result(agent, state, final, started, *, require_verified, denials, err
             "commands": [item.get("command", "") for item in verification.get("receipts", [])],
             "repairs": int(verification.get("repairs", 0)),
             "fix_proof": fix_proof_summary(verification),
+            "tamper": tamper_summary(verification.get("tamper")),
         },
         "critic": critic_summary(state) if state is not None else {},
         "dependencies": dependency_receipt(agent, state),
@@ -166,7 +168,7 @@ def exit_code(state, verdict, require_verified, error=""):
         return EXIT_ERROR
     if state.status != STATUS_COMPLETED:
         return EXIT_UNFINISHED
-    if require_verified and verdict in {VERDICT_FAILED, VERDICT_UNVERIFIED}:
+    if require_verified and verdict in {VERDICT_FAILED, VERDICT_UNVERIFIED, VERDICT_TAMPERED}:
         return EXIT_UNVERIFIED
     if (getattr(state, "hooks", None) or {}).get("final_blocked"):
         return EXIT_HOOK_BLOCKED
@@ -208,6 +210,8 @@ def run_headless(
     started = time.monotonic()
     final, error, denials = "", "", 0
     interrupted = False
+    if require_verified:  # 没人设置 [verify] tamper 时，削弱测试换来的通过不算已验证
+        agent.verify_config = require_block(agent.verify_config)
 
     def emit(text):
         out.write(text + "\n")
@@ -278,7 +282,10 @@ def run_headless(
         err.write(f"bunny: 依赖守卫拦下了 {'、'.join(dict.fromkeys(blocked))}（疑似拼错 / 刚注册 / 无法检查的包，无人值守时不安装；确认无误可加进 [deps] allow）。\n")
     if denials:
         err.write(f"bunny: {denials} 个工具调用因审批策略被拒绝（无人值守时 ask 等同 never；需要放行请加 --approval auto）。\n")
-    if code == EXIT_UNVERIFIED:
+    if code == EXIT_UNVERIFIED and result["verification"]["verdict"] == VERDICT_TAMPERED:
+        warn = [item for item in (state.verification.get("tamper") or {}).get("findings", []) if item["severity"] == "warn"]
+        err.write(f"bunny: 验证通过了，但本轮测试可能被削弱（{'；'.join(describe(item) for item in warn[:3])}），不算已验证，退出码 4。\n")
+    elif code == EXIT_UNVERIFIED:
         err.write(f"bunny: 代码有改动但没有覆盖当前内容的通过回执（{result['verification']['verdict']}），退出码 4。\n")
     if state is not None and state.stop_reason == STOP_REASON_BUDGET_EXCEEDED:
         err.write(f"bunny: 本轮花费估算 {format_usd(result['cost'].get('usd'))} 达到上限 {format_usd(result['cost'].get('limit_usd'))}，已停止，退出码 3。\n")

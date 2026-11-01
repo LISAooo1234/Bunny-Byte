@@ -382,15 +382,21 @@ def resolve_project_sandbox_config(
 def resolve_project_verify_config(
     *, start: str | Path = ".", config_path: str | None = None, mode: str | None = None
 ):
+    from ..core.tamper_guard import stricter_tamper
+
     values = _load_config_values(start=start, explicit_path=config_path)
     config = resolve_verify_config(values, mode=mode)
-    if mode or config_path or config.mode != "auto":
+    if config_path:
+        return config
+    trusted = {}
+    if DEFAULT_CONFIG_PATH.exists():
+        trusted = _read_config_file(DEFAULT_CONFIG_PATH).get("verify", {}) or {}
+    # 仓库里的 .bunnybyte.toml 只能把测试篡改守卫调严，不能替用户关掉它
+    config = stricter_tamper(config, trusted.get("tamper", ""))
+    if mode or config.mode != "auto":
         return config
     # 克隆来的仓库自带的 .bunnybyte.toml 不能替用户决定“免确认运行任意命令”：
     # mode = "auto" 只认命令行或用户自己的全局配置，否则降级为 ask。
-    trusted = {}
-    if DEFAULT_CONFIG_PATH.exists():
-        trusted = _read_config_file(DEFAULT_CONFIG_PATH).get("verify", {})
     if trusted.get("mode") == "auto":
         return config
     return replace(config, mode="ask")

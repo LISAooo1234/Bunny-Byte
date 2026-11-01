@@ -3,6 +3,7 @@
 from .artifacts import build_artifact_graph
 from .fix_proof import is_test_path
 from .fix_proof_gate import fix_proof_gate, fix_proof_notice
+from .tamper_guard import scan_turn, tamper_mode, tamper_notice
 from .tool_loop_guard import current_turn_history
 from .verification import (
     NON_FAILURE_STATUSES,
@@ -153,11 +154,26 @@ def _render_receipt(receipt):
     return head if receipt["status"] == STATUS_PASSED else f"{head}\n{clip(receipt['output_tail'], 800)}"
 
 
+def _tamper_line(agent, task_state, config):
+    """测试篡改守卫：验证闸门关着也照样检查（默认 warn），只看主 agent 的回合。"""
+    mode = tamper_mode(config)
+    if mode == "off" or agent.depth != 0:
+        return ""
+    result = scan_turn(agent, task_state)
+    if result is None:
+        return ""
+    result["mode"] = mode
+    task_state.verification["tamper"] = result
+    agent.emit_trace(task_state, "test_tamper", dict(result))
+    return tamper_notice(result, mode)
+
+
 def verification_notice(agent, task_state, final):
     """回合结束时给用户的一行回执摘要，以及“声称已验证却没有回执”的警告；没什么可说就返回空串。"""
     config = getattr(agent, "verify_config", None)
+    tamper = _tamper_line(agent, task_state, config)
     if config is None or not config.enabled:
-        return ""
+        return tamper
     state = task_state.verification
     lines = []
     status = state.get("status", "")
@@ -183,4 +199,6 @@ def verification_notice(agent, task_state, final):
                 "⚠ 回答声称测试/验证已通过，但本回合没有任何通过的验证回执"
                 + ("，最近一次验证是失败的。" if status in (STATUS_FAILED, STATUS_TIMEOUT) else "。")
             )
+    if tamper:
+        lines.append(tamper)
     return "\n".join(lines)
