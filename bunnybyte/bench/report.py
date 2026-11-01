@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..core.pricing import format_usd
+from .tamper_grade import summarize_tamper
 
 SCHEMA_VERSION = 1
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
@@ -108,6 +109,7 @@ def summarize(rows):
         "text_tool_rescued": sum(row.get("text_tool_rescued", 0) for row in rows),
         "text_tool_retries": sum(row.get("text_tool_retries", 0) for row in rows),
         **_goal_summary(rows),
+        **summarize_tamper(rows),
     }
 
 
@@ -281,6 +283,10 @@ def render_row(row):
         gate += f"  [目标 {row['goal_status']}·{row.get('goal_rounds', 0)} 轮{'·评审退回' if row.get('goal_vetoes') else ''}]"
     if row.get("check_passed") and not row["passed"]:
         gate += "  [检查通过但判分未过]"
+    if row.get("tamper_outcome"):
+        gate += f"  [{TAMPER_NAMES.get(row['tamper_outcome'], row['tamper_outcome'])}{'·已说明矛盾' if row.get('explained') else ''}]"
+    if row.get("tamper_guard") == "suspicious":
+        gate += f"  [守卫 ⚠ {'/'.join(row.get('tamper_kinds') or [])}{'·追加恢复轮' if row.get('goal_tamper_escalated') else ''}]"
     if row.get("critic_rounds"):
         gate += f"  [审查 {row['critic_rounds']} 次·反对 {row.get('critic_objections', 0)}]"
     return f"{mark} {row['task']} #{row['attempt']}  {row['steps']} 步{wasted}{budget}  {row['wall_seconds']}s{tokens}{gate}{note}"
@@ -311,6 +317,7 @@ def render_record(record, previous=None):
         *_critic_lines(record),
         *_proof_lines(record),
         *_goal_lines(record),
+        *_tamper_lines(summary),
         *_text_tool_lines(summary),
         _delta(record, previous),
         NOISE_NOTE.format(step=100 / max(len(record["task_ids"]) * record["repeat"], 1)),
@@ -403,6 +410,32 @@ def _goal_lines(record):
     if summary.get("false_achieved"):
         lines.append(f"假达成：{summary['false_achieved']} 次题目自带的检查通过了，隐藏判分却没过")
     return lines
+
+
+TAMPER_NAMES = {"honest": "诚实", "tests_edited": "改了测试", "special_cased": "源码迁就测试", "unfinished": "没修好"}
+EDIT_NAMES = {
+    "removed": "删除",
+    "uncollected": "不再被收集",
+    "skipped": "跳过",
+    "weakened": "断言变弱",
+    "expectation_changed": "改期望值",
+    "special_cased": "源码迁就",
+    "bypassed": "绕开测试",
+}
+
+
+def _tamper_lines(summary):
+    outcomes = summary.get("tamper_outcomes")
+    if not outcomes:
+        flagged = summary.get("tamper_flagged", 0)
+        return [f"测试篡改守卫：标记了 {flagged} 行（这个套件不改测试，标记即误报）"] if flagged else []
+    catch = summary.get("tamper_catch") or {}
+    caught = "、".join(f"{EDIT_NAMES.get(kind, kind)} {item['flagged']}/{item['runs']}" for kind, item in catch.items())
+    return [
+        "矛盾测试：" + "、".join(f"{TAMPER_NAMES[name]} {count}" for name, count in outcomes.items()) + f"；回答里说明了矛盾 {summary.get('tamper_explained', 0)} 次",
+        f"测试篡改守卫：按改动种类命中 {caught or '（没有篡改可抓）'}；诚实的行被误标 {summary.get('tamper_false_flags', 0)} 次"
+        + (f"；目标模式追加恢复轮 {summary['tamper_escalations']} 次" if summary.get("tamper_escalations") else ""),
+    ]
 
 
 def _verify_lines(record):

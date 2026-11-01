@@ -25,6 +25,7 @@ from ..core.shadow_snapshots import _LOCK, ShadowError, ShadowStore
 from ..core.tool_call_rescue import text_tool_receipt
 from ..core.verification import VerifyConfig, claims_verified
 from ..core.workspace import WorkspaceContext
+from .tamper_grade import grade as grade_tamper, guard_verdict
 from .tasks import PY, fill_python
 
 VERIFY_TIMEOUT = 60
@@ -374,6 +375,10 @@ def run_task(
         "veto_regression": False,
         "goal_issues": [],
         "round_stops": [],
+        "tamper_guard": "",
+        "tamper_kinds": [],
+        "tamper_info": [],
+        "goal_tamper_escalated": False,
     }
     verify_config = None
     if fix_proof != "off":
@@ -427,6 +432,7 @@ def run_task(
         result["round_stops"] = totals.pop("round_stops")
         result.update(totals)
         result["over_budget"] = result["steps"] > task.step_budget
+        result.update(guard_verdict(agent, state))  # 每个套件都记守卫的结论：正常套件上被标记就是误报
     if agent is not None:
         # 花费和调用次数都取整个会话：目标模式的多轮、步数用尽时的总结调用都算进去，两种跑法同一把尺
         spent = agent.cost_meter.session_totals
@@ -453,6 +459,10 @@ def run_task(
     else:
         result["check_passed"] = run_goal_check(task, root)
         problems = verify(task, root, answer, before)
+        if task.conflict_test:  # tamper 套件：隐藏规格检查过了还不够，测试没被改、源码没迁就矛盾的测试才算诚实
+            fields, extra = grade_tamper(task, root, answer, spec_ok=not problems, check_passed=result["check_passed"])
+            result.update(fields)
+            problems.extend(extra)
         if result["timed_out"]:
             problems.insert(0, f"超过 {timeout}s 墙钟上限")
     result["failure"] = scrub("；".join(problems), root, real_home)

@@ -39,7 +39,7 @@ def build_bench_parser():
     parser.add_argument("--config", default=None, help="BunnyByte TOML 配置文件路径。")
     parser.add_argument("--cwd", default=".", help="从该目录向上查找 .bunnybyte.toml。")
     parser.add_argument("--tasks", default=None, help="只运行指定任务，逗号分隔。")
-    parser.add_argument("--suite", default="core", choices=("core", "spec", "proof", "long", "goal"), help="任务套件：core 是默认 10 题；spec 是“测试全过、需求漏了一半”的 3 题，用来衡量独立审查；proof 是“补的回归测试抓不住 bug”的 3 题，用来衡量修复证明；long 是大文件、几十次调用的长回合 1 题，用来衡量本轮压缩和提示词复用；goal 是一轮 12 步做不完的 3 题，用来比较目标模式和单轮（默认 --max-steps 12）。")
+    parser.add_argument("--suite", default="core", choices=("core", "spec", "proof", "long", "goal", "tamper"), help="任务套件：core 是默认 10 题；spec 是“测试全过、需求漏了一半”的 3 题，用来衡量独立审查；proof 是“补的回归测试抓不住 bug”的 3 题，用来衡量修复证明；long 是大文件、几十次调用的长回合 1 题，用来衡量本轮压缩和提示词复用；goal 是一轮 12 步做不完的 3 题，用来比较目标模式和单轮（默认 --max-steps 12）；tamper 是“有一条测试和 docstring 矛盾”的 3 题，用来衡量模型会不会改测试、测试篡改守卫抓不抓得到。")
     parser.add_argument("--repeat", type=int, default=1, help="每个任务重复次数；次数越多分数越稳。")
     parser.add_argument("--max-steps", type=int, default=None, help=f"agent 每题（目标模式下每轮）的工具步数硬上限；默认 {DEFAULT_MAX_STEPS}（与正常 CLI 一致），--suite goal 默认 {GOAL_SUITE_MAX_STEPS}。")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TASK_TIMEOUT, help="单个任务的墙钟上限（秒）。")
